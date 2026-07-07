@@ -8,11 +8,16 @@
  *   groups between the part group and the path.
  * - <ellipse>/<circle>/<rect> are converted to <path> data so everything downstream
  *   deals with one shape kind.
- * - A group transform of the form rotate(a, cx, cy) seeds the part pivot at (cx, cy) —
- *   artists who pre-rig joints (like PIP_MASTER.svg's arms) get their pivots for free.
+ * - Pivots are seeded from the artwork wherever possible, in order of preference:
+ *   1. a group transform that composes to a pure rotation (rotate(a,cx,cy) or the
+ *      matrix(...) Inkscape rewrites it into) — its fixed point is the joint;
+ *   2. inkscape:transform-center-x/y — where the artist parked Inkscape's rotation
+ *      crosshair, stored as an offset from the bbox center with +y UP. The bbox isn't
+ *      measurable until layout, so this becomes a pivotHint the canvas resolves.
+ *   3. otherwise the canvas falls back to the rendered bbox center.
  */
 
-import { RigDoc, RigPart, RigPath, freshId } from './model';
+import { PivotHint, RigDoc, RigPart, RigPath, freshId } from './model';
 import { rotationPivotOf } from './transforms';
 
 const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
@@ -77,11 +82,34 @@ function elementToPart(el: Element): RigPart {
     if (p) paths.push(p);
   }
 
-  // Pivot: a pre-rigged rotate(a,cx,cy) transform names the joint; otherwise default to
-  // origin — the canvas recomputes a bbox-centered pivot once geometry is measurable.
-  const pivot = rotationPivotOf(transform) ?? { x: 0, y: 0 };
+  // Pivot: a transform that is a pure pivoted rotation names the joint exactly; else an
+  // Inkscape rotation-center offset becomes a hint resolved against the rendered bbox;
+  // else pivot stays at origin and the canvas falls back to the bbox center.
+  const rotationPivot = rotationPivotOf(transform);
+  const pivot = rotationPivot ?? { x: 0, y: 0 };
+  const pivotHint = rotationPivot ? null : transformCenterHint(el);
 
-  return { id: freshId('part'), label, transform, pivot, paths };
+  return {
+    id: freshId('part'), label, transform, pivot, pivotHint, paths,
+    rest: { rotate: 0, tx: 0, ty: 0 },
+    parentId: null,
+  };
+}
+
+/**
+ * Inkscape stores the rotation crosshair as inkscape:transform-center-x/y: an offset
+ * from the object's bbox center in user units with +y pointing UP (legacy axis), so the
+ * y offset flips sign to land in SVG's +y-down document space.
+ */
+function transformCenterHint(el: Element): PivotHint | null {
+  const cx =
+    el.getAttributeNS(INKSCAPE_NS, 'transform-center-x') ??
+    el.getAttribute('inkscape:transform-center-x');
+  const cy =
+    el.getAttributeNS(INKSCAPE_NS, 'transform-center-y') ??
+    el.getAttribute('inkscape:transform-center-y');
+  if (cx === null && cy === null) return null;
+  return { kind: 'centerOffset', dx: parseFloat(cx ?? '0'), dy: -parseFloat(cy ?? '0') };
 }
 
 /** Depth-first collect of drawable leaves, accumulating intermediate group transforms. */
@@ -132,6 +160,11 @@ function shapeToPath(el: Element, transform: string): RigPath | null {
   const strokeRaw = attr('stroke');
   return {
     id: freshId('path'),
+    label:
+      el.getAttributeNS(INKSCAPE_NS, 'label') ??
+      el.getAttribute('inkscape:label') ??
+      el.getAttribute('id') ??
+      'shape',
     d,
     fill: fillRaw === 'none' ? null : (fillRaw ?? '#000000'),
     fillOpacity: parseFloat(attr('fill-opacity') ?? '1'),

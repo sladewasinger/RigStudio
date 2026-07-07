@@ -3,7 +3,9 @@
  *
  * A RigDoc is an imported SVG reorganized for rigging: each named top-level group
  * becomes a RigPart with a pivot point (the joint), verbatim baked transforms, and its
- * drawable paths. Animation lives in Clips: named timelines of per-channel keyframes.
+ * drawable paths. Parts may be parented to one another (parentId) so limbs chain.
+ * Animation lives in Clips: named timelines of per-channel keyframes. Each part also
+ * carries a rest pose — offsets edited in Setup mode that keyframes add on top of.
  */
 
 export interface Vec2 {
@@ -13,6 +15,8 @@ export interface Vec2 {
 
 export interface RigPath {
   id: string;
+  /** Display name from the SVG leaf's inkscape:label (or id) — shown in the layers tree. */
+  label: string;
   /** Normalized absolute path data (all shapes are converted to paths on import). */
   d: string;
   fill: string | null;
@@ -24,6 +28,18 @@ export interface RigPath {
   transform: string;
 }
 
+/** Where a part's pivot should land once geometry is measurable (resolved by the canvas). */
+export type PivotHint =
+  /** Offset from the part's rendered bbox center, in document units (+y down). */
+  { kind: 'centerOffset'; dx: number; dy: number };
+
+/** Static pose offsets edited in Setup mode; animation channels add on top of these. */
+export interface RestPose {
+  rotate: number;
+  tx: number;
+  ty: number;
+}
+
 export interface RigPart {
   id: string;
   label: string;
@@ -31,13 +47,20 @@ export interface RigPart {
   transform: string;
   /** Joint location in root (document) coordinates. Animated rotation spins around it. */
   pivot: Vec2;
+  /** Pending pivot placement that needs layout to resolve; cleared once applied. */
+  pivotHint?: PivotHint | null;
+  rest: RestPose;
+  /** Another part's id to inherit motion from (bone hierarchy), or null. */
+  parentId: string | null;
   paths: RigPath[];
 }
 
 /** Animatable channels. Parts support all three; the root figure also supports scale. */
 export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy';
 
-export type Easing = 'linear' | 'easeInOut';
+export type Easing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
+
+export const EASINGS: Easing[] = ['linear', 'easeIn', 'easeOut', 'easeInOut'];
 
 export interface Keyframe {
   time: number; // ms
@@ -77,24 +100,46 @@ export const CHANNEL_DEFAULTS: Record<Channel, number> = {
 
 // ---- Application state ----
 
+/** The canvas tool within Setup mode: pose the rig or edit path nodes. */
 export type Mode = 'rig' | 'nodes';
+
+/**
+ * The global editing mode. Setup edits the character itself (rest pose, pivots, nodes)
+ * and never touches keyframes; Animate records keyframes at the playhead.
+ */
+export type EditorMode = 'setup' | 'animate';
 
 export interface AppState {
   doc: RigDoc | null;
+  /** Primary selection (inspector target). */
   selectedPartId: string | null;
+  /** Full selection set for multi-part posing; always contains selectedPartId when set. */
+  selectedPartIds: string[];
   activeClipIndex: number;
   currentTime: number;
   playing: boolean;
   mode: Mode;
+  editorMode: EditorMode;
+  playbackSpeed: number;
+  pingPong: boolean;
+  /** Playback direction, flipped by ping-pong looping. */
+  playDirection: 1 | -1;
+  onionSkin: boolean;
 }
 
 export const state: AppState = {
   doc: null,
   selectedPartId: null,
+  selectedPartIds: [],
   activeClipIndex: 0,
   currentTime: 0,
   playing: false,
   mode: 'rig',
+  editorMode: 'setup',
+  playbackSpeed: 1,
+  pingPong: false,
+  playDirection: 1,
+  onionSkin: false,
 };
 
 type Listener = () => void;
@@ -119,11 +164,77 @@ export function selectedPart(): RigPart | null {
   return state.doc.parts.find((p) => p.id === state.selectedPartId) ?? null;
 }
 
+export function selectedParts(): RigPart[] {
+  if (!state.doc) return [];
+  return state.selectedPartIds
+    .map((id) => state.doc!.parts.find((p) => p.id === id))
+    .filter((p): p is RigPart => !!p);
+}
+
+/** Set or extend the selection. Additive keeps existing parts (shift-click). */
+export function selectPart(id: string | null, additive = false): void {
+  if (id === null) {
+    state.selectedPartId = null;
+    state.selectedPartIds = [];
+    return;
+  }
+  if (additive) {
+    if (!state.selectedPartIds.includes(id)) state.selectedPartIds.push(id);
+    state.selectedPartId = id;
+  } else {
+    state.selectedPartId = id;
+    state.selectedPartIds = [id];
+  }
+}
+
+// ---- Part hierarchy ----
+
+export function partById(id: string): RigPart | null {
+  return state.doc?.parts.find((p) => p.id === id) ?? null;
+}
+
+/** Ancestors of a part, outermost first. Cycle-safe (stops on repeat). */
+export function ancestorChain(part: RigPart): RigPart[] {
+  const chain: RigPart[] = [];
+  const seen = new Set<string>([part.id]);
+  let cur = part.parentId ? partById(part.parentId) : null;
+  while (cur && !seen.has(cur.id)) {
+    chain.unshift(cur);
+    seen.add(cur.id);
+    cur = cur.parentId ? partById(cur.parentId) : null;
+  }
+  return chain;
+}
+
+export function isAncestorOf(maybeAncestor: RigPart, part: RigPart): boolean {
+  return ancestorChain(part).some((p) => p.id === maybeAncestor.id);
+}
+
+/** Reparent a part; refuses cycles. Returns whether the change was applied. */
+export function setParent(childId: string, parentId: string | null): boolean {
+  const child = partById(childId);
+  if (!child) return false;
+  if (parentId === null) {
+    child.parentId = null;
+    return true;
+  }
+  if (parentId === childId) return false;
+  const parent = partById(parentId);
+  if (!parent) return false;
+  if (isAncestorOf(child, parent)) return false; // would create a cycle
+  child.parentId = parentId;
+  return true;
+}
+
 // ---- Pose evaluation ----
 
 function ease(t: number, easing: Easing): number {
-  if (easing === 'easeInOut') return t * t * (3 - 2 * t); // smoothstep
-  return t;
+  switch (easing) {
+    case 'easeIn': return t * t;
+    case 'easeOut': return 1 - (1 - t) * (1 - t);
+    case 'easeInOut': return t * t * (3 - 2 * t); // smoothstep
+    default: return t;
+  }
 }
 
 /** Sample a channel value from the active clip at the given time. */
@@ -152,14 +263,13 @@ export function sampleChannel(target: string, channel: Channel, time: number): n
 }
 
 /**
- * Write a keyframe for the channel at the current time (auto-key). Creates the track on
- * first use; replaces an existing keyframe at (almost) the same time.
+ * Write a keyframe for the channel at an explicit time. Creates the track on first
+ * use; replaces an existing keyframe at (almost) the same time.
  */
-export function setKeyframe(target: string, channel: Channel, value: number): void {
-  const clip = activeClip();
-  if (!clip) return;
-  const time = Math.round(state.currentTime / 10) * 10;
-
+export function setKeyframeAt(
+  target: string, channel: Channel, time: number, value: number, easing: Easing = 'easeInOut',
+): Keyframe {
+  const clip = activeClip()!;
   let track = clip.tracks.find((t) => t.target === target && t.channel === channel);
   if (!track) {
     track = { target, channel, keyframes: [] };
@@ -168,10 +278,19 @@ export function setKeyframe(target: string, channel: Channel, value: number): vo
   const existing = track.keyframes.find((k) => Math.abs(k.time - time) < 5);
   if (existing) {
     existing.value = value;
-  } else {
-    track.keyframes.push({ time, value, easing: 'easeInOut' });
-    track.keyframes.sort((a, b) => a.time - b.time);
+    return existing;
   }
+  const key: Keyframe = { time, value, easing };
+  track.keyframes.push(key);
+  track.keyframes.sort((a, b) => a.time - b.time);
+  return key;
+}
+
+/** Auto-key at the playhead (canvas drags, inspector edits in Animate mode). */
+export function setKeyframe(target: string, channel: Channel, value: number): void {
+  if (!activeClip()) return;
+  const time = Math.round(state.currentTime / 10) * 10;
+  setKeyframeAt(target, channel, time, value);
 }
 
 export function deleteKeyframe(track: Track, keyframe: Keyframe): void {
@@ -183,8 +302,127 @@ export function deleteKeyframe(track: Track, keyframe: Keyframe): void {
   }
 }
 
+// ---- Keyframe clipboard ----
+
+export interface CopiedKey {
+  target: string;
+  channel: Channel;
+  /** Offset from the earliest copied keyframe. */
+  dt: number;
+  value: number;
+  easing: Easing;
+}
+
+let keyClipboard: CopiedKey[] = [];
+
+export function copyKeys(entries: { track: Track; key: Keyframe }[]): number {
+  if (entries.length === 0) return 0;
+  const t0 = Math.min(...entries.map((e) => e.key.time));
+  keyClipboard = entries.map(({ track, key }) => ({
+    target: track.target,
+    channel: track.channel,
+    dt: key.time - t0,
+    value: key.value,
+    easing: key.easing,
+  }));
+  return keyClipboard.length;
+}
+
+export function clipboardSize(): number {
+  return keyClipboard.length;
+}
+
+/** Paste the clipboard with its earliest key landing at `time`. Returns pasted keys. */
+export function pasteKeysAt(time: number): Keyframe[] {
+  const clip = activeClip();
+  if (!clip || keyClipboard.length === 0) return [];
+  const out: Keyframe[] = [];
+  for (const ck of keyClipboard) {
+    const t = Math.max(0, Math.round((time + ck.dt) / 10) * 10);
+    out.push(setKeyframeAt(ck.target, ck.channel, t, ck.value, ck.easing));
+  }
+  return out;
+}
+
+/** Snapshot every animated channel's value at `time` into the clipboard (copy pose). */
+export function copyPoseAt(time: number): number {
+  const clip = activeClip();
+  if (!clip) return 0;
+  keyClipboard = clip.tracks
+    .filter((t) => t.keyframes.length > 0)
+    .map((t) => ({
+      target: t.target,
+      channel: t.channel,
+      dt: 0,
+      value: sampleChannel(t.target, t.channel, time),
+      easing: 'easeInOut' as Easing,
+    }));
+  return keyClipboard.length;
+}
+
+// ---- Serialization (project save/load) ----
+
+const DOC_FORMAT = 'rig-studio';
+const DOC_VERSION = 2;
+
+export function serializeDoc(doc: RigDoc): string {
+  return JSON.stringify({ format: DOC_FORMAT, version: DOC_VERSION, doc }, null, 1);
+}
+
+/**
+ * Parse a saved project (current or older format) into a usable RigDoc, filling in
+ * fields that did not exist when the file was written.
+ */
+export function deserializeDoc(json: string): RigDoc {
+  const raw = JSON.parse(json) as { format?: string; version?: number; doc?: unknown };
+  const doc = (raw && typeof raw === 'object' && 'doc' in raw ? raw.doc : raw) as RigDoc;
+  if (!doc || !Array.isArray(doc.parts) || !doc.viewBox) {
+    throw new Error('Not a Rig Studio project file');
+  }
+  return normalizeDoc(doc);
+}
+
+/** Fill defaults for fields added after a document was serialized. */
+export function normalizeDoc(doc: RigDoc): RigDoc {
+  let maxId = 0;
+  const trackId = (id: string) => {
+    const m = /_(\d+)$/.exec(id);
+    if (m) maxId = Math.max(maxId, Number(m[1]));
+  };
+  for (const part of doc.parts) {
+    trackId(part.id);
+    part.rest = part.rest ?? { rotate: 0, tx: 0, ty: 0 };
+    part.parentId = part.parentId ?? null;
+    part.pivotHint = part.pivotHint ?? null;
+    part.paths.forEach((p, i) => {
+      trackId(p.id);
+      p.label = p.label ?? `path_${i + 1}`;
+    });
+  }
+  // Drop dangling parent references (e.g. hand-edited files).
+  const ids = new Set(doc.parts.map((p) => p.id));
+  for (const part of doc.parts) {
+    if (part.parentId && !ids.has(part.parentId)) part.parentId = null;
+  }
+  doc.clips = doc.clips?.length ? doc.clips : [{ name: 'idle', duration: 2000, tracks: [] }];
+  for (const clip of doc.clips) {
+    for (const track of clip.tracks) {
+      for (const k of track.keyframes) {
+        if (!EASINGS.includes(k.easing)) k.easing = 'easeInOut';
+      }
+    }
+  }
+  bumpIdCounter(maxId);
+  return doc;
+}
+
 let idCounter = 0;
 export function freshId(prefix: string): string {
   idCounter += 1;
   return `${prefix}_${idCounter}`;
+}
+
+/** Keep freshId ahead of ids present in a loaded document. */
+export function bumpIdCounter(min: number): void {
+  if (min > idCounter) idCounter = min;
 }

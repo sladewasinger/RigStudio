@@ -9,13 +9,19 @@
   <body>
     <header id="toolbar">
       <strong>Rig Studio</strong>
-      <button id="btn-open">Open SVG…</button>
+      <button id="btn-open" title="SVG artwork or a saved .rig.json project">Open…</button>
       <button id="btn-sample">Load Pip sample</button>
+      <button id="btn-save" title="Download the project as JSON">Save project</button>
       <button id="btn-undo" title="Ctrl+Z" disabled>&#x21B6; Undo</button>
       <button id="btn-redo" title="Ctrl+Y" disabled>&#x21B7; Redo</button>
       <span class="spacer"></span>
+      <button id="btn-export-lottie" title="Export the rig + clips as Lottie JSON">Export Lottie</button>
       <button id="btn-export">Export Compose rig (.kt)</button>
-      <input id="file-input" type="file" accept=".svg" hidden />
+      <div id="mode-toggle" title="Tab toggles. Setup edits the character; Animate records keyframes.">
+        <button id="btn-mode-setup">Setup</button>
+        <button id="btn-mode-animate">Animate</button>
+      </div>
+      <input id="file-input" type="file" accept=".svg,.json" hidden />
     </header>
     <main id="layout">
       <aside id="layers"></aside>

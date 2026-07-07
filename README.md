@@ -4,7 +4,6 @@ A browser-based 2D rigging and animation editor for SVG characters (like Pip) th
 exports Jetpack Compose rig code matching the shape of `PipRig.kt`.
 
 ```sh
-cd tools/rig-studio
 npm install
 npm run dev        # http://localhost:5173
 ```
