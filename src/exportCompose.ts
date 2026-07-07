@@ -8,7 +8,7 @@
  */
 
 import { Easing, RigDoc, RigPart, RigPath, Track } from './model';
-import { parseTransformList } from './transforms';
+import { applyMat, invertMat, matrixOfTransform, parseTransformList } from './transforms';
 
 /** Studio easings → Compose counterparts (null = Compose's default linear). */
 const EASING_COMPOSE: Record<Easing, string | null> = {
@@ -135,6 +135,8 @@ export function exportCompose(doc: RigDoc, packageName: string): string {
 
   // Per-part draw functions. Parented parts replay their ancestors' pose transforms
   // first (outermost ancestor → the part itself), so limbs chain exactly as on canvas.
+  // Keyed channels read from the pose map (ABSOLUTE values); the rest pose is the
+  // pose.at() default, so unkeyed channels fall back to it — matching channelValue().
   for (const part of doc.parts) {
     w(`private fun DrawScope.drawPart_${ident(part.label)}(pose: Map<String, Float>) {`);
     w('    withTransform({');
@@ -143,6 +145,17 @@ export function exportCompose(doc: RigDoc, packageName: string): string {
       w(`        rotate(${chan(link, 'rotate')}, pivot = ${pivotName(link)})`);
     }
     for (const line of emitTransformCalls(part.transform, '        ')) w(line);
+    // Rest scale: innermost, around the pivot in pre-baked local space, so the
+    // artwork resizes along its own axes and the joint stays fixed (matches view.ts).
+    if ((part.rest?.sx ?? 1) !== 1 || (part.rest?.sy ?? 1) !== 1) {
+      const pl = applyMat(
+        invertMat(matrixOfTransform(part.transform)), part.pivot.x, part.pivot.y,
+      );
+      w(
+        `        scale(${f(part.rest.sx)}f, ${f(part.rest.sy)}f, ` +
+        `pivot = Offset(${f(pl.x)}f, ${f(pl.y)}f))`,
+      );
+    }
     w('    }) {');
     part.paths.forEach((p, idx) => {
       const inner = emitTransformCalls(p.transform, '            ');
@@ -243,12 +256,11 @@ function chainOf(doc: RigDoc, part: RigPart): RigPart[] {
   return chain;
 }
 
-/** Channel lookup expression with the part's rest-pose offset folded in. */
+/** Channel lookup: keyed values are absolute; the rest value is the unkeyed default. */
 function chan(part: RigPart, channel: 'rotate' | 'tx' | 'ty'): string {
   const rest = part.rest?.[channel] ?? 0;
-  const base = `pose.at("${part.label}.${channel}")`;
-  if (rest === 0) return base;
-  return rest > 0 ? `${base} + ${f(rest)}f` : `${base} - ${f(-rest)}f`;
+  if (rest === 0) return `pose.at("${part.label}.${channel}")`;
+  return `pose.at("${part.label}.${channel}", ${f(rest)}f)`;
 }
 
 function trackName(doc: RigDoc, track: Track): string {

@@ -13,10 +13,10 @@
  */
 
 import {
-  state, notify, selectedPart, sampleChannel, setKeyframe, activeClip, selectPart,
-  setParent, isAncestorOf, RigPart,
+  state, notify, selectedPart, selectedPath, sampleChannel, channelValue, setKeyframe,
+  activeClip, selectPart, setParent, isAncestorOf, movePartRelativeTo, RigPart,
 } from './model';
-import { renderPose } from './view';
+import { renderPose, updatePathAttrs, reorderCanvas } from './view';
 import { animateWithClaude, critiqueWithClaude } from './claude';
 import { checkpoint } from './history';
 
@@ -104,13 +104,13 @@ function partNode(part: RigPart): HTMLElement {
     }
   };
 
-  // Drag-to-parent
+  // Drag to reorder (top/bottom edge = above/below) or to parent (middle).
   row.draggable = true;
   row.addEventListener('dragstart', (ev) => {
     ev.dataTransfer?.setData('text/rig-part', part.id);
     if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
   });
-  wireDropTarget(row, part.id);
+  wirePartRowDrop(row, part);
 
   li.appendChild(row);
 
@@ -122,15 +122,27 @@ function partNode(part: RigPart): HTMLElement {
       const pathLi = document.createElement('li');
       const pathRow = document.createElement('div');
       pathRow.className = 'layer-row path';
+      if (state.selectedPathId === path.id) pathRow.classList.add('selected');
       pathRow.innerHTML = `<span class="path-icon">◇</span>`;
       const pathName = document.createElement('span');
       pathName.className = 'layer-name';
       pathName.textContent = path.label;
       pathRow.appendChild(pathName);
       pathRow.onclick = () => {
+        // Enter the part and select this object — the inspector shows its style and
+        // node editing scopes to it.
         selectPart(part.id);
+        state.selectedPathId = path.id;
         notify();
         renderPose();
+      };
+      pathRow.ondblclick = () => {
+        const newName = prompt('Rename object', path.label);
+        if (newName) {
+          checkpoint();
+          path.label = newName.trim().replace(/\s+/g, '_');
+          notify();
+        }
       };
       pathLi.appendChild(pathRow);
       kids.appendChild(pathLi);
@@ -161,6 +173,52 @@ function wireDropTarget(el: HTMLElement, newParentId: string | null): void {
     if (newParentId) expanded.add(newParentId);
     notify();
     renderPose();
+  });
+}
+
+const DROP_CLASSES = ['drop-target', 'drop-above', 'drop-below'];
+
+/** Which drop action the pointer position means: near the edges reorders, middle parents. */
+function dropZoneOf(ev: DragEvent, el: HTMLElement): 'above' | 'into' | 'below' {
+  const r = el.getBoundingClientRect();
+  const f = (ev.clientY - r.top) / r.height;
+  if (f < 0.25) return 'above';
+  if (f > 0.75) return 'below';
+  return 'into';
+}
+
+/**
+ * Part rows accept three drops: top edge = draw just above this part, bottom edge =
+ * just below (both adopt this part's parent — sibling insertion), middle = parent
+ * the dragged part into this one.
+ */
+function wirePartRowDrop(row: HTMLElement, part: RigPart): void {
+  row.addEventListener('dragover', (ev) => {
+    if (!ev.dataTransfer?.types.includes('text/rig-part')) return;
+    ev.preventDefault();
+    const zone = dropZoneOf(ev, row);
+    row.classList.toggle('drop-target', zone === 'into');
+    row.classList.toggle('drop-above', zone === 'above');
+    row.classList.toggle('drop-below', zone === 'below');
+  });
+  row.addEventListener('dragleave', () => row.classList.remove(...DROP_CLASSES));
+  row.addEventListener('drop', (ev) => {
+    ev.preventDefault();
+    const zone = dropZoneOf(ev, row);
+    row.classList.remove(...DROP_CLASSES);
+    const draggedId = ev.dataTransfer?.getData('text/rig-part');
+    if (!draggedId || draggedId === part.id) return;
+    checkpoint();
+    const ok = zone === 'into'
+      ? setParent(draggedId, part.id)
+      : movePartRelativeTo(draggedId, part.id, zone);
+    if (!ok) {
+      alert('That drop would create a parenting cycle.');
+      return;
+    }
+    if (zone === 'into') expanded.add(part.id);
+    reorderCanvas();
+    notify();
   });
 }
 
@@ -212,6 +270,16 @@ export function buildInspector(el: HTMLElement): void {
         part.rest.ty = v;
         poseEdited();
       }));
+      el.appendChild(numberField('rest scale x', part.rest.sx, (v) => {
+        checkpoint();
+        part.rest.sx = v || 1;
+        poseEdited();
+      }, 0.01));
+      el.appendChild(numberField('rest scale y', part.rest.sy, (v) => {
+        checkpoint();
+        part.rest.sy = v || 1;
+        poseEdited();
+      }, 0.01));
       el.appendChild(numberField('pivot x', part.pivot.x, (v) => {
         checkpoint();
         part.pivot.x = v;
@@ -251,23 +319,26 @@ export function buildInspector(el: HTMLElement): void {
       row.appendChild(sel);
       el.appendChild(row);
     } else {
+      // Displayed values are absolute (rest fills unkeyed channels); editing keys.
       const t = state.currentTime;
-      el.appendChild(numberField('rotate (deg)', sampleChannel(part.id, 'rotate', t), (v) => {
+      el.appendChild(numberField('rotate (deg)', channelValue(part, 'rotate', t), (v) => {
         checkpoint();
         setKeyframe(part.id, 'rotate', v);
         poseEdited();
       }));
-      el.appendChild(numberField('translate x', sampleChannel(part.id, 'tx', t), (v) => {
+      el.appendChild(numberField('translate x', channelValue(part, 'tx', t), (v) => {
         checkpoint();
         setKeyframe(part.id, 'tx', v);
         poseEdited();
       }));
-      el.appendChild(numberField('translate y', sampleChannel(part.id, 'ty', t), (v) => {
+      el.appendChild(numberField('translate y', channelValue(part, 'ty', t), (v) => {
         checkpoint();
         setKeyframe(part.id, 'ty', v);
         poseEdited();
       }));
     }
+
+    if (setup) buildPathSection(el);
 
     const help = document.createElement('p');
     help.className = 'hint';
@@ -319,6 +390,93 @@ export function buildInspector(el: HTMLElement): void {
   }
 
   buildAiPanel(el);
+}
+
+/** Style editor for the "entered" path (fill/stroke), Setup mode only. */
+function buildPathSection(el: HTMLElement): void {
+  const sel = selectedPath();
+  if (!sel) return;
+  const { path } = sel;
+
+  const title = document.createElement('h3');
+  title.textContent = `object: ${path.label}`;
+  el.appendChild(title);
+
+  const apply = () => {
+    updatePathAttrs(path);
+    renderPose();
+  };
+
+  el.appendChild(colorField('fill', path.fill, (v) => {
+    checkpoint();
+    path.fill = v;
+    apply();
+  }));
+  el.appendChild(numberField('fill opacity', path.fillOpacity, (v) => {
+    checkpoint();
+    path.fillOpacity = Math.min(1, Math.max(0, v));
+    apply();
+  }, 0.05));
+  el.appendChild(colorField('stroke', path.stroke, (v) => {
+    checkpoint();
+    path.stroke = v;
+    apply();
+  }));
+  el.appendChild(numberField('stroke width', path.strokeWidth, (v) => {
+    checkpoint();
+    path.strokeWidth = Math.max(0, v);
+    apply();
+  }, 0.1));
+  el.appendChild(numberField('stroke opacity', path.strokeOpacity, (v) => {
+    checkpoint();
+    path.strokeOpacity = Math.min(1, Math.max(0, v));
+    apply();
+  }, 0.05));
+
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = 'Escape or a blank canvas click exits the object. Node editing scopes to it.';
+  el.appendChild(hint);
+}
+
+/** A color swatch with an on/off checkbox (null = no paint, like SVG "none"). */
+function colorField(
+  label: string, value: string | null, onChange: (v: string | null) => void,
+): HTMLElement {
+  const row = document.createElement('label');
+  row.className = 'field';
+  const span = document.createElement('span');
+  span.textContent = label;
+  row.appendChild(span);
+
+  const wrap = document.createElement('span');
+  wrap.className = 'color-wrap';
+  const enabled = document.createElement('input');
+  enabled.type = 'checkbox';
+  enabled.checked = value !== null;
+  const picker = document.createElement('input');
+  picker.type = 'color';
+  picker.value = normalizeHex(value) ?? '#000000';
+  picker.disabled = value === null;
+  enabled.onchange = () => {
+    picker.disabled = !enabled.checked;
+    onChange(enabled.checked ? picker.value : null);
+  };
+  picker.onchange = () => onChange(picker.value);
+  wrap.appendChild(enabled);
+  wrap.appendChild(picker);
+  row.appendChild(wrap);
+  return row;
+}
+
+/** <input type=color> only accepts #rrggbb. */
+function normalizeHex(value: string | null): string | null {
+  if (!value) return null;
+  let hex = value.trim();
+  if (!hex.startsWith('#')) return null;
+  hex = hex.slice(1);
+  if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+  return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex.toLowerCase()}` : null;
 }
 
 // ---- Claude assistant ----

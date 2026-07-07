@@ -91,7 +91,7 @@ function elementToPart(el: Element): RigPart {
 
   return {
     id: freshId('part'), label, transform, pivot, pivotHint, paths,
-    rest: { rotate: 0, tx: 0, ty: 0 },
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1 },
     parentId: null,
   };
 }

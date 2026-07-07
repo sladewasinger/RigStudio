@@ -1,8 +1,10 @@
 import {
   state, notify, subscribe, activeClip, serializeDoc, deserializeDoc, EditorMode,
+  selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder,
 } from './model';
 import { importSvg } from './importSvg';
-import { buildCanvas, renderPose, resetView } from './view';
+import { buildCanvas, renderPose, resetView, reorderCanvas } from './view';
+import { checkpoint } from './history';
 import { buildLayersPanel, buildInspector } from './panels';
 import {
   buildTimeline, render as renderTimeline, togglePlay,
@@ -217,6 +219,26 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Tab') {
     ev.preventDefault();
     setEditorMode(state.editorMode === 'setup' ? 'animate' : 'setup');
+    return;
+  }
+  if (ev.key === 'PageUp' || ev.key === 'PageDown') {
+    // Step the entered path (within its part) or the selected part through the
+    // draw order: PageUp = bring forward (up the layer list), PageDown = send back.
+    const delta = ev.key === 'PageUp' ? 1 : -1;
+    if (!canMoveSelectedInDrawOrder(delta)) return;
+    ev.preventDefault();
+    checkpoint();
+    moveSelectedInDrawOrder(delta);
+    reorderCanvas();
+    notify();
+    return;
+  }
+  if (ev.key === 'Escape') {
+    // Leave the "entered" path first; a second Escape clears the part selection.
+    if (state.selectedPathId) state.selectedPathId = null;
+    else selectPart(null);
+    notify();
+    renderPose();
     return;
   }
   if (ev.key.toLowerCase() === 'f') {

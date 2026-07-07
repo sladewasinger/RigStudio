@@ -15,7 +15,9 @@
 
 import { Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from './model';
 import { parsePath, pathToCubics } from './paths';
-import { Mat, applyMat, matrixOfTransform, multiply } from './transforms';
+import {
+  Mat, applyMat, invertMat, matrixOfTransform, multiply, translationMat,
+} from './transforms';
 
 const FR = 60;
 
@@ -58,7 +60,7 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
     ks: {
       o: { a: 0, k: 100 },
       r: { a: 0, k: 0 },
-      p: positionProp(rpx, rpy, trackOf('root', 'tx'), trackOf('root', 'ty')),
+      p: positionProp(rpx, rpx, rpy, rpy, trackOf('root', 'tx'), trackOf('root', 'ty')),
       a: { a: 0, k: [rnd(rpx), rnd(rpy), 0] },
       s: scaleProp(trackOf('root', 'sx'), trackOf('root', 'sy')),
     },
@@ -80,12 +82,16 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
       ddd: 0, ind: idx + 2, ty: 4, nm: part.label, sr: 1, parent,
       ks: {
         o: { a: 0, k: 100 },
-        r: scalarProp(part.rest.rotate, trackOf(part.id, 'rotate')),
+        // Keyed values are ABSOLUTE; the rest pose only fills unkeyed channels.
+        r: scalarProp(0, part.rest.rotate, trackOf(part.id, 'rotate')),
         p: positionProp(
-          px + part.rest.tx, py + part.rest.ty,
+          px, px + part.rest.tx,
+          py, py + part.rest.ty,
           trackOf(part.id, 'tx'), trackOf(part.id, 'ty'),
         ),
         a: { a: 0, k: [rnd(px), rnd(py), 0] },
+        // Rest scale is baked into the geometry (see shapeGroup) so it scales along
+        // the artwork's own axes, not the layer axes.
         s: { a: 0, k: [100, 100, 100] },
       },
       ao: 0, shapes, ip: 0, op, st: 0, bm: 0,
@@ -119,16 +125,19 @@ function keysOf(track: Track | undefined): Keyframe[] {
 }
 
 /**
- * A 1-D Lottie property: base offset + keyframe values. Static ({a:0}) for zero or
- * one keyframes, animated ({a:1}) otherwise, with each segment's bezier taken from
- * the ARRIVING key's easing (the studio stores easing on arrival; Lottie stores the
- * handles on the key the segment leaves).
+ * A 1-D Lottie property. Keyed values are ABSOLUTE channel values offset by animBase
+ * (the pivot coordinate for positions, 0 for rotation); a channel with no keyframes
+ * emits staticValue (the rest pose). Static ({a:0}) for zero or one keyframes,
+ * animated ({a:1}) otherwise, with each segment's bezier taken from the ARRIVING
+ * key's easing (the studio stores easing on arrival; Lottie stores the handles on the
+ * key the segment leaves).
  */
-function scalarProp(base: number, track: Track | undefined): JsonObj {
+function scalarProp(animBase: number, staticValue: number, track: Track | undefined): JsonObj {
   const keys = keysOf(track);
-  if (keys.length <= 1) return { a: 0, k: rnd(base + (keys[0]?.value ?? 0)) };
+  if (keys.length === 0) return { a: 0, k: rnd(staticValue) };
+  if (keys.length === 1) return { a: 0, k: rnd(animBase + keys[0].value) };
   const k = keys.map((key, idx) => {
-    const kf: JsonObj = { t: toFrames(key.time), s: [rnd(base + key.value)] };
+    const kf: JsonObj = { t: toFrames(key.time), s: [rnd(animBase + key.value)] };
     if (idx < keys.length - 1) {
       const bez = EASING_BEZIER[keys[idx + 1].easing];
       kf.o = { x: [bez.o[0]], y: [bez.o[1]] };
@@ -145,16 +154,22 @@ function scalarProp(base: number, track: Track | undefined): JsonObj {
  * independent instead of being merged onto a shared clock.
  */
 function positionProp(
-  baseX: number, baseY: number, txTrack: Track | undefined, tyTrack: Track | undefined,
+  animBaseX: number, staticX: number,
+  animBaseY: number, staticY: number,
+  txTrack: Track | undefined, tyTrack: Track | undefined,
 ): JsonObj {
   const txKeys = keysOf(txTrack);
   const tyKeys = keysOf(tyTrack);
   if (txKeys.length <= 1 && tyKeys.length <= 1) {
-    const kx = txKeys[0]?.value ?? 0;
-    const ky = tyKeys[0]?.value ?? 0;
-    return { a: 0, k: [rnd(baseX + kx), rnd(baseY + ky), 0] };
+    const kx = txKeys.length === 1 ? animBaseX + txKeys[0].value : staticX;
+    const ky = tyKeys.length === 1 ? animBaseY + tyKeys[0].value : staticY;
+    return { a: 0, k: [rnd(kx), rnd(ky), 0] };
   }
-  return { s: true, x: scalarProp(baseX, txTrack), y: scalarProp(baseY, tyTrack) };
+  return {
+    s: true,
+    x: scalarProp(animBaseX, staticX, txTrack),
+    y: scalarProp(animBaseY, staticY, tyTrack),
+  };
 }
 
 /** Replica of model.ts ease() so merged scale keyframes sample exactly. */
@@ -322,7 +337,22 @@ function pathToBeziers(d: string, m: Mat, ox: number, oy: number): SubPath[] {
  * the geometry itself since they never animate.
  */
 function shapeGroup(part: RigPart, path: RigPath, ox: number, oy: number): JsonObj | null {
-  const m = multiply(matrixOfTransform(part.transform), matrixOfTransform(path.transform));
+  const baked = matrixOfTransform(part.transform);
+  let m = baked;
+  // Rest scale: innermost (after baked), around the pivot mapped into pre-baked local
+  // space — the artwork resizes along its own axes and the joint stays fixed. Baked
+  // into geometry because Lottie layer scale would act along layer axes instead.
+  const sx = part.rest?.sx ?? 1;
+  const sy = part.rest?.sy ?? 1;
+  if (sx !== 1 || sy !== 1) {
+    const pl = applyMat(invertMat(baked), part.pivot.x, part.pivot.y);
+    const scaleAroundPl = multiply(
+      translationMat(pl.x, pl.y),
+      multiply({ a: sx, b: 0, c: 0, d: sy, e: 0, f: 0 }, translationMat(-pl.x, -pl.y)),
+    );
+    m = multiply(baked, scaleAroundPl);
+  }
+  m = multiply(m, matrixOfTransform(path.transform));
   const beziers = pathToBeziers(path.d, m, ox, oy);
   if (beziers.length === 0) return null;
 

@@ -38,7 +38,7 @@ from the console.
 |---|---|
 | `model.ts` | Document model (`RigDoc`/`RigPart`/`Clip`/`Track`/`Keyframe`), part hierarchy helpers (`ancestorChain`, `setParent`, cycle-safe), rest pose, app state singleton (`editorMode`: `setup`\|`animate`, multi-selection, playback speed/ping-pong/onion flags), pub/sub (`subscribe`/`notify`), pose sampling (`sampleChannel`, 4 easings), keyframe clipboard (`copyKeys`/`pasteKeysAt`/`copyPoseAt`), project (de)serialization (`serializeDoc`/`deserializeDoc`/`normalizeDoc`) |
 | `importSvg.ts` | SVG file → `RigDoc`. Unwraps Inkscape layers; named groups → parts; ellipse/circle/rect → path data; pivots seeded from the *composed matrix's fixed point* (works whether the group is authored as `rotate(a,cx,cy)` or the `matrix(...)` Inkscape rewrites it into) or from `inkscape:transform-center-x/y` as a `pivotHint` resolved once geometry is measurable |
-| `view.ts` | Canvas: renders the rig as live SVG, wheel-zoom-at-cursor + middle-drag pan, Setup-vs-Animate drag semantics (rest pose vs. keyframes), parent-chain-aware pose composition and effective pivots, bone lines, onion-skin ghost layers, multi-part selection/drag, node editing, overlay visuals |
+| `view.ts` | Canvas: renders the rig as live SVG, wheel-zoom-at-cursor + middle-drag pan, Setup-vs-Animate drag semantics (Setup drags MOVE the part, Inkscape-style scale/rotate handle sets toggled by re-clicking the selection; Animate drags rotate around the pivot and auto-key), parent-chain-aware pose composition and effective pivots, bone lines, onion-skin ghost layers, multi-part selection/drag, path "entering" via double-click, node editing, overlay visuals |
 | `timeline.ts` | Clip transport (play/pause/duplicate/rename/delete/duration, speed selector, ping-pong, onion toggle, fps readout), scrubber, keyframe lanes with click/shift-click/marquee selection, retime drag, a key-property row (time/value/easing) for the selection, copy/paste/nudge/column-select |
 | `panels.ts` | Layers **tree** (parts nest under their parent, fold open to show child paths, drag-to-parent / drop-to-unparent), inspector (Setup: rest/pivot/parent fields; Animate: keyed channel fields), Claude assistant panel (prompt animate, critique, optional pose-snapshot attachment) |
 | `history.ts` | Snapshot-based undo/redo; call `checkpoint()` BEFORE any doc mutation, one per user gesture |
@@ -54,10 +54,23 @@ from the console.
 - **Coordinates are SVG document space:** +y down, positive rotation = clockwise.
   Every part rotates around its own pivot; `root` is a synthetic target for whole-figure
   translate + scale (jumps, squash-and-stretch) around `rootPivot`.
-- **Setup mode edits the character; Animate mode edits keyframes.** Rig drags in Setup
-  write `part.rest` (rotate/tx/ty) and are never keyed; the same drags in Animate call
-  `setKeyframe()` at the playhead. Pivots and node editing are Setup-only. Toggle with
-  the top-right buttons or `Tab`.
+- **Setup mode edits the character; Animate mode edits keyframes.** Setup is
+  Inkscape-like: dragging a part MOVES it (`rest.tx/ty`), the selected part shows
+  corner/side scale handles, and clicking it again swaps them for corner rotate handles
+  (`rest.rotate`); double-click "enters" a part and selects the path under the cursor
+  (Escape backs out). In Animate, dragging a part rotates it around its pivot
+  (Shift+drag moves) and calls `setKeyframe()` at the playhead. Pivots and node editing
+  are Setup-only. Toggle with the top-right buttons or `Tab`.
+- **Keyframed values are ABSOLUTE; the rest pose only fills unkeyed channels**
+  (`model.channelValue`). Editing the rest pose in Setup must never shift keyed
+  animation — this was an explicit bug fix, do not regress it. Both exporters mirror
+  the rule: Compose emits the rest value as the `pose.at(key, default)` default, and
+  Lottie emits rest as the static value only when a channel has no keyframes.
+- **Rest scale (`rest.sx/sy`) applies innermost — after the baked transform — around
+  the pivot mapped into pre-baked local space**, so artwork resizes along its own axes
+  and the joint never moves. Like baked transforms, it does NOT propagate to children.
+  Compose emits it as a trailing `scale(sx, sy, pivot = localPivot)`; Lottie bakes it
+  into the flattened geometry (layer-scale axes would be wrong for rotated art).
 - **Part parenting composes like a bone hierarchy.** A part's rendered transform is its
   ancestors' pose transforms (outermost first) followed by its own; `ancestorChain()` is
   cycle-safe and `setParent()` refuses to create one. Effective pivots for gizmos/bone
@@ -88,7 +101,49 @@ from the console.
 
 ## Status
 
-### Implemented and verified this session
+### Second wave — implemented and verified (this session)
+
+All verified live in the preview (synthetic pointer/keyboard events + DOM assertions),
+type-check and `npm run build` clean, 40 existing unit tests still passing.
+
+- **Absolute keyframe semantics** (bug fix): keying a rotation, then changing the rest
+  rotation in Setup, used to shift the animation; now keyed channels are absolute and
+  rest only fills unkeyed ones. Verified: a 45° rest change leaves both the keyed value
+  and the rendered animate-mode transform byte-identical, and an unkeyed channel
+  follows rest. Compose/Lottie exporters updated and verified for both cases.
+- **Inkscape-style Setup handles**: select → 8 scale handles (corners + sides, Ctrl on
+  a corner = uniform); click the part again → 4 rotate handles; click again → back.
+  Body drag moves the part. Verified numerically: a 20% SE-corner drag set
+  `rest.sx/sy = 1.2` with 0.1 px anchor drift and an unchanged pivot; rotate-handle
+  drag wrote `rest.rotate` only; no keyframes were created by any Setup interaction.
+- **Path-level selection**: clicking a sub-item in Layers or double-clicking artwork
+  on canvas "enters" the part and selects that path (gold outline highlight); the
+  inspector grows an object section (fill/stroke color pickers, opacities, width);
+  node editing scopes to the entered path; Escape steps back out (path → part → none).
+- **Timeline polish**: key bar is a fixed 30 px row (no more height jolt on key
+  selection); clicking a keyframe scrubs the playhead to it and the playhead follows
+  while retiming; "+ clip" renamed to "+ animation" ("delete clip" → "delete").
+- **Blank-canvas deselect**: a click on empty canvas clears the whole multi-selection
+  AND repaints the overlay. Two bugs lived here: the pre-rework svg only covered 96%
+  of the canvas (gutter clicks hit dead space), and the blank-click branch called
+  notify() without a repaint — state and Layers cleared but the selection box
+  lingered on canvas, because only drags repaint on pointerup and a blank click
+  starts no drag. Verified against the overlay DOM (boxes/handles/crosshair all gone
+  on pointerdown) in both modes. Lesson: when verifying selection changes, assert on
+  the overlay DOM, not just state.
+- **Z-order (visibility) reordering**: `doc.parts` order is the paint order (last =
+  topmost). Layer rows accept three drop zones — top edge places the dragged part
+  just ABOVE the row (insertion line feedback), bottom edge just BELOW (both adopt
+  the row's parent, i.e. sibling insertion), middle parents INTO it as before.
+  PageUp/PageDown step the selected part — or the entered path within its part —
+  up/down the draw order; `view.reorderCanvas()` re-appends the existing DOM nodes
+  (no rebuild). Verified live: model order, DOM paint order, drop-zone feedback
+  classes, sibling parent adoption, cycle refusal, and boundary no-ops.
+- `vite.config.ts` now honors a `PORT` env var and `.claude/launch.json` sets
+  `autoPort`, so the preview harness coexists with a manually running dev server
+  on 5173.
+
+### First wave — implemented and verified (previous session)
 
 Verified via `npx tsc --noEmit` (clean) plus direct interaction in a live preview
 (`window.__rigStudio` + synthetic pointer/keyboard events), including a full page
@@ -133,8 +188,10 @@ reload to confirm autosave.
 
 ### Implemented but not independently verified
 
-Code is written and type-checks, but I either couldn't exercise it live (needs a real
-Anthropic API key, or a real Lottie/Compose consumer) or only checked it structurally.
+Code is written and type-checks, but either couldn't be exercised live (needs a real
+Anthropic API key, or a real Lottie/Compose consumer) or was only checked structurally.
+The second wave's exporter changes (absolute semantics, rest-scale emission) were
+re-verified structurally but the two external-consumer checks below are still owed.
 
 - **Lottie exporter** (`exportLottie.ts`) — verified structurally in-browser (layer
   count, parent references, anchor points, animated-rotation keyframe times, shape
@@ -157,21 +214,27 @@ Anthropic API key, or a real Lottie/Compose consumer) or only checked it structu
   synthetic `dragstart`/`drop` events (they're awkward to simulate outside a real
   browser drag gesture).
 
-### In progress
+### Unit tests — done
 
-- **Unit test suite** (`npm test`, Vitest) — a background subagent is adding coverage.
-  So far: `src/__tests__/paths.test.ts` and `transforms.test.ts`, **40 tests, all
-  passing**. Still to land: `model.ts` (channel sampling/easing curves, keyframe
-  clipboard, parenting/cycle rules, `normalizeDoc` back-compat), `importSvg.ts`
-  (pivot-from-matrix and `transform-center` regression tests, run under jsdom), and an
-  `exportCompose.ts` smoke test. Run `npm test` to check current status before
-  reporting this done.
+`npm test`: **5 files, 101 tests, all passing.** `paths` (parse/serialize/arc→cubic/
+node insertion), `transforms` (matrix ops, rotation fixed points from both rotate()
+and matrix() spellings), `model` (channelValue absolute/rest-fallback semantics,
+sampling/easings, keyframe clipboard, parenting/cycles, `normalizeDoc` back-compat),
+`importSvg` (jsdom: layer unwrap, pivot seeding incl. transform-center y-flip, shape
+conversion, label/transform accumulation), `exportCompose` (pose.at rest defaults,
+rest-scale emission, parent-chain ordering, all easing suffixes). One bug found by the
+test pass was fixed in `model.ts`: `setKeyframeAt` now applies an explicitly passed
+easing when replacing an existing key (paste carries the copied easing) while drags,
+which omit it, still preserve a hand-set easing. Not covered: the DOM-heavy modules
+(`view`/`timeline`/`panels`/`main`), `exportLottie`, `claude.ts`.
 
 ### Not started
 
-- No visual/screenshot regression proof was captured this session (the preview
-  screenshot tool was flaky/unavailable in this environment); verification instead
-  relied on DOM inspection and scripted pointer/keyboard events through
-  `window.__rigStudio`. Worth a manual look in a real browser before shipping.
+- No visual/screenshot regression proof exists (`preview_screenshot` reliably times
+  out in this environment even though the page is responsive); verification relies on
+  DOM inspection and scripted pointer/keyboard events through `window.__rigStudio`.
+  Worth a manual look in a real browser before shipping.
+- Skew (Inkscape's rotate-mode side handles) and mirror-flip through scale handles
+  (factors are clamped positive) are unimplemented.
 - Per-part AI motion suggestions and richer critique-mode UI (currently a single
   scrollable text block) are unbuilt.

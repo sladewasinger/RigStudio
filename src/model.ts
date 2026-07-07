@@ -33,11 +33,18 @@ export type PivotHint =
   /** Offset from the part's rendered bbox center, in document units (+y down). */
   { kind: 'centerOffset'; dx: number; dy: number };
 
-/** Static pose offsets edited in Setup mode; animation channels add on top of these. */
+/**
+ * The character's rest pose, edited in Setup mode. A channel with keyframes ignores
+ * these (keyed values are ABSOLUTE); a channel without keyframes displays its rest
+ * value. Scale is Setup-only (no scale keyframes on parts) and is applied along the
+ * artwork's own axes around the joint, so resizing never moves the pivot.
+ */
 export interface RestPose {
   rotate: number;
   tx: number;
   ty: number;
+  sx: number;
+  sy: number;
 }
 
 export interface RigPart {
@@ -115,6 +122,8 @@ export interface AppState {
   selectedPartId: string | null;
   /** Full selection set for multi-part posing; always contains selectedPartId when set. */
   selectedPartIds: string[];
+  /** A single path within the selected part ("entered" like an SVG editor group), or null. */
+  selectedPathId: string | null;
   activeClipIndex: number;
   currentTime: number;
   playing: boolean;
@@ -131,6 +140,7 @@ export const state: AppState = {
   doc: null,
   selectedPartId: null,
   selectedPartIds: [],
+  selectedPathId: null,
   activeClipIndex: 0,
   currentTime: 0,
   playing: false,
@@ -173,6 +183,7 @@ export function selectedParts(): RigPart[] {
 
 /** Set or extend the selection. Additive keeps existing parts (shift-click). */
 export function selectPart(id: string | null, additive = false): void {
+  if (id !== state.selectedPartId) state.selectedPathId = null;
   if (id === null) {
     state.selectedPartId = null;
     state.selectedPartIds = [];
@@ -185,6 +196,13 @@ export function selectPart(id: string | null, additive = false): void {
     state.selectedPartId = id;
     state.selectedPartIds = [id];
   }
+}
+
+export function selectedPath(): { part: RigPart; path: RigPath } | null {
+  const part = selectedPart();
+  if (!part || !state.selectedPathId) return null;
+  const path = part.paths.find((p) => p.id === state.selectedPathId);
+  return path ? { part, path } : null;
 }
 
 // ---- Part hierarchy ----
@@ -226,6 +244,59 @@ export function setParent(childId: string, parentId: string | null): boolean {
   return true;
 }
 
+// ---- Draw order (z-order) ----
+// doc.parts array order IS the paint order: last = drawn on top. The layers panel
+// lists topmost first, so "up the layer list" means "later in doc.parts".
+
+/** Whether the current selection (entered path, else part) can move a step in z. */
+export function canMoveSelectedInDrawOrder(delta: 1 | -1): boolean {
+  const doc = state.doc;
+  const part = selectedPart();
+  if (!doc || !part) return false;
+  if (state.selectedPathId) {
+    const i = part.paths.findIndex((p) => p.id === state.selectedPathId);
+    return i >= 0 && i + delta >= 0 && i + delta < part.paths.length;
+  }
+  const i = doc.parts.indexOf(part);
+  return i + delta >= 0 && i + delta < doc.parts.length;
+}
+
+/** Move the entered path (within its part) or the selected part one z step (+1 = up). */
+export function moveSelectedInDrawOrder(delta: 1 | -1): boolean {
+  if (!canMoveSelectedInDrawOrder(delta)) return false;
+  const doc = state.doc!;
+  const part = selectedPart()!;
+  if (state.selectedPathId) {
+    const i = part.paths.findIndex((p) => p.id === state.selectedPathId);
+    [part.paths[i], part.paths[i + delta]] = [part.paths[i + delta], part.paths[i]];
+  } else {
+    const i = doc.parts.indexOf(part);
+    [doc.parts[i], doc.parts[i + delta]] = [doc.parts[i + delta], doc.parts[i]];
+  }
+  return true;
+}
+
+/**
+ * Drop a part just above/below another in the layers tree: it draws immediately on
+ * top of ('above') or beneath ('below') `refId` and becomes its sibling — adopting
+ * ref's parent, like dropping between rows in any layer tree. Refuses when adopting
+ * that parent would create a cycle.
+ */
+export function movePartRelativeTo(
+  partId: string, refId: string, place: 'above' | 'below',
+): boolean {
+  const doc = state.doc;
+  if (!doc || partId === refId) return false;
+  const part = partById(partId);
+  const ref = partById(refId);
+  if (!part || !ref) return false;
+  if (ref.parentId !== part.parentId && !setParent(partId, ref.parentId)) return false;
+  doc.parts.splice(doc.parts.indexOf(part), 1);
+  const refIdx = doc.parts.indexOf(ref);
+  doc.parts.splice(place === 'above' ? refIdx + 1 : refIdx, 0, part);
+  return true;
+}
+
 // ---- Pose evaluation ----
 
 function ease(t: number, easing: Easing): number {
@@ -235,6 +306,26 @@ function ease(t: number, easing: Easing): number {
     case 'easeInOut': return t * t * (3 - 2 * t); // smoothstep
     default: return t;
   }
+}
+
+/**
+ * The value a part's channel displays at a time: the ABSOLUTE keyframed value when the
+ * channel is keyed in the active clip, otherwise the part's rest value. This is what
+ * makes editing the rest pose in Setup mode safe — it never shifts keyed animation.
+ * Pass time = null to read the bare rest pose (Setup mode).
+ */
+export function channelValue(part: RigPart, channel: Channel, time: number | null): number {
+  const rest =
+    channel === 'rotate' ? part.rest.rotate
+    : channel === 'tx' ? part.rest.tx
+    : channel === 'ty' ? part.rest.ty
+    : channel === 'sx' ? part.rest.sx
+    : part.rest.sy;
+  if (time === null) return rest;
+  const clip = activeClip();
+  const track = clip?.tracks.find((t) => t.target === part.id && t.channel === channel);
+  if (!track || track.keyframes.length === 0) return rest;
+  return sampleChannel(part.id, channel, time);
 }
 
 /** Sample a channel value from the active clip at the given time. */
@@ -264,10 +355,12 @@ export function sampleChannel(target: string, channel: Channel, time: number): n
 
 /**
  * Write a keyframe for the channel at an explicit time. Creates the track on first
- * use; replaces an existing keyframe at (almost) the same time.
+ * use; replaces an existing keyframe at (almost) the same time. An explicit `easing`
+ * overwrites the existing key's easing (paste); omitting it keeps a hand-set easing
+ * intact when auto-key drags re-value the key.
  */
 export function setKeyframeAt(
-  target: string, channel: Channel, time: number, value: number, easing: Easing = 'easeInOut',
+  target: string, channel: Channel, time: number, value: number, easing?: Easing,
 ): Keyframe {
   const clip = activeClip()!;
   let track = clip.tracks.find((t) => t.target === target && t.channel === channel);
@@ -278,9 +371,10 @@ export function setKeyframeAt(
   const existing = track.keyframes.find((k) => Math.abs(k.time - time) < 5);
   if (existing) {
     existing.value = value;
+    if (easing !== undefined) existing.easing = easing;
     return existing;
   }
-  const key: Keyframe = { time, value, easing };
+  const key: Keyframe = { time, value, easing: easing ?? 'easeInOut' };
   track.keyframes.push(key);
   track.keyframes.sort((a, b) => a.time - b.time);
   return key;
@@ -391,7 +485,9 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
   };
   for (const part of doc.parts) {
     trackId(part.id);
-    part.rest = part.rest ?? { rotate: 0, tx: 0, ty: 0 };
+    part.rest = part.rest ?? { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1 };
+    part.rest.sx = part.rest.sx ?? 1;
+    part.rest.sy = part.rest.sy ?? 1;
     part.parentId = part.parentId ?? null;
     part.pivotHint = part.pivotHint ?? null;
     part.paths.forEach((p, i) => {

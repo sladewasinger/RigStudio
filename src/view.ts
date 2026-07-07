@@ -2,27 +2,29 @@
  * The editing canvas: renders the rig as live SVG and handles direct manipulation.
  *
  * Global editing modes (state.editorMode):
- *   Setup   — edit the character itself: drags change the REST pose (never keyframed),
- *             pivots are draggable, node editing is available.
- *   Animate — drags record keyframes at the playhead; pivots/nodes are locked.
- *
- * Rig tool:  click a part to select (Shift adds to the selection); drag rotates every
- *            selected part around its pivot (Ctrl snaps to 15°); Shift+drag translates.
- * Node tool: endpoints (and cubic control handles) of the selected part's paths become
- *            draggable; Alt+click an endpoint inserts a node after it; Ctrl+click
- *            deletes it. Arc segments convert to cubics on insert.
+ *   Setup   — edit the character itself, Inkscape-style: dragging a part MOVES it
+ *             (rest tx/ty); the selected part shows corner/side SCALE handles, and
+ *             clicking it again swaps them for corner ROTATE handles (drag to spin the
+ *             rest pose around the pivot). Pivots are draggable, node editing is
+ *             available, double-clicking enters a part and selects the path under the
+ *             cursor. Nothing here ever creates keyframes.
+ *   Animate — dragging a part rotates it around its pivot (Shift+drag translates),
+ *             recording keyframes at the playhead. Keyed values are ABSOLUTE; channels
+ *             without keys fall back to the rest pose (see model.channelValue).
  *
  * Navigation: scroll wheel zooms around the cursor, middle-button drag pans, and
  * resetView() re-fits the document.
  *
  * Parts may be parented (part.parentId): a part's pose rides on its ancestors' poses,
  * so rotating an upper arm carries the forearm. Overlay pivots track the LIVE joint
- * positions (ancestors' motion + the part's own translation applied).
+ * positions. Rest scale (sx/sy) applies along the artwork's own local axes around the
+ * joint — innermost, after the baked transform — so the selection box scales cleanly
+ * and the pivot never moves; like baked transforms, it does not propagate to children.
  */
 
 import {
-  RigPart, state, notify, sampleChannel, setKeyframe, selectedPart, selectedParts,
-  selectPart, ancestorChain, activeClip,
+  RigPart, RigPath, state, notify, setKeyframe, selectedPart, selectedParts,
+  selectPart, ancestorChain, activeClip, channelValue, sampleChannel,
 } from './model';
 import { parsePath, serializePath, insertNodeAfter, PathCmd } from './paths';
 import { Mat, applyMat, invertMat, matrixOfTransform } from './transforms';
@@ -32,12 +34,19 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const ROTATE_SNAP_DEGREES = 15;
 /** Client-pixel movement before a drag counts as a drag (keeps clicks mutation-free). */
 const DRAG_THRESHOLD_PX = 3;
+const MIN_SCALE = 0.05;
+const MAX_SCALE = 50;
 
 let svg: SVGSVGElement | null = null;
 let rootGroup: SVGGElement | null = null;
 let onionGroup: SVGGElement | null = null;
 let overlay: SVGGElement | null = null;
 const partGroups = new Map<string, SVGGElement>();
+
+// Which handle set the selected part shows in Setup mode; clicking the part again
+// toggles it (Inkscape behavior). Resets when the primary selection changes.
+let handleMode: 'scale' | 'rotate' = 'scale';
+let handlePartId: string | null = null;
 
 // Current viewBox rect — the zoom/pan state. Survives canvas rebuilds (undo/redo);
 // reset explicitly on document import.
@@ -81,17 +90,7 @@ export function buildCanvas(container: HTMLElement): void {
     g.dataset.partId = part.id;
     for (const p of part.paths) {
       const el = document.createElementNS(SVG_NS, 'path');
-      el.setAttribute('d', p.d);
-      el.setAttribute('fill', p.fill ?? 'none');
-      el.setAttribute('fill-opacity', String(p.fillOpacity));
-      if (p.stroke) {
-        el.setAttribute('stroke', p.stroke);
-        el.setAttribute('stroke-width', String(p.strokeWidth));
-        el.setAttribute('stroke-opacity', String(p.strokeOpacity));
-        el.setAttribute('stroke-linecap', 'round');
-        el.setAttribute('stroke-linejoin', 'round');
-      }
-      if (p.transform) el.setAttribute('transform', p.transform);
+      applyPathAttrs(el, p);
       el.dataset.pathId = p.id;
       g.appendChild(el);
     }
@@ -126,6 +125,50 @@ export function buildCanvas(container: HTMLElement): void {
   renderPose();
 }
 
+function applyPathAttrs(el: SVGPathElement, p: RigPath): void {
+  el.setAttribute('d', p.d);
+  el.setAttribute('fill', p.fill ?? 'none');
+  el.setAttribute('fill-opacity', String(p.fillOpacity));
+  if (p.stroke) {
+    el.setAttribute('stroke', p.stroke);
+    el.setAttribute('stroke-width', String(p.strokeWidth));
+    el.setAttribute('stroke-opacity', String(p.strokeOpacity));
+    el.setAttribute('stroke-linecap', 'round');
+    el.setAttribute('stroke-linejoin', 'round');
+  } else {
+    el.removeAttribute('stroke');
+    el.removeAttribute('stroke-width');
+    el.removeAttribute('stroke-opacity');
+  }
+  if (p.transform) el.setAttribute('transform', p.transform);
+}
+
+/** Refresh a rendered path's style/geometry after inspector edits. */
+export function updatePathAttrs(p: RigPath): void {
+  const el = svg?.querySelector<SVGPathElement>(`[data-path-id="${p.id}"]`);
+  if (el) applyPathAttrs(el, p);
+  renderOverlay();
+}
+
+/**
+ * Re-sync DOM paint order with doc.parts / part.paths after a z-order change.
+ * appendChild moves the existing nodes, so this is cheap — no rebuild, no re-measure.
+ */
+export function reorderCanvas(): void {
+  const doc = state.doc;
+  if (!doc || !rootGroup) return;
+  for (const part of doc.parts) {
+    const g = partGroups.get(part.id);
+    if (!g) continue;
+    rootGroup.appendChild(g);
+    for (const p of part.paths) {
+      const el = g.querySelector(`[data-path-id="${p.id}"]`);
+      if (el) g.appendChild(el);
+    }
+  }
+  renderPose();
+}
+
 // ---- Pose evaluation helpers ----
 
 /** The time to sample animation at, or null when Setup mode shows the bare rest pose. */
@@ -146,12 +189,28 @@ function rootPoseTransform(t: number | null): string {
   );
 }
 
-/** A part's own pose transform (rest + sampled animation when t is a time). */
+/** A part's own pose transform: keyed channels are absolute, rest fills the gaps. */
 function ownPoseTransform(part: RigPart, t: number | null): string {
-  const rot = part.rest.rotate + (t === null ? 0 : sampleChannel(part.id, 'rotate', t));
-  const tx = part.rest.tx + (t === null ? 0 : sampleChannel(part.id, 'tx', t));
-  const ty = part.rest.ty + (t === null ? 0 : sampleChannel(part.id, 'ty', t));
+  const rot = channelValue(part, 'rotate', t);
+  const tx = channelValue(part, 'tx', t);
+  const ty = channelValue(part, 'ty', t);
   return `translate(${tx},${ty}) rotate(${rot},${part.pivot.x},${part.pivot.y})`;
+}
+
+/** The pivot mapped into the part's pre-baked local space (where rest scale applies). */
+function localPivotOf(part: RigPart): { x: number; y: number } {
+  return applyMat(invertMat(matrixOfTransform(part.transform)), part.pivot.x, part.pivot.y);
+}
+
+/**
+ * Rest scale, applied innermost (after the baked transform) around the local pivot:
+ * the artwork resizes along its own axes and the joint stays exactly in place.
+ */
+function innerScaleTransform(part: RigPart): string {
+  const { sx, sy } = part.rest;
+  if (sx === 1 && sy === 1) return '';
+  const pl = localPivotOf(part);
+  return `translate(${pl.x},${pl.y}) scale(${sx},${sy}) translate(${-pl.x},${-pl.y})`;
 }
 
 /** Ancestor poses composed with the part's own pose (bone hierarchy). */
@@ -161,16 +220,20 @@ function fullPoseTransform(part: RigPart, t: number | null): string {
   return pieces.join(' ');
 }
 
+/** The complete transform string a part group renders with. */
+function groupTransformOf(part: RigPart, t: number | null): string {
+  return [fullPoseTransform(part, t), part.transform, innerScaleTransform(part)]
+    .filter(Boolean)
+    .join(' ');
+}
+
 /** Matrix of the ancestors' poses only (maps a part's rest space into root space). */
 function chainMatOf(part: RigPart, t: number | null): Mat {
   return matrixOfTransform(ancestorChain(part).map((a) => ownPoseTransform(a, t)).join(' '));
 }
 
 function ownTranslateOf(part: RigPart, t: number | null): { x: number; y: number } {
-  return {
-    x: part.rest.tx + (t === null ? 0 : sampleChannel(part.id, 'tx', t)),
-    y: part.rest.ty + (t === null ? 0 : sampleChannel(part.id, 'ty', t)),
-  };
+  return { x: channelValue(part, 'tx', t), y: channelValue(part, 'ty', t) };
 }
 
 /** Where the part's joint actually sits right now, in root coordinates. */
@@ -190,8 +253,7 @@ export function renderPose(): void {
   for (const part of doc.parts) {
     const g = partGroups.get(part.id);
     if (!g) continue;
-    const pose = fullPoseTransform(part, t);
-    g.setAttribute('transform', part.transform ? `${pose} ${part.transform}` : pose);
+    g.setAttribute('transform', groupTransformOf(part, t));
   }
   renderOnion();
   renderOverlay();
@@ -224,8 +286,7 @@ function renderOnion(): void {
     layer.setAttribute('transform', rootPoseTransform(ghostTime));
     for (const part of doc.parts) {
       const g = document.createElementNS(SVG_NS, 'g');
-      const pose = fullPoseTransform(part, ghostTime);
-      g.setAttribute('transform', part.transform ? `${pose} ${part.transform}` : pose);
+      g.setAttribute('transform', groupTransformOf(part, ghostTime));
       for (const p of part.paths) {
         const el = document.createElementNS(SVG_NS, 'path');
         el.setAttribute('d', p.d);
@@ -238,7 +299,7 @@ function renderOnion(): void {
   }
 }
 
-// ---- Overlay: selection box, pivots, drag gizmos, node handles ----
+// ---- Overlay: selection box, handles, pivots, drag gizmos, node handles ----
 
 function renderOverlay(): void {
   if (!overlay || !svg || !rootGroup) return;
@@ -246,7 +307,15 @@ function renderOverlay(): void {
   const doc = state.doc;
   if (!doc) return;
 
-  if (state.mode === 'nodes' && state.editorMode === 'setup') {
+  const setup = state.editorMode === 'setup';
+
+  // Reset the handle cycle when the primary selection changes.
+  if (state.selectedPartId !== handlePartId) {
+    handlePartId = state.selectedPartId;
+    handleMode = 'scale';
+  }
+
+  if (state.mode === 'nodes' && setup) {
     const part = selectedPart();
     if (part) renderNodeHandles(part);
     return;
@@ -291,43 +360,108 @@ function renderOverlay(): void {
     holder.appendChild(line);
   }
 
+  // Highlight the "entered" path, if any (Setup path selection).
+  if (setup && state.selectedPathId) {
+    const part = selectedPart();
+    const g = part ? partGroups.get(part.id) : null;
+    const path = part?.paths.find((p) => p.id === state.selectedPathId);
+    if (part && g && path) {
+      const hl = document.createElementNS(SVG_NS, 'path');
+      hl.setAttribute('d', path.d);
+      hl.setAttribute('class', 'path-highlight');
+      hl.setAttribute('stroke-dasharray', `${size * 0.8} ${size * 0.6}`);
+      const wrap = document.createElementNS(SVG_NS, 'g');
+      wrap.setAttribute('class', 'overlay-passive');
+      wrap.setAttribute(
+        'transform',
+        [rootTransform, g.getAttribute('transform') ?? '', path.transform]
+          .filter(Boolean)
+          .join(' '),
+      );
+      wrap.appendChild(hl);
+      overlay.appendChild(wrap);
+    }
+  }
+
   // Dashed transform boxes around every selected part, rotating live with the pose.
   for (const part of selectedParts()) {
     const g = partGroups.get(part.id);
     if (!g) continue;
     const primary = part.id === state.selectedPartId;
-    const boxHolder = document.createElementNS(SVG_NS, 'g');
-    boxHolder.setAttribute('class', 'overlay-passive');
     const partTransform = g.getAttribute('transform') ?? '';
-    boxHolder.setAttribute('transform', [rootTransform, partTransform].filter(Boolean).join(' '));
+    const boxTransform = [rootTransform, partTransform].filter(Boolean).join(' ');
     const box = g.getBBox();
     const pad = size * 0.6;
+    const x0 = box.x - pad, y0 = box.y - pad;
+    const x1 = box.x + box.width + pad, y1 = box.y + box.height + pad;
+
+    const boxHolder = document.createElementNS(SVG_NS, 'g');
+    boxHolder.setAttribute('class', 'overlay-passive');
+    boxHolder.setAttribute('transform', boxTransform);
     const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', String(box.x - pad));
-    rect.setAttribute('y', String(box.y - pad));
-    rect.setAttribute('width', String(box.width + pad * 2));
-    rect.setAttribute('height', String(box.height + pad * 2));
+    rect.setAttribute('x', String(x0));
+    rect.setAttribute('y', String(y0));
+    rect.setAttribute('width', String(x1 - x0));
+    rect.setAttribute('height', String(y1 - y0));
     rect.setAttribute('class', primary ? 'select-box' : 'select-box secondary');
     rect.setAttribute('stroke-dasharray', `${size * 0.9} ${size * 0.7}`);
     boxHolder.appendChild(rect);
-    if (primary) {
-      for (const [cx, cy] of [
-        [box.x - pad, box.y - pad],
-        [box.x + box.width + pad, box.y - pad],
-        [box.x + box.width + pad, box.y + box.height + pad],
-        [box.x - pad, box.y + box.height + pad],
-      ]) {
+    overlay.appendChild(boxHolder);
+
+    if (!primary) continue;
+
+    if (setup) {
+      // Interactive Inkscape-style handles for the primary part.
+      const handles = document.createElementNS(SVG_NS, 'g');
+      handles.setAttribute('transform', boxTransform);
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      if (handleMode === 'scale') {
+        const spots: [string, number, number][] = [
+          ['nw', x0, y0], ['ne', x1, y0], ['se', x1, y1], ['sw', x0, y1],
+          ['n', cx, y0], ['e', x1, cy], ['s', cx, y1], ['w', x0, cy],
+        ];
+        for (const [name, hx, hy] of spots) {
+          const s = size * 1.1;
+          const h = document.createElementNS(SVG_NS, 'rect');
+          h.setAttribute('x', String(hx - s / 2));
+          h.setAttribute('y', String(hy - s / 2));
+          h.setAttribute('width', String(s));
+          h.setAttribute('height', String(s));
+          h.setAttribute('class', `scale-handle handle-${name}`);
+          h.dataset.handle = name;
+          handles.appendChild(h);
+        }
+      } else {
+        for (const [name, hx, hy] of [
+          ['nw', x0, y0], ['ne', x1, y0], ['se', x1, y1], ['sw', x0, y1],
+        ] as [string, number, number][]) {
+          const h = document.createElementNS(SVG_NS, 'circle');
+          h.setAttribute('cx', String(hx));
+          h.setAttribute('cy', String(hy));
+          h.setAttribute('r', String(size * 0.9));
+          h.setAttribute('class', `rotate-handle handle-${name}`);
+          h.dataset.role = 'rotate-handle';
+          handles.appendChild(h);
+        }
+      }
+      overlay.appendChild(handles);
+    } else {
+      // Animate mode: passive corner markers only (drag the body to rotate).
+      const boxCorners = document.createElementNS(SVG_NS, 'g');
+      boxCorners.setAttribute('class', 'overlay-passive');
+      boxCorners.setAttribute('transform', boxTransform);
+      for (const [hx, hy] of [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) {
         const corner = document.createElementNS(SVG_NS, 'rect');
         const s = size * 0.9;
-        corner.setAttribute('x', String(cx - s / 2));
-        corner.setAttribute('y', String(cy - s / 2));
+        corner.setAttribute('x', String(hx - s / 2));
+        corner.setAttribute('y', String(hy - s / 2));
         corner.setAttribute('width', String(s));
         corner.setAttribute('height', String(s));
         corner.setAttribute('class', 'select-corner');
-        boxHolder.appendChild(corner);
+        boxCorners.appendChild(corner);
       }
+      overlay.appendChild(boxCorners);
     }
-    overlay.appendChild(boxHolder);
   }
 
   renderDragGizmo(holder, size);
@@ -340,8 +474,8 @@ function renderOverlay(): void {
   const ep = effectivePivot(part, t);
   const px = ep.x, py = ep.y;
   const cross = document.createElementNS(SVG_NS, 'g');
-  cross.setAttribute('class', state.editorMode === 'setup' ? 'pivot-handle' : 'pivot-handle locked');
-  if (state.editorMode === 'setup') cross.dataset.role = 'pivot';
+  cross.setAttribute('class', setup ? 'pivot-handle' : 'pivot-handle locked');
+  if (setup) cross.dataset.role = 'pivot';
   if (rootTransform) cross.setAttribute('transform', rootTransform);
   cross.innerHTML =
     `<circle class="pivot-grab" cx="${px}" cy="${py}" r="${size * 2.2}" />` +
@@ -352,7 +486,7 @@ function renderOverlay(): void {
   overlay.appendChild(cross);
 }
 
-/** Rotation arc + angle readout, or translation deltas, while a drag is live. */
+/** Rotation arc + angle readout, translation deltas, or scale % while a drag is live. */
 function renderDragGizmo(holder: SVGGElement, size: number): void {
   if (!drag || drag.kind === 'pan' || !drag.active) return;
 
@@ -413,6 +547,14 @@ function renderDragGizmo(holder: SVGGElement, size: number): void {
       `Δ ${round1(dx)}, ${round1(dy)}`,
       size,
     );
+  } else if (drag.kind === 'scale' && drag.current) {
+    addGizmoText(
+      holder,
+      drag.current.x + size * 1.5,
+      drag.current.y - size * 1.5,
+      `${Math.round(drag.part.rest.sx * 100)}% × ${Math.round(drag.part.rest.sy * 100)}%`,
+      size,
+    );
   }
 }
 
@@ -435,7 +577,11 @@ function addGizmoText(holder: SVGGElement, x: number, y: number, text: string, s
 
 function renderNodeHandles(part: RigPart): void {
   const g = partGroups.get(part.id)!;
-  for (const path of part.paths) {
+  // With a path "entered", node editing scopes to it; otherwise every path is editable.
+  const paths = state.selectedPathId
+    ? part.paths.filter((p) => p.id === state.selectedPathId)
+    : part.paths;
+  for (const path of paths) {
     const cmds = parsePath(path.d);
     const holder = document.createElementNS(SVG_NS, 'g');
     // Same accumulated transform as the drawn path (root + part + path), so raw path
@@ -489,7 +635,7 @@ function handleSize(): number {
 type DragState =
   | {
       kind: 'rotate';
-      /** Every selected part with its starting channel/rest value. */
+      /** Every selected part with its starting (absolute) value; setup writes rest. */
       targets: { part: RigPart; start: number }[];
       pivotX: number; pivotY: number; // primary part's live pivot, root coords
       startAngle: number;
@@ -504,6 +650,24 @@ type DragState =
       /** invLinear maps a root-space delta into each part's parent-chain space. */
       targets: { part: RigPart; startTx: number; startTy: number; invLinear: Mat }[];
       startX: number; startY: number;
+      current: { x: number; y: number } | null;
+      startClient: { x: number; y: number };
+      active: boolean;
+      /** Click (no movement) on the already-primary part cycles scale↔rotate handles. */
+      toggleOnClick: boolean;
+    }
+  | {
+      kind: 'scale';
+      part: RigPart;
+      handle: string; // nw|ne|se|sw|n|e|s|w
+      startSx: number; startSy: number;
+      startTx: number; startTy: number;
+      grabLocal: { x: number; y: number };
+      anchorLocal: { x: number; y: number };
+      anchorRoot: { x: number; y: number };
+      /** root → part-local at drag start (frozen frame for stable factors). */
+      invStart: Mat;
+      invChainLinear: Mat;
       current: { x: number; y: number } | null;
       startClient: { x: number; y: number };
       active: boolean;
@@ -553,6 +717,20 @@ function wireInteractions(): void {
     renderPose(); // overlay handle sizes track the zoom level
   }, { passive: false });
 
+  // Double-click "enters" a part and selects the path under the cursor (like entering
+  // a group in an SVG editor). Escape or a blank click leaves it.
+  svg.addEventListener('dblclick', (ev) => {
+    if (state.editorMode !== 'setup') return;
+    const target = ev.target as SVGElement;
+    const pathId = target.dataset?.pathId;
+    const partEl = target.closest('[data-part-id]') as SVGGElement | null;
+    if (!pathId || !partEl?.dataset.partId) return;
+    selectPart(partEl.dataset.partId);
+    state.selectedPathId = pathId;
+    notify();
+    renderPose();
+  });
+
   svg.addEventListener('pointerdown', (ev) => {
     const target = ev.target as Element;
     const doc = state.doc;
@@ -566,6 +744,73 @@ function wireInteractions(): void {
       return;
     }
     if (ev.button !== 0) return;
+
+    // Scale handle (Setup mode)
+    if (target instanceof SVGElement && target.dataset.handle) {
+      const part = selectedPart();
+      const g = part ? partGroups.get(part.id) : null;
+      if (!part || !g) return;
+      const box = g.getBBox();
+      const pad = handleSize() * 0.6;
+      const x0 = box.x - pad, y0 = box.y - pad;
+      const x1 = box.x + box.width + pad, y1 = box.y + box.height + pad;
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      const spots: Record<string, { g: { x: number; y: number }; a: { x: number; y: number } }> = {
+        nw: { g: { x: x0, y: y0 }, a: { x: x1, y: y1 } },
+        ne: { g: { x: x1, y: y0 }, a: { x: x0, y: y1 } },
+        se: { g: { x: x1, y: y1 }, a: { x: x0, y: y0 } },
+        sw: { g: { x: x0, y: y1 }, a: { x: x1, y: y0 } },
+        n: { g: { x: cx, y: y0 }, a: { x: cx, y: y1 } },
+        s: { g: { x: cx, y: y1 }, a: { x: cx, y: y0 } },
+        e: { g: { x: x1, y: cy }, a: { x: x0, y: cy } },
+        w: { g: { x: x0, y: cy }, a: { x: x1, y: cy } },
+      };
+      const spot = spots[target.dataset.handle];
+      if (!spot) return;
+      const t = poseTime();
+      // groupTransformOf is the part's full rootGroup-relative transform; frozen at
+      // drag start so scale factors are measured in a stable local frame.
+      const mStart = matrixOfTransform(groupTransformOf(part, t));
+      const chainM = chainMatOf(part, t);
+      drag = {
+        kind: 'scale',
+        part,
+        handle: target.dataset.handle,
+        startSx: part.rest.sx, startSy: part.rest.sy,
+        startTx: part.rest.tx, startTy: part.rest.ty,
+        grabLocal: spot.g,
+        anchorLocal: spot.a,
+        anchorRoot: applyMat(mStart, spot.a.x, spot.a.y),
+        invStart: invertMat(mStart),
+        invChainLinear: linearOnly(invertMat(chainM)),
+        current: null,
+        startClient: { x: ev.clientX, y: ev.clientY },
+        active: false,
+      };
+      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      return;
+    }
+
+    // Rotate handle (Setup mode): spin the rest pose around the pivot.
+    if (target instanceof SVGElement && target.dataset.role === 'rotate-handle') {
+      const part = selectedPart();
+      if (!part) return;
+      const p = pointerInRoot(ev);
+      const pivot = effectivePivot(part, poseTime());
+      drag = {
+        kind: 'rotate',
+        targets: selectedParts().map((sp) => ({ part: sp, start: sp.rest.rotate })),
+        pivotX: pivot.x, pivotY: pivot.y,
+        startAngle: Math.atan2(p.y - pivot.y, p.x - pivot.x),
+        current: { x: p.x, y: p.y },
+        currentDelta: 0,
+        snapped: false,
+        startClient: { x: ev.clientX, y: ev.clientY },
+        active: false,
+      };
+      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      return;
+    }
 
     if (target instanceof SVGElement && target.dataset.role === 'node') {
       const part = selectedPart();
@@ -602,6 +847,7 @@ function wireInteractions(): void {
     const partEl = (target as Element).closest('[data-part-id]') as SVGGElement | null;
     if (partEl) {
       const part = doc.parts.find((p) => p.id === partEl.dataset.partId) ?? null;
+      const wasPrimary = part !== null && state.selectedPartId === part.id;
       if (part) {
         // Shift adds to the selection; clicking an already-selected part keeps the
         // group selected so multi-part drags work.
@@ -617,19 +863,22 @@ function wireInteractions(): void {
         const p = pointerInRoot(ev);
         const t = poseTime();
         const setup = state.editorMode === 'setup';
-        if (ev.shiftKey) {
+        // Setup: dragging moves the part (Inkscape-style; rotation via handles).
+        // Animate: dragging rotates around the pivot; Shift+drag moves.
+        if (setup || ev.shiftKey) {
           drag = {
             kind: 'translate',
             targets: selectedParts().map((sp) => ({
               part: sp,
-              startTx: setup ? sp.rest.tx : sampleChannel(sp.id, 'tx', state.currentTime),
-              startTy: setup ? sp.rest.ty : sampleChannel(sp.id, 'ty', state.currentTime),
+              startTx: setup ? sp.rest.tx : channelValue(sp, 'tx', state.currentTime),
+              startTy: setup ? sp.rest.ty : channelValue(sp, 'ty', state.currentTime),
               invLinear: linearOnly(invertMat(chainMatOf(sp, t))),
             })),
             startX: p.x, startY: p.y,
             current: { x: p.x, y: p.y },
             startClient: { x: ev.clientX, y: ev.clientY },
             active: false,
+            toggleOnClick: setup && wasPrimary && !ev.shiftKey,
           };
         } else {
           const pivot = effectivePivot(part, t);
@@ -637,7 +886,7 @@ function wireInteractions(): void {
             kind: 'rotate',
             targets: selectedParts().map((sp) => ({
               part: sp,
-              start: setup ? sp.rest.rotate : sampleChannel(sp.id, 'rotate', state.currentTime),
+              start: channelValue(sp, 'rotate', state.currentTime),
             })),
             pivotX: pivot.x, pivotY: pivot.y,
             startAngle: Math.atan2(p.y - pivot.y, p.x - pivot.x),
@@ -654,8 +903,13 @@ function wireInteractions(): void {
       return;
     }
 
+    // Blank canvas: clear the selection (and leave any "entered" path). No drag
+    // follows a blank click, so repaint the overlay here — notify() only rebuilds
+    // the side panels, and the stale selection box would linger otherwise.
+    state.selectedPathId = null;
     selectPart(null);
     notify();
+    renderOverlay();
   });
 
   svg.addEventListener('pointermove', (ev) => {
@@ -677,7 +931,7 @@ function wireInteractions(): void {
     if (drag.kind === 'rotate') {
       const p = pointerInRoot(ev);
       const angle = Math.atan2(p.y - drag.pivotY, p.x - drag.pivotX);
-      let deltaDeg = ((angle - drag.startAngle) * 180) / Math.PI;
+      const deltaDeg = ((angle - drag.startAngle) * 180) / Math.PI;
       drag.snapped = ev.ctrlKey;
       drag.current = { x: p.x, y: p.y };
       for (const { part, start } of drag.targets) {
@@ -709,6 +963,38 @@ function wireInteractions(): void {
       }
       renderPose();
       notifyTimelineOnly();
+    } else if (drag.kind === 'scale') {
+      const d = drag;
+      const p = pointerInRoot(ev);
+      d.current = { x: p.x, y: p.y };
+      const local = applyMat(d.invStart, p.x, p.y);
+      const clampF = (f: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, f));
+      let fx = 1, fy = 1;
+      const denX = d.grabLocal.x - d.anchorLocal.x;
+      const denY = d.grabLocal.y - d.anchorLocal.y;
+      if (Math.abs(denX) > 1e-6) fx = clampF((local.x - d.anchorLocal.x) / denX);
+      if (Math.abs(denY) > 1e-6) fy = clampF((local.y - d.anchorLocal.y) / denY);
+      if (['n', 's'].includes(d.handle)) fx = 1;
+      if (['e', 'w'].includes(d.handle)) fy = 1;
+      if (ev.ctrlKey && !['n', 's', 'e', 'w'].includes(d.handle)) {
+        // Uniform: follow whichever axis moved more.
+        const f = Math.abs(fx - 1) > Math.abs(fy - 1) ? fx : fy;
+        fx = f; fy = f;
+      }
+      d.part.rest.sx = round2(d.startSx * fx);
+      d.part.rest.sy = round2(d.startSy * fy);
+      // Keep the anchor (opposite corner/side) pinned: measure where it lands with the
+      // new scale and push the difference back into the rest translation.
+      d.part.rest.tx = d.startTx;
+      d.part.rest.ty = d.startTy;
+      const mNew = matrixOfTransform(groupTransformOf(d.part, poseTime()));
+      const after = applyMat(mNew, d.anchorLocal.x, d.anchorLocal.y);
+      const deltaLocal = applyMat(
+        d.invChainLinear, d.anchorRoot.x - after.x, d.anchorRoot.y - after.y,
+      );
+      d.part.rest.tx = round1(d.startTx + deltaLocal.x);
+      d.part.rest.ty = round1(d.startTy + deltaLocal.y);
+      renderPose();
     } else if (drag.kind === 'pivot') {
       const p = pointerInRoot(ev);
       const part = drag.part;
@@ -727,6 +1013,10 @@ function wireInteractions(): void {
   const end = () => {
     if (drag) {
       if (drag.kind === 'pan') svg!.style.cursor = '';
+      // A motionless click on the already-selected part cycles scale ↔ rotate handles.
+      if (drag.kind === 'translate' && !drag.active && drag.toggleOnClick) {
+        handleMode = handleMode === 'scale' ? 'rotate' : 'scale';
+      }
       drag = null;
       notify();
       renderPose(); // clears gizmos
@@ -808,6 +1098,10 @@ function linearOnly(m: Mat): Mat {
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 // The timeline listens for this to redraw keyframe diamonds during a drag without the

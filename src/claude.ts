@@ -57,8 +57,12 @@ const CLIP_SCHEMA = {
 const RIG_SEMANTICS = `The rig is an SVG-space skeleton. Coordinate system: x grows right, y grows DOWN.
 Rotations are in degrees, POSITIVE = CLOCKWISE on screen, and each part rotates around
 its own pivot (its joint — e.g. an arm's pivot is the shoulder). Channels per part:
-- rotate: degrees added to the part's rest pose
-- tx / ty: translation in document units (remember +y is down, so a jump is NEGATIVE ty)
+- rotate: degrees, ABSOLUTE
+- tx / ty: translation in document units, ABSOLUTE (+y is down, so a jump is NEGATIVE ty)
+Keyframed values are ABSOLUTE channel values, not offsets. A channel with NO keyframes
+holds the part's rest value (given as "rest" in the rig JSON) — so to move a part
+relative to how it currently stands, start your keyframes from its rest value; to keep
+a part still, simply omit its tracks.
 Some parts have a parent: their channels are RELATIVE to the parent's motion (rotating
 a parent carries every descendant with it — like a forearm riding an upper arm), so do
 not counter-animate children to compensate for parent motion.

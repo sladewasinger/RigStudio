@@ -172,8 +172,8 @@ export function render(): void {
   };
   bar.appendChild(clipSelect);
 
-  bar.appendChild(button('+ clip', () => {
-    const name = prompt('Clip name?', `clip_${doc.clips.length + 1}`);
+  bar.appendChild(button('+ animation', () => {
+    const name = prompt('Animation name?', `clip_${doc.clips.length + 1}`);
     if (!name) return;
     checkpoint();
     doc.clips.push({ name, duration: 2000, tracks: [] });
@@ -202,9 +202,9 @@ export function render(): void {
     }
   }));
 
-  bar.appendChild(button('delete clip', () => {
+  bar.appendChild(button('delete', () => {
     if (!clip || doc.clips.length <= 1) return;
-    if (!confirm(`Delete clip "${clip.name}"?`)) return;
+    if (!confirm(`Delete animation "${clip.name}"?`)) return;
     checkpoint();
     doc.clips.splice(state.activeClipIndex, 1);
     state.activeClipIndex = 0;
@@ -442,6 +442,8 @@ function buildLane(track: Track, duration: number): HTMLElement {
         selectedKeys.clear();
         selectedKeys.add(key);
       }
+      // Scrub to the clicked key so the canvas shows the pose it records.
+      movePlayheadTo(key.time, duration);
 
       let pendingCheckpoint = true; // defer until real movement, not a plain click
       let moved = false;
@@ -466,6 +468,8 @@ function buildLane(track: Track, duration: number): HTMLElement {
         for (const d of diamondEls) {
           if (startTimes.has(d.key)) d.el.style.left = `${(d.key.time / duration) * 100}%`;
         }
+        // The playhead follows the grabbed key, previewing the pose as it retimes.
+        movePlayheadTo(key.time, duration);
       };
       const up = () => {
         diamond.removeEventListener('pointermove', move);
@@ -576,6 +580,16 @@ function startPlayback(): void {
     rafId = requestAnimationFrame(step);
   };
   rafId = requestAnimationFrame(step);
+}
+
+/** Scrub to a time and refresh the playhead/readout without a full rebuild. */
+function movePlayheadTo(time: number, duration: number): void {
+  state.currentTime = time;
+  const playhead = container.querySelector<HTMLElement>('.tl-playhead');
+  if (playhead) playhead.style.left = `${(time / duration) * 100}%`;
+  const timeLabel = container.querySelector<HTMLElement>('.tl-time');
+  if (timeLabel) timeLabel.textContent = `${Math.round(time)} ms`;
+  renderPose();
 }
 
 /** Transient inline feedback in a bar (e.g. "copied pose (6 channels)"). */

@@ -36,7 +36,7 @@ export function makePart(id: string, overrides: Partial<RigPart> = {}): RigPart 
     transform: '',
     pivot: { x: 0, y: 0 },
     pivotHint: null,
-    rest: { rotate: 0, tx: 0, ty: 0 },
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1 },
     parentId: null,
     paths: [],
     ...overrides,
@@ -77,5 +77,6 @@ export function resetState(doc: RigDoc | null = null): void {
   state.currentTime = 0;
   state.selectedPartId = null;
   state.selectedPartIds = [];
+  state.selectedPathId = null;
   state.playing = false;
 }
