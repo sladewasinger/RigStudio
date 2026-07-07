@@ -9,9 +9,22 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { Clip, RigDoc } from './model';
+import { Clip, Keyframe, RigChanges, RigDoc } from './model';
 
 const MODEL = 'claude-opus-4-8';
+
+/** A clip as the AI returns it: track targets are part LABELS, not ids. */
+export interface RawClip {
+  name: string;
+  duration: number;
+  tracks: { target: string; channel: string; keyframes: Keyframe[] }[];
+}
+
+export interface AnimateResult {
+  clip: RawClip;
+  /** Structural edits (only when the user opted in), or null. */
+  rig: RigChanges | null;
+}
 
 const CLIP_SCHEMA = {
   type: 'object',
@@ -53,6 +66,83 @@ const CLIP_SCHEMA = {
   required: ['name', 'duration', 'tracks'],
   additionalProperties: false,
 } as const;
+
+/** CLIP_SCHEMA plus opt-in structural rig edits (bones, reparenting, pivots). */
+const CLIP_WITH_RIG_SCHEMA = {
+  type: 'object',
+  properties: {
+    ...CLIP_SCHEMA.properties,
+    rig: {
+      type: 'object',
+      description:
+        'Structural rig edits, applied before the clip. Use empty arrays when the ' +
+        'motion needs no structural change.',
+      properties: {
+        addBones: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'New unique snake_case name' },
+              pivot: {
+                type: 'object',
+                properties: { x: { type: 'number' }, y: { type: 'number' } },
+                required: ['x', 'y'],
+                additionalProperties: false,
+              },
+              parent: {
+                type: ['string', 'null'],
+                description: 'Existing part label, an earlier new bone, or null',
+              },
+            },
+            required: ['label', 'pivot', 'parent'],
+            additionalProperties: false,
+          },
+        },
+        reparent: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              part: { type: 'string' },
+              parent: { type: ['string', 'null'] },
+            },
+            required: ['part', 'parent'],
+            additionalProperties: false,
+          },
+        },
+        movePivots: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              part: { type: 'string' },
+              x: { type: 'number' },
+              y: { type: 'number' },
+            },
+            required: ['part', 'x', 'y'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['addBones', 'reparent', 'movePivots'],
+      additionalProperties: false,
+    },
+  },
+  required: ['name', 'duration', 'tracks', 'rig'],
+  additionalProperties: false,
+} as const;
+
+const RIG_EDIT_NOTES = `
+Structural edits (the user has enabled them): alongside the clip you may return "rig"
+changes — addBones creates partless JOINTS (a bone is a pivot other parts can parent
+to; it does NOT split or deform existing artwork), reparent attaches parts to bones or
+other parts (children then ride the parent's motion), movePivots relocates a joint.
+Use them sparingly and only when the requested motion genuinely needs articulation the
+current rig lacks (e.g. a wave needs a wrist joint: add a bone at the wrist, parent it
+to the arm, and key the bone — the hand artwork must already be a separate part to
+follow it). New bone labels must be unique snake_case; keyframe tracks may target
+them. Bones may parent to bones added earlier in the same list.`;
 
 const RIG_SEMANTICS = `The rig is an SVG-space skeleton. Coordinate system: x grows right, y grows DOWN.
 Rotations are in degrees, POSITIVE = CLOCKWISE on screen, and each part rotates around
@@ -109,6 +199,7 @@ function sceneJson(doc: RigDoc, clip: Clip): string {
       rootPivot: doc.rootPivot,
       parts: doc.parts.map((p) => ({
         label: p.label,
+        kind: p.kind, // 'art' draws; 'bone'/'group' are partless transform joints
         pivot: p.pivot,
         parent: p.parentId ? labelOf(p.parentId) : null,
         rest: p.rest,
@@ -148,15 +239,21 @@ export async function animateWithClaude(
   clip: Clip,
   instruction: string,
   imageBase64?: string | null,
-): Promise<Clip> {
+  allowRigChanges = false,
+): Promise<AnimateResult> {
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 
   const response = await client.messages.create({
     model: MODEL,
     max_tokens: 16000,
     thinking: { type: 'adaptive' },
-    output_config: { format: { type: 'json_schema', schema: CLIP_SCHEMA } },
-    system: SYSTEM,
+    output_config: {
+      format: {
+        type: 'json_schema',
+        schema: allowRigChanges ? CLIP_WITH_RIG_SCHEMA : CLIP_SCHEMA,
+      },
+    },
+    system: allowRigChanges ? SYSTEM + RIG_EDIT_NOTES : SYSTEM,
     messages: [
       {
         role: 'user',
@@ -173,25 +270,18 @@ export async function animateWithClaude(
   )?.text;
   if (!text) throw new Error('No response content.');
 
-  const raw = JSON.parse(text) as {
-    name: string;
-    duration: number;
-    tracks: { target: string; channel: string; keyframes: Clip['tracks'][number]['keyframes'] }[];
-  };
-
-  // Map part labels back to ids; drop tracks aimed at unknown parts.
-  const tracks: Clip['tracks'] = [];
-  for (const t of raw.tracks) {
-    const target =
-      t.target === 'root' ? 'root' : doc.parts.find((p) => p.label === t.target)?.id;
-    if (!target) continue;
-    tracks.push({
-      target,
-      channel: t.channel as Clip['tracks'][number]['channel'],
+  const raw = JSON.parse(text) as RawClip & { rig?: RigChanges };
+  const clipOut: RawClip = {
+    name: raw.name || clip.name,
+    duration: raw.duration,
+    tracks: raw.tracks.map((t) => ({
+      ...t,
       keyframes: [...t.keyframes].sort((a, b) => a.time - b.time),
-    });
-  }
-  return { name: raw.name || clip.name, duration: raw.duration, tracks };
+    })),
+  };
+  // Track targets stay LABELS here — the caller applies rig changes first (new bones
+  // don't have ids until then), then resolves targets against the updated doc.
+  return { clip: clipOut, rig: allowRigChanges ? (raw.rig ?? null) : null };
 }
 
 /** Plain-text animation review of the active clip. */

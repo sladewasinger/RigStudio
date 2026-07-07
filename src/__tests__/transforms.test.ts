@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   IDENTITY,
   Mat,
@@ -61,16 +61,19 @@ describe('parseTransformList', () => {
     expect(parseTransformList('')).toEqual([]);
   });
 
-  it('skips skewX/skewY with a warning but keeps the rest', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    try {
-      expect(parseTransformList('skewX(10) translate(1,2)')).toEqual([
-        { type: 'translate', tx: 1, ty: 2 },
-      ]);
-      expect(warn).toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
+  it('parses skewX/skewY and composes them as shear matrices', () => {
+    expect(parseTransformList('skewX(10) translate(1,2)')).toEqual([
+      { type: 'skewX', angle: 10 },
+      { type: 'translate', tx: 1, ty: 2 },
+    ]);
+    // skewX(45): x' = x + tan(45°)·y = x + y.
+    const px = applyMat(matrixOfTransform('skewX(45)'), 2, 3);
+    expect(px.x).toBeCloseTo(5, 9);
+    expect(px.y).toBeCloseTo(3, 9);
+    // skewY(45): y' = y + x.
+    const py = applyMat(matrixOfTransform('skewY(45)'), 2, 3);
+    expect(py.x).toBeCloseTo(2, 9);
+    expect(py.y).toBeCloseTo(5, 9);
   });
 });
 

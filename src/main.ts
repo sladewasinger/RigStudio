@@ -1,11 +1,16 @@
 import {
   state, notify, subscribe, activeClip, serializeDoc, deserializeDoc, EditorMode,
-  selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder,
+  selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder, deleteParts,
 } from './model';
 import { importSvg } from './importSvg';
-import { buildCanvas, renderPose, resetView, reorderCanvas } from './view';
+import {
+  buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, clearGroupEntry,
+  hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, unregisterPart,
+} from './view';
 import { checkpoint } from './history';
-import { buildLayersPanel, buildInspector } from './panels';
+import {
+  buildLayersPanel, buildInspector, buildCanvasTools, flipAction, groupAction, ungroupAction,
+} from './panels';
 import {
   buildTimeline, render as renderTimeline, togglePlay,
   copySelectedKeys, pasteKeysAtPlayhead, deleteSelectedKeys, nudgeSelectedKeys,
@@ -17,6 +22,7 @@ import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from '.
 
 const layersEl = document.getElementById('layers')!;
 const canvasEl = document.getElementById('canvas')!;
+const canvasToolsEl = document.getElementById('canvas-tools')!;
 const inspectorEl = document.getElementById('inspector')!;
 const timelineEl = document.getElementById('timeline')!;
 const fileInput = document.getElementById('file-input') as HTMLInputElement;
@@ -195,6 +201,12 @@ document.addEventListener('keydown', (ev) => {
     redo();
     return;
   }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'g') {
+    ev.preventDefault();
+    if (ev.shiftKey) ungroupAction();
+    else groupAction();
+    return;
+  }
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'c') {
     if (state.editorMode === 'animate' && hasKeySelection()) {
       ev.preventDefault();
@@ -213,6 +225,28 @@ document.addEventListener('keydown', (ev) => {
     if (state.editorMode === 'animate' && hasKeySelection()) {
       ev.preventDefault();
       deleteSelectedKeys();
+      return;
+    }
+    // Node mode: delete the selected path nodes.
+    if (state.editorMode === 'setup' && state.mode === 'nodes' && hasSelectedNode()) {
+      ev.preventDefault();
+      checkpoint();
+      deleteSelectedNodes();
+      notify();
+      return;
+    }
+    // Setup pose mode: delete the selected layers (children re-adopt grandparents;
+    // fully undoable).
+    if (
+      state.editorMode === 'setup' && state.mode === 'rig' &&
+      state.selectedPartIds.length > 0
+    ) {
+      ev.preventDefault();
+      checkpoint();
+      const removed = deleteParts([...state.selectedPartIds]);
+      removed.forEach(unregisterPart);
+      notify();
+      renderPose();
     }
     return;
   }
@@ -234,12 +268,41 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'Escape') {
-    // Leave the "entered" path first; a second Escape clears the part selection.
-    if (state.selectedPathId) state.selectedPathId = null;
-    else selectPart(null);
+    // Cancel bone placement first; then leave the "entered" path; then clear the
+    // selection (and step out of any entered groups).
+    if (cancelBonePlacement()) {
+      notify();
+      return;
+    }
+    if (state.selectedPathId) {
+      state.selectedPathId = null;
+    } else {
+      clearGroupEntry();
+      selectPart(null);
+    }
     notify();
     renderPose();
     return;
+  }
+  // Tools: V select, T translate, R rotate, I inverse kinematics.
+  if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
+    const tool = ({ v: 'select', t: 'translate', r: 'rotate', i: 'ik' } as const)[
+      ev.key.toLowerCase() as 'v' | 't' | 'r' | 'i'
+    ];
+    if (tool) {
+      state.tool = tool;
+      notify();
+      renderPose();
+      return;
+    }
+  }
+  // Flips moved to Shift+H / Shift+V (plain V/T/R/I are tools now).
+  if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    const axis = ev.key.toLowerCase();
+    if ((axis === 'h' || axis === 'v') && state.editorMode === 'setup') {
+      flipAction(axis);
+      return;
+    }
   }
   if (ev.key.toLowerCase() === 'f') {
     resetView();
@@ -251,7 +314,18 @@ document.addEventListener('keydown', (ev) => {
     togglePlay();
     return;
   }
-  if (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight') {
+  if (ev.key.startsWith('Arrow')) {
+    // Node mode: arrows nudge the selected nodes in document units.
+    if (state.editorMode === 'setup' && state.mode === 'nodes' && hasSelectedNode()) {
+      ev.preventDefault();
+      const step = ev.shiftKey ? 5 : 0.5;
+      const dx = ev.key === 'ArrowLeft' ? -step : ev.key === 'ArrowRight' ? step : 0;
+      const dy = ev.key === 'ArrowUp' ? -step : ev.key === 'ArrowDown' ? step : 0;
+      checkpoint();
+      nudgeSelectedNodes(dx, dy);
+      return;
+    }
+    if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
     const clip = activeClip();
     if (!clip || state.editorMode !== 'animate') return;
     ev.preventDefault();
@@ -269,6 +343,7 @@ document.addEventListener('keydown', (ev) => {
 subscribe(() => {
   syncModeToggle();
   buildLayersPanel(layersEl);
+  buildCanvasTools(canvasToolsEl);
   buildInspector(inspectorEl);
   renderTimeline();
   scheduleAutosave();

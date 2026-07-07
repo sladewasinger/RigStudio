@@ -16,6 +16,7 @@ import {
 } from './model';
 import { renderPose } from './view';
 import { checkpoint } from './history';
+import { buildGraphPanel, onGraphChange } from './graph';
 
 let container: HTMLElement;
 let rafId = 0;
@@ -30,10 +31,16 @@ let selectedKeys = new Set<Keyframe>();
 let trackOfKey = new WeakMap<Keyframe, Track>();
 // Diamond elements of the current render, for box-select hit testing.
 let diamondEls: { el: HTMLElement; key: Keyframe }[] = [];
+// Whether the curve (graph) editor panel is shown beneath the lanes.
+let showGraph = false;
 
 export function buildTimeline(el: HTMLElement): void {
   container = el;
   document.addEventListener('rig-keys-changed', render);
+  // Curve-editor mutations preview live on the canvas.
+  onGraphChange(() => {
+    renderPose();
+  });
   // Fired by the AI panel after applying a clip with playing=true.
   document.addEventListener('rig-play', () => {
     if (state.playing) startPlayback();
@@ -250,6 +257,14 @@ export function render(): void {
   onionBtn.title = 'Ghost the previous (red) and next (blue) keyed poses';
   bar.appendChild(onionBtn);
 
+  const graphBtn = button('📈 curves', () => {
+    showGraph = !showGraph;
+    render();
+  });
+  if (showGraph) graphBtn.classList.add('active');
+  graphBtn.title = 'Edit the selected track\'s value curve and per-segment bezier easing';
+  bar.appendChild(graphBtn);
+
   if (clip) {
     const durLabel = document.createElement('label');
     durLabel.textContent = 'duration (ms)';
@@ -403,6 +418,14 @@ export function render(): void {
   }
   wireBoxSelect(lanes);
   container.appendChild(lanes);
+
+  if (showGraph) {
+    const graphHost = div('graph-panel');
+    const first = [...selectedKeys][0];
+    const track = (first && trackOfKey.get(first)) ?? clip.tracks[0] ?? null;
+    buildGraphPanel(graphHost, track, clip.duration);
+    container.appendChild(graphHost);
+  }
 }
 
 function buildLane(track: Track, duration: number): HTMLElement {

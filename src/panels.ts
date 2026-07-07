@@ -13,10 +13,17 @@
  */
 
 import {
-  state, notify, selectedPart, selectedPath, sampleChannel, channelValue, setKeyframe,
-  activeClip, selectPart, setParent, isAncestorOf, movePartRelativeTo, RigPart,
+  state, notify, selectedPart, selectedParts, selectedPath, sampleChannel, channelValue,
+  setKeyframe, activeClip, selectPart, setParent, isAncestorOf, movePartRelativeTo,
+  groupParts, ungroupPart, applyRigChanges, ancestorChain, RigPart, Track, Channel,
 } from './model';
-import { renderPose, updatePathAttrs, reorderCanvas } from './view';
+import {
+  renderPose, updatePathAttrs, reorderCanvas, flipSelected, partRootBoxes,
+  applyRootDeltas, registerPart, unregisterPart, startBonePlacement, hasSelectedNode,
+  applyNodeOp, NodeOp, enterGroupsFor, bindSelectedToBones, unbindSelectedSkin,
+  selectedNodeCount, primaryNodeType,
+} from './view';
+import { alignDeltas, distributeDeltas, AlignEdge, AlignReference } from './align';
 import { animateWithClaude, critiqueWithClaude } from './claude';
 import { checkpoint } from './history';
 
@@ -24,6 +31,203 @@ import { checkpoint } from './history';
 function poseEdited(): void {
   renderPose();
   document.dispatchEvent(new CustomEvent('rig-keys-changed'));
+}
+
+// ---- Icons (inline SVG, stroke = currentColor) ----
+
+const ICON_PATHS: Record<string, string> = {
+  select: '<path d="M4 2 L12.5 8 L8.7 8.9 L10.6 13.4 L8.7 14.2 L6.8 9.7 L4 12 Z" fill="currentColor" stroke="none"/>',
+  translate: '<path d="M8 1.5v13M1.5 8h13M8 1.5l-2 2M8 1.5l2 2M8 14.5l-2-2M8 14.5l2-2M1.5 8l2-2M1.5 8l2 2M14.5 8l-2-2M14.5 8l-2 2"/>',
+  rotate: '<path d="M13.5 8a5.5 5.5 0 1 1-2-4.2"/><path d="M11.2 1.6l0.4 2.5-2.5 0.3" />',
+  ik: '<circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"/>',
+  flipH: '<path d="M8 1.5v13" stroke-dasharray="2 1.6"/><path d="M6 4.5L2 8l4 3.5zM10 4.5L14 8l-4 3.5z" fill="currentColor" stroke="none"/>',
+  flipV: '<path d="M1.5 8h13" stroke-dasharray="2 1.6"/><path d="M4.5 6L8 2l3.5 4zM4.5 10L8 14l-3.5-4z" fill="currentColor" stroke="none"/>',
+  group: '<rect x="2" y="2" width="8" height="8" rx="1"/><rect x="6" y="6" width="8" height="8" rx="1"/>',
+  ungroup: '<rect x="2" y="2" width="7" height="7" rx="1"/><rect x="7" y="7" width="7" height="7" rx="1" stroke-dasharray="2 1.6"/><path d="M12 2l2 2M14 2l-2 2"/>',
+  bone: '<path d="M3.4 3.4 L11 6.6 L12.6 12.6 L6.6 11 Z M3.4 3.4a1.6 1.6 0 1 0 .1.1" fill="currentColor" stroke="none" fill-opacity="0.85"/>',
+  bind: '<path d="M3 13c2-5 3-8 5-11M8 13c1.5-3.5 2.5-6 4-9" /><path d="M2.5 6h11M4 10h9" stroke-dasharray="1.6 1.4"/>',
+  alignL: '<path d="M2 2v12"/><rect x="4" y="3.5" width="8" height="3" fill="currentColor" stroke="none"/><rect x="4" y="9.5" width="5" height="3" fill="currentColor" stroke="none"/>',
+  alignCH: '<path d="M8 2v12"/><rect x="3" y="3.5" width="10" height="3" fill="currentColor" stroke="none"/><rect x="5" y="9.5" width="6" height="3" fill="currentColor" stroke="none"/>',
+  alignR: '<path d="M14 2v12"/><rect x="4" y="3.5" width="8" height="3" fill="currentColor" stroke="none"/><rect x="7" y="9.5" width="5" height="3" fill="currentColor" stroke="none"/>',
+  alignT: '<path d="M2 2h12"/><rect x="3.5" y="4" width="3" height="8" fill="currentColor" stroke="none"/><rect x="9.5" y="4" width="3" height="5" fill="currentColor" stroke="none"/>',
+  alignM: '<path d="M2 8h12"/><rect x="3.5" y="3" width="3" height="10" fill="currentColor" stroke="none"/><rect x="9.5" y="5" width="3" height="6" fill="currentColor" stroke="none"/>',
+  alignB: '<path d="M2 14h12"/><rect x="3.5" y="4" width="3" height="8" fill="currentColor" stroke="none"/><rect x="9.5" y="7" width="3" height="5" fill="currentColor" stroke="none"/>',
+  distH: '<path d="M2 2v12M14 2v12"/><rect x="6" y="5" width="4" height="6" fill="currentColor" stroke="none"/>',
+  distV: '<path d="M2 2h12M2 14h12"/><rect x="5" y="6" width="6" height="4" fill="currentColor" stroke="none"/>',
+};
+
+/** An inline 16×16 line icon; falls back to the raw name for unknown keys. */
+function icon(name: keyof typeof ICON_PATHS): HTMLElement {
+  const span = document.createElement('span');
+  span.className = 'icon';
+  span.innerHTML =
+    `<svg viewBox="0 0 16 16" width="15" height="15" fill="none" ` +
+    `stroke="currentColor" stroke-width="1.4" stroke-linecap="round" ` +
+    `stroke-linejoin="round">${ICON_PATHS[name] ?? ''}</svg>`;
+  return span;
+}
+
+function iconButton(
+  name: keyof typeof ICON_PATHS, label: string, title: string, onClick: () => void,
+): HTMLButtonElement {
+  const b = document.createElement('button');
+  b.appendChild(icon(name));
+  if (label) {
+    const t = document.createElement('span');
+    t.textContent = label;
+    b.appendChild(t);
+  }
+  b.title = title;
+  b.onclick = onClick;
+  b.classList.add('icon-btn');
+  return b;
+}
+
+// ---- Canvas tools bar + shared editing actions ----
+
+/** Flip the selection (also bound to H/V keys in main.ts). */
+export function flipAction(axis: 'h' | 'v'): void {
+  if (state.editorMode !== 'setup') return;
+  if (!selectedParts().some((p) => p.paths.length > 0)) return;
+  checkpoint();
+  flipSelected(axis);
+  notify();
+}
+
+/** Wrap the selection in a group null (Ctrl+G). */
+export function groupAction(): void {
+  if (state.editorMode !== 'setup' || state.selectedPartIds.length === 0) return;
+  const ids = [...state.selectedPartIds];
+  // Pivot at the center of the selection's rendered bbox; bones-only selections
+  // fall back to the average of their joints.
+  const boxes = partRootBoxes(ids);
+  let pivot: { x: number; y: number };
+  if (boxes.size > 0) {
+    const all = [...boxes.values()];
+    const x0 = Math.min(...all.map((b) => b.x));
+    const y0 = Math.min(...all.map((b) => b.y));
+    const x1 = Math.max(...all.map((b) => b.x + b.w));
+    const y1 = Math.max(...all.map((b) => b.y + b.h));
+    pivot = { x: (x0 + x1) / 2, y: (y0 + y1) / 2 };
+  } else {
+    const parts = selectedParts();
+    pivot = {
+      x: parts.reduce((s, p) => s + p.pivot.x, 0) / parts.length,
+      y: parts.reduce((s, p) => s + p.pivot.y, 0) / parts.length,
+    };
+  }
+  checkpoint();
+  const group = groupParts(ids, pivot);
+  if (!group) return;
+  registerPart(group);
+  reorderCanvas();
+  selectPart(group.id);
+  notify();
+}
+
+/** Dissolve the selected group/bone (Ctrl+Shift+G). */
+export function ungroupAction(): void {
+  const part = selectedPart();
+  if (state.editorMode !== 'setup' || !part || part.paths.length > 0) return;
+  checkpoint();
+  if (!ungroupPart(part.id)) {
+    alert('This null is animated — delete its keyframes first, then ungroup.');
+    return;
+  }
+  unregisterPart(part.id);
+  notify();
+  renderPose();
+}
+
+/** Bind the selected art parts to the selected bones (skinning). */
+export function bindAction(): void {
+  checkpoint();
+  const err = bindSelectedToBones();
+  if (err) {
+    alert(err);
+    return;
+  }
+  notify();
+}
+
+export function buildCanvasTools(el: HTMLElement): void {
+  el.innerHTML = '';
+  const doc = state.doc;
+  if (!doc) return;
+  const setup = state.editorMode === 'setup';
+  const sep = () => {
+    const s = document.createElement('span');
+    s.className = 'tool-sep';
+    el.appendChild(s);
+  };
+
+  // Tool switcher (both modes): select / translate / rotate / IK, keys V T R I.
+  const tools = document.createElement('div');
+  tools.className = 'tool-switch';
+  const toolDefs: [typeof state.tool, keyof typeof ICON_PATHS, string][] = [
+    ['select', 'select', 'Select (V) — Setup drags move, Animate drags rotate'],
+    ['translate', 'translate', 'Translate (T) — drag the X/Y arrows or the part'],
+    ['rotate', 'rotate', 'Rotate (R) — drag the ring or the part'],
+    ['ik', 'ik', 'IK (I) — drag a limb end; its parent joints solve to follow'],
+  ];
+  for (const [tool, ic, title] of toolDefs) {
+    const b = document.createElement('button');
+    b.appendChild(icon(ic));
+    b.title = title;
+    if (state.tool === tool) b.classList.add('active');
+    b.onclick = () => {
+      state.tool = tool;
+      notify();
+      renderPose();
+    };
+    tools.appendChild(b);
+  }
+  el.appendChild(tools);
+  sep();
+
+  if (setup) {
+    const anyArt = selectedParts().some((p) => p.paths.length > 0);
+    const part = selectedPart();
+    const add = (b: HTMLButtonElement, enabled: boolean) => {
+      b.disabled = !enabled;
+      el.appendChild(b);
+      return b;
+    };
+
+    add(iconButton('flipH', '', 'Flip the selection horizontally, in place (Shift+H)',
+      () => flipAction('h')), anyArt);
+    add(iconButton('flipV', '', 'Flip the selection vertically, in place (Shift+V)',
+      () => flipAction('v')), anyArt);
+    sep();
+    add(iconButton('group', 'group', 'Wrap the selection in a group (Ctrl+G)', groupAction),
+      state.selectedPartIds.length > 0);
+    add(iconButton('ungroup', '', 'Dissolve the selected group/bone (Ctrl+Shift+G)', ungroupAction),
+      !!part && part.paths.length === 0);
+    sep();
+    const boneBtn = add(iconButton('bone', 'bone',
+      'Press on the canvas to place the joint, drag to the bone tip, release. Escape cancels.',
+      () => {
+        startBonePlacement();
+        boneBtn.classList.add('armed');
+      }), true);
+    const arts = selectedParts().filter((p) => p.paths.length > 0);
+    const bones = selectedParts().filter((p) => p.kind === 'bone');
+    add(iconButton('bind', 'bind', 'Skin the selected art to the selected bones (auto weights)',
+      bindAction), arts.length > 0 && bones.length > 0);
+
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = part
+      ? 'Drag moves · click again for scale/rotate handles · double-click enters'
+      : 'Click selects · Shift adds · scroll zooms · middle-drag pans';
+    el.appendChild(hint);
+  } else {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent =
+      'Animate — drags key at the playhead. IK tool bends parent chains.';
+    el.appendChild(hint);
+  }
 }
 
 // ---- Layers tree ----
@@ -35,6 +239,12 @@ export function buildLayersPanel(el: HTMLElement): void {
   el.innerHTML = '<h2>Layers</h2>';
   const doc = state.doc;
   if (!doc) return;
+
+  // Never hide the selection inside a collapsed branch (e.g. a freshly placed bone).
+  const selected = selectedPart();
+  if (selected) {
+    for (const ancestor of ancestorChain(selected)) expanded.add(ancestor.id);
+  }
 
   const tree = document.createElement('ul');
   tree.className = 'layer-tree';
@@ -80,6 +290,14 @@ function partNode(part: RigPart): HTMLElement {
   };
   row.appendChild(chevron);
 
+  if (part.kind !== 'art' || part.skin) {
+    const kindIcon = document.createElement('span');
+    kindIcon.className = `layer-kind ${part.skin ? 'skin' : part.kind}`;
+    kindIcon.textContent = part.skin ? '≋' : part.kind === 'bone' ? '◆' : '▣';
+    kindIcon.title = part.skin ? 'skinned to bones' : part.kind;
+    row.appendChild(kindIcon);
+  }
+
   const name = document.createElement('span');
   name.className = 'layer-name';
   name.textContent = part.label;
@@ -91,7 +309,17 @@ function partNode(part: RigPart): HTMLElement {
   row.appendChild(count);
 
   row.onclick = (ev) => {
-    selectPart(part.id, ev.shiftKey);
+    // Ctrl toggles membership in the multi-selection; Shift adds; plain replaces.
+    if (ev.ctrlKey && state.selectedPartIds.includes(part.id)) {
+      state.selectedPartIds = state.selectedPartIds.filter((id) => id !== part.id);
+      if (state.selectedPartId === part.id) {
+        state.selectedPartId = state.selectedPartIds[state.selectedPartIds.length - 1] ?? null;
+      }
+    } else {
+      selectPart(part.id, ev.shiftKey || ev.ctrlKey);
+      // Picking a part in the tree opens its groups so canvas drags hit IT, not them.
+      enterGroupsFor(part.id);
+    }
     notify();
     renderPose();
   };
@@ -280,6 +508,16 @@ export function buildInspector(el: HTMLElement): void {
         part.rest.sy = v || 1;
         poseEdited();
       }, 0.01));
+      el.appendChild(numberField('skew x (deg)', part.rest.kx, (v) => {
+        checkpoint();
+        part.rest.kx = Math.min(85, Math.max(-85, v));
+        poseEdited();
+      }, 0.5));
+      el.appendChild(numberField('skew y (deg)', part.rest.ky, (v) => {
+        checkpoint();
+        part.rest.ky = Math.min(85, Math.max(-85, v));
+        poseEdited();
+      }, 0.5));
       el.appendChild(numberField('pivot x', part.pivot.x, (v) => {
         checkpoint();
         part.pivot.x = v;
@@ -338,7 +576,10 @@ export function buildInspector(el: HTMLElement): void {
       }));
     }
 
+    if (part.skin) buildSkinSection(el, part);
     if (setup) buildPathSection(el);
+    if (setup && state.mode === 'nodes') buildNodeOpsSection(el);
+    if (setup && state.mode === 'rig') buildAlignSection(el);
 
     const help = document.createElement('p');
     help.className = 'hint';
@@ -390,6 +631,155 @@ export function buildInspector(el: HTMLElement): void {
   }
 
   buildAiPanel(el);
+}
+
+// ---- Skinning ----
+
+function buildSkinSection(el: HTMLElement, part: RigPart): void {
+  const doc = state.doc!;
+  const title = document.createElement('h3');
+  title.textContent = 'Skinning';
+  el.appendChild(title);
+
+  const list = document.createElement('p');
+  list.className = 'hint';
+  const names = (part.skin?.bones ?? [])
+    .map((b) => doc.parts.find((p) => p.id === b.id)?.label ?? '(deleted bone)')
+    .join(', ');
+  list.textContent = `Deformed by: ${names}. Pose the bones — the artwork follows with ` +
+    'auto weights. Exports render skinned parts rigidly (editor/runtime feature).';
+  el.appendChild(list);
+
+  const unbind = document.createElement('button');
+  unbind.textContent = 'unbind (back to rigid)';
+  unbind.onclick = () => {
+    checkpoint();
+    unbindSelectedSkin();
+    notify();
+  };
+  el.appendChild(unbind);
+}
+
+// ---- Align & distribute ----
+
+let alignReference: AlignReference = 'selection';
+
+function buildAlignSection(el: HTMLElement): void {
+  const doc = state.doc!;
+  const ids = state.selectedPartIds;
+  if (ids.length < 1) return;
+
+  const title = document.createElement('h3');
+  title.textContent = 'Align & distribute';
+  el.appendChild(title);
+
+  const refRow = document.createElement('label');
+  refRow.className = 'field';
+  const refSpan = document.createElement('span');
+  refSpan.textContent = 'relative to';
+  const refSel = document.createElement('select');
+  for (const [value, label] of [
+    ['selection', 'selection bounds'],
+    ['first', 'first selected'],
+    ['last', 'last selected'],
+    ['canvas', 'canvas'],
+  ] as [AlignReference, string][]) {
+    const opt = document.createElement('option');
+    opt.value = value;
+    opt.textContent = label;
+    if (alignReference === value) opt.selected = true;
+    refSel.appendChild(opt);
+  }
+  refSel.onchange = () => {
+    alignReference = refSel.value as AlignReference;
+  };
+  refRow.appendChild(refSpan);
+  refRow.appendChild(refSel);
+  el.appendChild(refRow);
+
+  const apply = (edge: AlignEdge) => {
+    const boxes = partRootBoxes(ids);
+    const deltas = alignDeltas(ids, boxes, edge, alignReference, doc.viewBox);
+    if ([...deltas.values()].every((d) => d.dx === 0 && d.dy === 0)) return;
+    checkpoint();
+    applyRootDeltas(deltas);
+    notify();
+  };
+  const distribute = (mode: 'horizontal' | 'vertical') => {
+    const boxes = partRootBoxes(ids);
+    const deltas = distributeDeltas(ids, boxes, mode);
+    if ([...deltas.values()].every((d) => d.dx === 0 && d.dy === 0)) return;
+    checkpoint();
+    applyRootDeltas(deltas);
+    notify();
+  };
+
+  const grid = document.createElement('div');
+  grid.className = 'align-grid';
+  const alignBtn = (ic: keyof typeof ICON_PATHS, title: string, edge: AlignEdge) => {
+    grid.appendChild(iconButton(ic, '', title, () => apply(edge)));
+  };
+  alignBtn('alignL', 'Align left edges', 'left');
+  alignBtn('alignCH', 'Center horizontally', 'centerH');
+  alignBtn('alignR', 'Align right edges', 'right');
+  alignBtn('alignT', 'Align top edges', 'top');
+  alignBtn('alignM', 'Center vertically', 'middleV');
+  alignBtn('alignB', 'Align bottom edges', 'bottom');
+  el.appendChild(grid);
+
+  const dist = document.createElement('div');
+  dist.className = 'align-grid';
+  const distBtn = (ic: keyof typeof ICON_PATHS, title: string, mode: 'horizontal' | 'vertical') => {
+    const b = iconButton(ic, 'gaps', title, () => distribute(mode));
+    b.disabled = ids.length < 3;
+    dist.appendChild(b);
+  };
+  distBtn('distH', 'Equalize horizontal gaps (needs 3+)', 'horizontal');
+  distBtn('distV', 'Equalize vertical gaps (needs 3+)', 'vertical');
+  el.appendChild(dist);
+}
+
+// ---- Node operations (node-editing mode) ----
+
+function buildNodeOpsSection(el: HTMLElement): void {
+  const title = document.createElement('h3');
+  const count = selectedNodeCount();
+  const typeChar = primaryNodeType();
+  const typeName =
+    typeChar === 's' ? 'smooth' : typeChar === 'z' ? 'symmetric' : typeChar === 'c' ? 'corner' : 'untyped';
+  title.textContent =
+    count > 1 ? `Selected nodes (${count})` : count === 1 ? `Selected node — ${typeName}` : 'Nodes';
+  el.appendChild(title);
+
+  const grid = document.createElement('div');
+  grid.className = 'align-grid';
+  const enabled = hasSelectedNode();
+  const op = (text: string, title: string, nodeOp: NodeOp) => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.title = title;
+    b.disabled = !enabled;
+    b.onclick = () => {
+      checkpoint();
+      applyNodeOp(nodeOp);
+    };
+    grid.appendChild(b);
+  };
+  op('smooth', 'Align both handles through the node, keeping their lengths', 'smooth');
+  op('symmetric', 'Align both handles and equalize their lengths', 'symmetric');
+  op('corner', 'Retract both handles (sharp corner)', 'retract');
+  op('→ curve', 'Turn the segment after this node into a curve', 'toCurve');
+  op('→ line', 'Turn the segment after this node into a straight line', 'toLine');
+  el.appendChild(grid);
+
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = enabled
+    ? 'Ops set the node type persistently. Smooth/symmetric nodes mirror their ' +
+      'handles while dragging (Alt breaks). Shift+click or rubber-band adds nodes; ' +
+      'drag moves them all; Delete removes; arrows nudge.'
+    : 'Click a node to select it — Shift adds, drag empty space rubber-band-selects.';
+  el.appendChild(hint);
 }
 
 /** Style editor for the "entered" path (fill/stroke), Setup mode only. */
@@ -548,6 +938,19 @@ function buildAiPanel(el: HTMLElement): void {
   shotLabel.appendChild(shotToggle);
   box.appendChild(shotLabel);
 
+  const rigLabel = document.createElement('label');
+  rigLabel.className = 'field';
+  const rigToggle = document.createElement('input');
+  rigToggle.type = 'checkbox';
+  rigToggle.checked = localStorage.getItem('rig-studio-allow-rig-edits') === '1';
+  rigToggle.onchange = () =>
+    localStorage.setItem('rig-studio-allow-rig-edits', rigToggle.checked ? '1' : '0');
+  const rigSpan = document.createElement('span');
+  rigSpan.textContent = 'allow rig changes (bones / parenting / pivots)';
+  rigLabel.appendChild(rigSpan);
+  rigLabel.appendChild(rigToggle);
+  box.appendChild(rigLabel);
+
   const status = document.createElement('p');
   status.className = 'hint';
   box.appendChild(status);
@@ -581,16 +984,31 @@ function buildAiPanel(el: HTMLElement): void {
     status.textContent = 'Choreographing… (this can take a minute)';
     try {
       const image = shotToggle.checked ? await snapshotPose() : null;
-      const updated = await animateWithClaude(
-        ctx.apiKey, ctx.doc, clip, promptBox.value.trim(), image,
+      const result = await animateWithClaude(
+        ctx.apiKey, ctx.doc, clip, promptBox.value.trim(), image, rigToggle.checked,
       );
-      checkpoint(); // one undo step reverts the whole AI edit
-      clip.duration = updated.duration;
-      clip.tracks = updated.tracks;
+      checkpoint(); // one undo step reverts the whole AI edit — rig changes included
+      let labelToId = new Map(ctx.doc.parts.map((p) => [p.label, p.id]));
+      let structural = '';
+      if (result.rig) {
+        labelToId = applyRigChanges(result.rig);
+        ctx.doc.parts.forEach(registerPart); // canvas groups for any new bones
+        const added = result.rig.addBones?.length ?? 0;
+        if (added > 0) structural = ` (+${added} bone${added === 1 ? '' : 's'})`;
+      }
+      // Resolve track targets (labels → ids) against the possibly-extended rig.
+      const tracks: Track[] = [];
+      for (const t of result.clip.tracks) {
+        const target = t.target === 'root' ? 'root' : labelToId.get(t.target);
+        if (!target) continue;
+        tracks.push({ target, channel: t.channel as Channel, keyframes: t.keyframes });
+      }
+      clip.duration = result.clip.duration;
+      clip.tracks = tracks;
       state.editorMode = 'animate';
       state.currentTime = 0;
       state.playing = true;
-      status.textContent = 'Done — playing the result.';
+      status.textContent = `Done — playing the result${structural}.`;
       notify();
       renderPose();
       document.dispatchEvent(new CustomEvent('rig-play'));

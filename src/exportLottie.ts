@@ -15,9 +15,7 @@
 
 import { Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from './model';
 import { parsePath, pathToCubics } from './paths';
-import {
-  Mat, applyMat, invertMat, matrixOfTransform, multiply, translationMat,
-} from './transforms';
+import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from './transforms';
 
 const FR = 60;
 
@@ -78,23 +76,27 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
       const group = shapeGroup(part, p, ox, oy);
       return group ? [group] : [];
     });
+    const ks = {
+      o: { a: 0, k: 100 },
+      // Keyed values are ABSOLUTE; the rest pose only fills unkeyed channels.
+      r: scalarProp(0, part.rest.rotate, trackOf(part.id, 'rotate')),
+      p: positionProp(
+        px, px + part.rest.tx,
+        py, py + part.rest.ty,
+        trackOf(part.id, 'tx'), trackOf(part.id, 'ty'),
+      ),
+      a: { a: 0, k: [rnd(px), rnd(py), 0] },
+      // Rest scale is baked into the geometry (see shapeGroup) so it scales along
+      // the artwork's own axes, not the layer axes.
+      s: { a: 0, k: [100, 100, 100] },
+    };
+    // Bones/groups are partless: emit them as native Lottie null layers.
+    if (part.paths.length === 0) {
+      return { ddd: 0, ind: idx + 2, ty: 3, nm: part.label, sr: 1, parent, ks, ao: 0, ip: 0, op, st: 0, bm: 0 };
+    }
     return {
       ddd: 0, ind: idx + 2, ty: 4, nm: part.label, sr: 1, parent,
-      ks: {
-        o: { a: 0, k: 100 },
-        // Keyed values are ABSOLUTE; the rest pose only fills unkeyed channels.
-        r: scalarProp(0, part.rest.rotate, trackOf(part.id, 'rotate')),
-        p: positionProp(
-          px, px + part.rest.tx,
-          py, py + part.rest.ty,
-          trackOf(part.id, 'tx'), trackOf(part.id, 'ty'),
-        ),
-        a: { a: 0, k: [rnd(px), rnd(py), 0] },
-        // Rest scale is baked into the geometry (see shapeGroup) so it scales along
-        // the artwork's own axes, not the layer axes.
-        s: { a: 0, k: [100, 100, 100] },
-      },
-      ao: 0, shapes, ip: 0, op, st: 0, bm: 0,
+      ks, ao: 0, shapes, ip: 0, op, st: 0, bm: 0,
     };
   });
 
@@ -139,9 +141,16 @@ function scalarProp(animBase: number, staticValue: number, track: Track | undefi
   const k = keys.map((key, idx) => {
     const kf: JsonObj = { t: toFrames(key.time), s: [rnd(animBase + key.value)] };
     if (idx < keys.length - 1) {
-      const bez = EASING_BEZIER[keys[idx + 1].easing];
-      kf.o = { x: [bez.o[0]], y: [bez.o[1]] };
-      kf.i = { x: [bez.i[0]], y: [bez.i[1]] };
+      const next = keys[idx + 1];
+      if (next.bezier) {
+        // Custom curve-editor bezier on the arriving key: use its handles directly.
+        kf.o = { x: [next.bezier[0]], y: [next.bezier[1]] };
+        kf.i = { x: [next.bezier[2]], y: [next.bezier[3]] };
+      } else {
+        const bez = EASING_BEZIER[next.easing];
+        kf.o = { x: [bez.o[0]], y: [bez.o[1]] };
+        kf.i = { x: [bez.i[0]], y: [bez.i[1]] };
+      }
     }
     return kf;
   });
@@ -209,7 +218,11 @@ function dimBezier(
   keys: Keyframe[], t0: number, t1: number,
 ): { o: [number, number]; i: [number, number] } {
   for (let i = 1; i < keys.length; i++) {
-    if (keys[i - 1].time === t0 && keys[i].time === t1) return EASING_BEZIER[keys[i].easing];
+    if (keys[i - 1].time === t0 && keys[i].time === t1) {
+      const b = keys[i].bezier;
+      if (b) return { o: [b[0], b[1]], i: [b[2], b[3]] };
+      return EASING_BEZIER[keys[i].easing];
+    }
   }
   return EASING_BEZIER.linear;
 }
@@ -339,18 +352,20 @@ function pathToBeziers(d: string, m: Mat, ox: number, oy: number): SubPath[] {
 function shapeGroup(part: RigPart, path: RigPath, ox: number, oy: number): JsonObj | null {
   const baked = matrixOfTransform(part.transform);
   let m = baked;
-  // Rest scale: innermost (after baked), around the pivot mapped into pre-baked local
-  // space — the artwork resizes along its own axes and the joint stays fixed. Baked
-  // into geometry because Lottie layer scale would act along layer axes instead.
+  // Rest scale/skew: innermost (after baked), around the pivot mapped into pre-baked
+  // local space — the artwork reshapes along its own axes and the joint stays fixed.
+  // Baked into geometry because Lottie layer scale/skew would act along layer axes.
   const sx = part.rest?.sx ?? 1;
   const sy = part.rest?.sy ?? 1;
-  if (sx !== 1 || sy !== 1) {
+  const kx = part.rest?.kx ?? 0;
+  const ky = part.rest?.ky ?? 0;
+  if (sx !== 1 || sy !== 1 || kx !== 0 || ky !== 0) {
     const pl = applyMat(invertMat(baked), part.pivot.x, part.pivot.y);
-    const scaleAroundPl = multiply(
-      translationMat(pl.x, pl.y),
-      multiply({ a: sx, b: 0, c: 0, d: sy, e: 0, f: 0 }, translationMat(-pl.x, -pl.y)),
+    const local = matrixOfTransform(
+      `translate(${pl.x},${pl.y}) scale(${sx},${sy}) ` +
+      `skewX(${kx}) skewY(${ky}) translate(${-pl.x},${-pl.y})`,
     );
-    m = multiply(baked, scaleAroundPl);
+    m = multiply(baked, local);
   }
   m = multiply(m, matrixOfTransform(path.transform));
   const beziers = pathToBeziers(path.d, m, ox, oy);

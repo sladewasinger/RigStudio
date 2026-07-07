@@ -8,12 +8,16 @@
 import { describe, expect, it } from 'vitest';
 import { exportCompose } from '../exportCompose';
 import { Clip, RigPart } from '../model';
-import { makeClip, makeDoc, makePart, makeTrack } from './helpers';
+import { makeClip, makeDoc, makePart, makePath, makeTrack } from './helpers';
 
 const PKG = 'com.example.rig';
 
+// Draw-function fixtures need artwork: partless parts (bones/groups) get no
+// drawPart_ function — they only appear in ancestors' transform chains.
 function armPart(overrides: Partial<RigPart> = {}): RigPart {
-  return makePart('p_arm', { label: 'arm', pivot: { x: 10, y: 20 }, ...overrides });
+  return makePart('p_arm', {
+    label: 'arm', pivot: { x: 10, y: 20 }, paths: [makePath('arm_path')], ...overrides,
+  });
 }
 
 function exportDoc(parts: RigPart[], clips?: Clip[]): string {
@@ -107,7 +111,7 @@ describe('exportCompose choreography', () => {
 describe('exportCompose per-part draw', () => {
   it('uses pose.at with no default when rest is 0, and the rest value as default otherwise', () => {
     const code = exportDoc([
-      armPart({ rest: { rotate: 30, tx: 0, ty: -4.5, sx: 1, sy: 1 } }),
+      armPart({ rest: { rotate: 30, tx: 0, ty: -4.5, sx: 1, sy: 1, kx: 0, ky: 0 } }),
     ]);
     expect(code).toContain('rotate(pose.at("arm.rotate", 30f), pivot = Pivot_arm)');
     expect(code).toContain('translate(pose.at("arm.tx"), pose.at("arm.ty", -4.5f))');
@@ -115,7 +119,7 @@ describe('exportCompose per-part draw', () => {
 
   it('emits a rest-scale line around the local-space pivot when rest scale is not 1', () => {
     const code = exportDoc([
-      armPart({ rest: { rotate: 0, tx: 0, ty: 0, sx: 1.5, sy: 2 } }),
+      armPart({ rest: { rotate: 0, tx: 0, ty: 0, sx: 1.5, sy: 2, kx: 0, ky: 0 } }),
     ]);
     // No baked transform → local pivot equals the document pivot.
     expect(code).toContain('scale(1.5f, 2f, pivot = Offset(10f, 20f))');
@@ -125,7 +129,7 @@ describe('exportCompose per-part draw', () => {
     const code = exportDoc([
       armPart({
         transform: 'translate(10,0)',
-        rest: { rotate: 0, tx: 0, ty: 0, sx: 1.5, sy: 2 },
+        rest: { rotate: 0, tx: 0, ty: 0, sx: 1.5, sy: 2, kx: 0, ky: 0 },
       }),
     ]);
     const baked = code.indexOf('translate(10f, 0f)');
@@ -141,7 +145,9 @@ describe('exportCompose per-part draw', () => {
   });
 
   it('replays the parent chain before the part itself (outermost first)', () => {
-    const body = makePart('p_body', { label: 'body', pivot: { x: 50, y: 60 } });
+    const body = makePart('p_body', {
+      label: 'body', pivot: { x: 50, y: 60 }, paths: [makePath('body_path')],
+    });
     const arm = armPart({ parentId: 'p_body' });
     const code = exportDoc([body, arm]);
 
@@ -161,5 +167,38 @@ describe('exportCompose per-part draw', () => {
       code.indexOf('private fun DrawScope.drawPart_arm'),
     );
     expect(bodyFn).not.toContain('pose.at("arm.');
+  });
+});
+
+describe('exportCompose bones and groups', () => {
+  it('skips draw functions for partless nulls but keeps them in child chains', () => {
+    const bone = makePart('p_bone', {
+      label: 'shoulder', kind: 'bone', pivot: { x: 5, y: 6 },
+    });
+    const arm = armPart({ parentId: 'p_bone' });
+    const code = exportDoc([bone, arm]);
+    expect(code).not.toContain('drawPart_shoulder');
+    expect(code).not.toContain('drawPart_shoulder(pose)');
+    expect(code).toContain('private val Pivot_shoulder = Offset(5f, 6f)');
+    const armFn = code.slice(code.indexOf('private fun DrawScope.drawPart_arm'));
+    expect(armFn).toContain('rotate(pose.at("shoulder.rotate"), pivot = Pivot_shoulder)');
+  });
+});
+
+describe('exportCompose skew', () => {
+  it('folds rest skew (with pivot) into a single svgMatrix transform', () => {
+    const code = exportDoc([
+      armPart({ rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 45, ky: 0 } }),
+    ]);
+    expect(code).not.toContain('scale(1f, 1f');
+    // T(10,20)·skewX(45)·T(-10,-20): a=1 b=0 c=tan45=1 d=1, e = -c*20 = -20, f=0.
+    expect(code).toContain('transform(svgMatrix(1f, 0f, 1f, 1f, -20f, 0f))');
+  });
+
+  it('keeps the plain scale emission when there is no skew', () => {
+    const code = exportDoc([
+      armPart({ rest: { rotate: 0, tx: 0, ty: 0, sx: 2, sy: 2, kx: 0, ky: 0 } }),
+    ]);
+    expect(code).toContain('scale(2f, 2f, pivot = Offset(10f, 20f))');
   });
 });

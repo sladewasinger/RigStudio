@@ -8,6 +8,8 @@ export type SvgTransform =
   | { type: 'translate'; tx: number; ty: number }
   | { type: 'scale'; sx: number; sy: number }
   | { type: 'rotate'; angle: number; cx: number; cy: number }
+  | { type: 'skewX'; angle: number }
+  | { type: 'skewY'; angle: number }
   | { type: 'matrix'; a: number; b: number; c: number; d: number; e: number; f: number };
 
 const FN_RE = /(translate|scale|rotate|matrix|skewX|skewY)\s*\(([^)]*)\)/g;
@@ -31,6 +33,12 @@ export function parseTransformList(value: string | null | undefined): SvgTransfo
       case 'rotate':
         out.push({ type: 'rotate', angle: args[0] ?? 0, cx: args[1] ?? 0, cy: args[2] ?? 0 });
         break;
+      case 'skewX':
+        out.push({ type: 'skewX', angle: args[0] ?? 0 });
+        break;
+      case 'skewY':
+        out.push({ type: 'skewY', angle: args[0] ?? 0 });
+        break;
       case 'matrix':
         out.push({
           type: 'matrix',
@@ -38,9 +46,6 @@ export function parseTransformList(value: string | null | undefined): SvgTransfo
           d: args[3] ?? 1, e: args[4] ?? 0, f: args[5] ?? 0,
         });
         break;
-      default:
-        // skewX/skewY are rare in rig art; approximate as identity but keep going.
-        console.warn(`rig-studio: ignoring unsupported transform "${fn}"`);
     }
   }
   return out;
@@ -102,6 +107,8 @@ function matOfOne(t: SvgTransform): Mat {
     case 'translate': return translationMat(t.tx, t.ty);
     case 'scale': return { a: t.sx, b: 0, c: 0, d: t.sy, e: 0, f: 0 };
     case 'rotate': return rotationMat(t.angle, t.cx, t.cy);
+    case 'skewX': return { a: 1, b: 0, c: Math.tan((t.angle * Math.PI) / 180), d: 1, e: 0, f: 0 };
+    case 'skewY': return { a: 1, b: Math.tan((t.angle * Math.PI) / 180), c: 0, d: 1, e: 0, f: 0 };
     case 'matrix': return { a: t.a, b: t.b, c: t.c, d: t.d, e: t.e, f: t.f };
   }
 }

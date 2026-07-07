@@ -139,9 +139,27 @@ describe('importSvg', () => {
       'a.svg',
     );
     for (const part of doc.parts) {
-      expect(part.rest).toEqual({ rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1 });
+      expect(part.rest).toEqual({ rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 });
       expect(part.parentId).toBeNull();
     }
     expect(doc.clips).toEqual([{ name: 'idle', duration: 2000, tracks: [] }]);
+  });
+});
+
+describe('sodipodi node types', () => {
+  it('imports sodipodi:nodetypes onto paths and leaves shapes untyped', () => {
+    const doc = importSvg(
+      `<svg xmlns="http://www.w3.org/2000/svg"
+            xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+            viewBox="0 0 100 100">
+         <g id="part">
+           <path d="M 0,0 C 1,1 2,2 3,3 C 4,4 5,5 6,6" sodipodi:nodetypes="csc"/>
+           <rect x="0" y="0" width="10" height="10"/>
+         </g>
+       </svg>`,
+      'typed.svg',
+    );
+    expect(doc.parts[0].paths[0].nodeTypes).toBe('csc');
+    expect(doc.parts[0].paths[1].nodeTypes).toBeNull();
   });
 });

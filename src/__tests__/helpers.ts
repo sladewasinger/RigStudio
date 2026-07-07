@@ -33,10 +33,11 @@ export function makePart(id: string, overrides: Partial<RigPart> = {}): RigPart 
   return {
     id,
     label: id,
+    kind: 'art',
     transform: '',
     pivot: { x: 0, y: 0 },
     pivotHint: null,
-    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1 },
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
     parentId: null,
     paths: [],
     ...overrides,

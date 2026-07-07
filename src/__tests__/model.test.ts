@@ -10,11 +10,13 @@ import {
   Easing,
   RigDoc,
   ancestorChain,
+  applyRigChanges,
   canMoveSelectedInDrawOrder,
   channelValue,
   copyKeys,
   copyPoseAt,
   deleteKeyframe,
+  groupParts,
   movePartRelativeTo,
   moveSelectedInDrawOrder,
   normalizeDoc,
@@ -25,7 +27,9 @@ import {
   setKeyframeAt,
   setParent,
   state,
+  ungroupPart,
 } from '../model';
+import { multiply, rotationMat, translationMat } from '../transforms';
 import { makeClip, makeDoc, makePart, makePath, makeTrack, resetState } from './helpers';
 
 describe('sampleChannel', () => {
@@ -69,7 +73,7 @@ describe('sampleChannel', () => {
 describe('channelValue', () => {
   function docWithKeyedRotate(): RigDoc {
     const part = makePart('p1', {
-      rest: { rotate: 45, tx: 7, ty: 0, sx: 1, sy: 1 },
+      rest: { rotate: 45, tx: 7, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
     });
     const track = makeTrack('p1', 'rotate', [
       [0, 10, 'linear'],
@@ -99,7 +103,7 @@ describe('channelValue', () => {
   });
 
   it('returns the rest value when the track exists but has no keyframes', () => {
-    const part = makePart('p1', { rest: { rotate: 30, tx: 0, ty: 0, sx: 1, sy: 1 } });
+    const part = makePart('p1', { rest: { rotate: 30, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 } });
     const empty = makeTrack('p1', 'rotate', []);
     resetState(makeDoc([part], [makeClip({ tracks: [empty] })]));
     expect(channelValue(part, 'rotate', 500)).toBe(30);
@@ -339,8 +343,8 @@ describe('normalizeDoc', () => {
     } as unknown as RigDoc;
 
     const out = normalizeDoc(doc);
-    expect(out.parts[0].rest).toEqual({ rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1 });
-    expect(out.parts[1].rest).toEqual({ rotate: 5, tx: 1, ty: 2, sx: 1, sy: 1 });
+    expect(out.parts[0].rest).toEqual({ rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 });
+    expect(out.parts[1].rest).toEqual({ rotate: 5, tx: 1, ty: 2, sx: 1, sy: 1, kx: 0, ky: 0 });
     expect(out.parts[0].parentId).toBeNull();
     expect(out.parts[0].pivotHint).toBeNull();
   });
@@ -353,7 +357,7 @@ describe('normalizeDoc', () => {
       parts: [
         {
           id: 'p_1', label: 'arm', transform: '', pivot: { x: 0, y: 0 },
-          rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1 }, parentId: null,
+          rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 }, parentId: null,
           paths: [
             { id: 'path_1', d: 'M 0,0', fill: null, fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1, transform: '' },
             { id: 'path_2', label: 'named', d: 'M 0,0', fill: null, fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1, transform: '' },
@@ -471,5 +475,122 @@ describe('draw order (z-order)', () => {
     expect(movePartRelativeTo('p1', 'p2', 'above')).toBe(false);
     expect(state.doc!.parts.map((p) => p.id)).toEqual(['p1', 'p2', 'p3']);
     expect(movePartRelativeTo('p1', 'p1', 'above')).toBe(false);
+  });
+});
+
+describe('bones, groups, structural edits', () => {
+  it('groupParts wraps only the outermost selected parts and adopts their common parent', () => {
+    const doc = makeDoc([makePart('p1'), makePart('p2'), makePart('p3')]);
+    doc.parts[1].parentId = 'p1'; // p2 under p1
+    resetState(doc);
+    const group = groupParts(['p1', 'p2', 'p3'], { x: 5, y: 5 })!;
+    expect(group.kind).toBe('group');
+    expect(group.paths).toEqual([]);
+    // p2's ancestor p1 is also selected, so p2 stays under p1.
+    expect(state.doc!.parts.find((p) => p.id === 'p2')!.parentId).toBe('p1');
+    expect(state.doc!.parts.find((p) => p.id === 'p1')!.parentId).toBe(group.id);
+    expect(state.doc!.parts.find((p) => p.id === 'p3')!.parentId).toBe(group.id);
+    expect(group.parentId).toBeNull();
+  });
+
+  it('ungroupPart absorbs the group rest pose exactly (child renders identically)', () => {
+    const doc = makeDoc([makePart('g'), makePart('c')]);
+    resetState(doc);
+    const g = state.doc!.parts[0];
+    const c = state.doc!.parts[1];
+    g.kind = 'group';
+    g.pivot = { x: 10, y: 10 };
+    g.rest.rotate = 30;
+    g.rest.tx = 7;
+    g.rest.ty = -3;
+    c.parentId = 'g';
+    c.pivot = { x: 25, y: 5 };
+    c.rest.rotate = 10;
+    c.rest.tx = 2;
+    c.rest.ty = 4;
+    // Composed rendering matrix before dissolving: group pose · child pose.
+    const before = multiply(
+      multiply(translationMat(7, -3), rotationMat(30, 10, 10)),
+      multiply(translationMat(2, 4), rotationMat(10, 25, 5)),
+    );
+    expect(ungroupPart('g')).toBe(true);
+    expect(state.doc!.parts.map((p) => p.id)).toEqual(['c']);
+    expect(c.parentId).toBeNull();
+    expect(c.rest.rotate).toBeCloseTo(40, 9);
+    const after = multiply(
+      translationMat(c.rest.tx, c.rest.ty),
+      rotationMat(c.rest.rotate, 25, 5),
+    );
+    for (const k of ['a', 'b', 'c', 'd', 'e', 'f'] as const) {
+      expect(after[k]).toBeCloseTo(before[k], 6);
+    }
+  });
+
+  it('ungroupPart shifts keyed child rotations and remaps translations through the group pose', () => {
+    const doc = makeDoc(
+      [makePart('g'), makePart('c')],
+      [makeClip({
+        tracks: [
+          makeTrack('c', 'rotate', [[0, 0, 'linear'], [1000, 90, 'linear']]),
+          makeTrack('c', 'tx', [[0, 0, 'linear'], [1000, 10, 'linear']]),
+        ],
+      })],
+    );
+    resetState(doc);
+    const g = state.doc!.parts[0];
+    const c = state.doc!.parts[1];
+    g.kind = 'group';
+    g.pivot = { x: 0, y: 0 };
+    g.rest.rotate = 90; // A rotates (x,y) → (-y, x)
+    c.parentId = 'g';
+    c.pivot = { x: 0, y: 0 }; // cp == gp → k = 0
+    expect(ungroupPart('g')).toBe(true);
+    const clip = state.doc!.clips[0];
+    const rot = clip.tracks.find((t) => t.channel === 'rotate')!;
+    expect(rot.keyframes.map((k) => k.value)).toEqual([90, 180]);
+    // gr ≠ 0 mixes axes: both tx and ty tracks exist, remapped t' = A·t (gt=0, k=0).
+    const tx = clip.tracks.find((t) => t.channel === 'tx')!;
+    const ty = clip.tracks.find((t) => t.channel === 'ty')!;
+    expect(tx.keyframes.map((k) => Math.round(k.value))).toEqual([0, 0]); // -y = 0
+    expect(ty.keyframes.map((k) => Math.round(k.value))).toEqual([0, 10]); // x
+  });
+
+  it('ungroupPart refuses animated nulls and parts with artwork', () => {
+    const doc = makeDoc(
+      [makePart('g'), makePart('art', { paths: [makePath('a')] })],
+      [makeClip({ tracks: [makeTrack('g', 'rotate', [[0, 5, 'linear']])] })],
+    );
+    resetState(doc);
+    state.doc!.parts[0].kind = 'group';
+    expect(ungroupPart('g')).toBe(false); // animated
+    expect(ungroupPart('art')).toBe(false); // has artwork
+  });
+
+  it('applyRigChanges creates bones, reparents with cycle guards, and moves pivots', () => {
+    resetState(makeDoc([makePart('p1', { label: 'arm' })]));
+    const map = applyRigChanges({
+      addBones: [
+        { label: 'shoulder', pivot: { x: 1, y: 2 }, parent: null },
+        { label: 'elbow', pivot: { x: 3, y: 4 }, parent: 'shoulder' },
+      ],
+      reparent: [
+        { part: 'arm', parent: 'elbow' },
+        { part: 'shoulder', parent: 'nonexistent' }, // silently detaches to null
+      ],
+      movePivots: [{ part: 'arm', x: 9, y: 9 }],
+    });
+    const doc = state.doc!;
+    const shoulder = doc.parts.find((p) => p.label === 'shoulder')!;
+    const elbow = doc.parts.find((p) => p.label === 'elbow')!;
+    const arm = doc.parts.find((p) => p.label === 'arm')!;
+    expect(shoulder.kind).toBe('bone');
+    expect(elbow.parentId).toBe(shoulder.id);
+    expect(arm.parentId).toBe(elbow.id);
+    expect(arm.pivot).toEqual({ x: 9, y: 9 });
+    expect(map.get('elbow')).toBe(elbow.id);
+    // duplicate label is skipped
+    const before = doc.parts.length;
+    applyRigChanges({ addBones: [{ label: 'arm', pivot: { x: 0, y: 0 }, parent: null }], reparent: [], movePivots: [] });
+    expect(doc.parts.length).toBe(before);
   });
 });

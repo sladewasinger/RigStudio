@@ -8,6 +8,8 @@
  * carries a rest pose — offsets edited in Setup mode that keyframes add on top of.
  */
 
+import { Mat, applyMat, multiply, rotationMat } from './transforms';
+
 export interface Vec2 {
   x: number;
   y: number;
@@ -19,6 +21,12 @@ export interface RigPath {
   label: string;
   /** Normalized absolute path data (all shapes are converted to paths on import). */
   d: string;
+  /**
+   * Per-node type flags, one char per drawing command (Z excluded), Inkscape's
+   * sodipodi:nodetypes convention: 'c' corner/cusp, 's' smooth, 'z' symmetric.
+   * Null = untyped (handle drags fall back to collinearity detection).
+   */
+  nodeTypes?: string | null;
   fill: string | null;
   fillOpacity: number;
   stroke: string | null;
@@ -45,20 +53,49 @@ export interface RestPose {
   ty: number;
   sx: number;
   sy: number;
+  /** Skew angles in degrees (Inkscape's rotate-mode side handles), innermost with scale. */
+  kx: number;
+  ky: number;
+}
+
+/**
+ * What a part IS: 'art' draws paths; 'bone' is a partless joint (a diamond glyph on
+ * canvas) for building multi-joint chains; 'group' is a partless container created by
+ * Ctrl+G that its children ride on. Bones and groups still pose/animate like any part.
+ */
+export type PartKind = 'art' | 'bone' | 'group';
+
+/** One bone a skinned part is bound to, captured at bind time (rest space). */
+export interface SkinBone {
+  id: string;
+  /** Inverse of the bone's rest world matrix — per-frame delta = current · this. */
+  restWorldInv: Mat;
+  /** The bone's rest segment (origin → tip) in doc space, for distance weights. */
+  bindSeg: { p: Vec2; q: Vec2 };
 }
 
 export interface RigPart {
   id: string;
   label: string;
+  kind: PartKind;
   /** Verbatim SVG transform of the part's group — the authored rest placement. */
   transform: string;
   /** Joint location in root (document) coordinates. Animated rotation spins around it. */
   pivot: Vec2;
   /** Pending pivot placement that needs layout to resolve; cleared once applied. */
   pivotHint?: PivotHint | null;
+  /** Bones only: the far end of the bone, in the same frame as the pivot. */
+  boneTip?: Vec2 | null;
   rest: RestPose;
   /** Another part's id to inherit motion from (bone hierarchy), or null. */
   parentId: string | null;
+  /**
+   * Linear-blend skinning binding (art parts): geometry deforms by these bones
+   * instead of riding a parent chain. Bind bakes static transforms into path data,
+   * zeroes rest, and clears parentId; weights derive from bindSeg distances at
+   * runtime. Exporters render skinned parts rigidly (documented limitation).
+   */
+  skin?: { bones: SkinBone[] } | null;
   paths: RigPath[];
 }
 
@@ -73,6 +110,11 @@ export interface Keyframe {
   time: number; // ms
   value: number;
   easing: Easing; // easing of the segment arriving at this keyframe
+  /**
+   * Custom cubic-bezier for the ARRIVING segment (CSS-style x1,y1,x2,y2 with x in
+   * 0..1), set by the curve editor. Overrides `easing` when present.
+   */
+  bezier?: [number, number, number, number] | null;
 }
 
 export interface Track {
@@ -116,8 +158,12 @@ export type Mode = 'rig' | 'nodes';
  */
 export type EditorMode = 'setup' | 'animate';
 
+/** Canvas transform tool. select = classic drags; the rest add gizmos/solvers. */
+export type Tool = 'select' | 'translate' | 'rotate' | 'ik';
+
 export interface AppState {
   doc: RigDoc | null;
+  tool: Tool;
   /** Primary selection (inspector target). */
   selectedPartId: string | null;
   /** Full selection set for multi-part posing; always contains selectedPartId when set. */
@@ -138,6 +184,7 @@ export interface AppState {
 
 export const state: AppState = {
   doc: null,
+  tool: 'select',
   selectedPartId: null,
   selectedPartIds: [],
   selectedPathId: null,
@@ -244,6 +291,212 @@ export function setParent(childId: string, parentId: string | null): boolean {
   return true;
 }
 
+// ---- Bones, groups, structural edits ----
+
+/** Create a partless bone/group part. Bones are the joints of multi-joint chains. */
+export function addNullPart(
+  kind: 'bone' | 'group', pivot: Vec2, parentId: string | null, label?: string,
+): RigPart {
+  const part: RigPart = {
+    id: freshId('part'),
+    label: label ?? freshId(kind),
+    kind,
+    transform: '',
+    pivot: { ...pivot },
+    pivotHint: null,
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
+    parentId,
+    paths: [],
+  };
+  state.doc!.parts.push(part);
+  return part;
+}
+
+/**
+ * Wrap the outermost of the given parts in a new group null pivoted at `pivot`.
+ * Members whose ancestor is also selected stay attached to that ancestor. The group
+ * adopts the members' common parent (or none) and slots in just above them in draw
+ * order.
+ */
+export function groupParts(ids: string[], pivot: Vec2): RigPart | null {
+  const doc = state.doc;
+  if (!doc) return null;
+  const members = doc.parts.filter((p) => ids.includes(p.id));
+  const outer = members.filter((p) => !ancestorChain(p).some((a) => ids.includes(a.id)));
+  if (outer.length === 0) return null;
+
+  const parents = new Set(outer.map((p) => p.parentId));
+  const parentId = parents.size === 1 ? [...parents][0] : null;
+  const group = addNullPart('group', pivot, parentId);
+  // addNullPart pushed it last; move it just above the topmost member instead.
+  doc.parts.pop();
+  const insertAt = Math.max(...outer.map((p) => doc.parts.indexOf(p))) + 1;
+  doc.parts.splice(insertAt, 0, group);
+  for (const p of outer) p.parentId = group.id;
+  return group;
+}
+
+/**
+ * Dissolve a partless group/bone: children re-adopt its parent and absorb its rest
+ * pose so nothing moves on canvas. The absorption is exact for the rest pose and for
+ * keyed rotations (+= group rotation); keyed child translations are remapped through
+ * the group's rigid transform — when the group is rotated and a child has tx/ty keys,
+ * both tracks are resampled on the union of their key times (values exact at keys).
+ * Refuses when the null itself is animated in any clip (remove its tracks first) or
+ * when the part has artwork.
+ */
+export function ungroupPart(id: string): boolean {
+  const doc = state.doc;
+  const part = partById(id);
+  if (!doc || !part || part.paths.length > 0) return false;
+  for (const clip of doc.clips) {
+    if (clip.tracks.some((t) => t.target === id && t.keyframes.length > 0)) return false;
+  }
+
+  const gr = part.rest.rotate;
+  const gp = part.pivot;
+  const gt = { x: part.rest.tx, y: part.rest.ty };
+
+  for (const child of doc.parts.filter((p) => p.parentId === id)) {
+    const oldRest = { tx: child.rest.tx, ty: child.rest.ty };
+    // Composing two rigid poses: angles add, and the child's translation maps
+    // affinely — t' = gt + A·t + k, where A rotates by the group angle and k is the
+    // constant translation of R(gr,gp)·R(−gr,cp). Exact for rest AND every keyframe.
+    const cp = child.pivot;
+    const a = rotationMat(gr, 0, 0);
+    const kMat = multiply(rotationMat(gr, gp.x, gp.y), rotationMat(-gr, cp.x, cp.y));
+    const k = { x: kMat.e, y: kMat.f };
+    const mapT = (x: number, y: number) => {
+      const rotated = applyMat(a, x, y);
+      return { x: gt.x + rotated.x + k.x, y: gt.y + rotated.y + k.y };
+    };
+
+    const newRest = mapT(oldRest.tx, oldRest.ty);
+    child.rest.rotate += gr;
+    child.rest.tx = newRest.x;
+    child.rest.ty = newRest.y;
+    child.parentId = part.parentId;
+
+    for (const clip of doc.clips) {
+      const rot = clip.tracks.find((t) => t.target === child.id && t.channel === 'rotate');
+      if (rot) for (const key of rot.keyframes) key.value += gr;
+
+      const txT = clip.tracks.find((t) => t.target === child.id && t.channel === 'tx');
+      const tyT = clip.tracks.find((t) => t.target === child.id && t.channel === 'ty');
+      if (!txT && !tyT) continue;
+
+      if (gr === 0) {
+        // No rotation: axes stay independent, keys just shift.
+        if (txT) for (const key of txT.keyframes) key.value += gt.x + k.x;
+        if (tyT) for (const key of tyT.keyframes) key.value += gt.y + k.y;
+        continue;
+      }
+      // Rotation mixes x and y, so both channels must exist and share key times:
+      // resample on the union of times (exact at every original key time).
+      const times = [...new Set([
+        ...(txT?.keyframes ?? []).map((key) => key.time),
+        ...(tyT?.keyframes ?? []).map((key) => key.time),
+      ])].sort((x, y) => x - y);
+      const easingAt = (track: Track | undefined, time: number): Easing | null =>
+        track?.keyframes.find((key) => key.time === time)?.easing ?? null;
+      const remapped = times.map((time) => {
+        const x = sampleKeyList(txT?.keyframes ?? [], time, oldRest.tx);
+        const y = sampleKeyList(tyT?.keyframes ?? [], time, oldRest.ty);
+        const p = mapT(x, y);
+        return {
+          time, x: p.x, y: p.y,
+          ex: easingAt(txT, time) ?? easingAt(tyT, time) ?? ('easeInOut' as Easing),
+          ey: easingAt(tyT, time) ?? easingAt(txT, time) ?? ('easeInOut' as Easing),
+        };
+      });
+      const writeTrack = (channel: Channel, existing: Track | undefined, pick: 'x' | 'y') => {
+        const keyframes = remapped.map((r) => ({
+          time: r.time, value: r[pick], easing: pick === 'x' ? r.ex : r.ey,
+        }));
+        if (existing) existing.keyframes = keyframes;
+        else clip.tracks.push({ target: child.id, channel, keyframes });
+      };
+      writeTrack('tx', txT, 'x');
+      writeTrack('ty', tyT, 'y');
+    }
+  }
+
+  doc.parts = doc.parts.filter((p) => p !== part);
+  for (const clip of doc.clips) {
+    clip.tracks = clip.tracks.filter((t) => t.target !== id);
+  }
+  if (state.selectedPartId === id) selectPart(null);
+  return true;
+}
+
+/** Structural edits the AI assistant may request (opt-in). */
+export interface RigChanges {
+  addBones: { label: string; pivot: Vec2; parent: string | null }[];
+  reparent: { part: string; parent: string | null }[];
+  movePivots: { part: string; x: number; y: number }[];
+}
+
+/**
+ * Apply AI structural edits by part LABEL (the AI never sees ids). Returns the
+ * label → id map including newly created bones, for resolving clip targets after.
+ * Invalid references and cycle-creating reparents are skipped, not fatal.
+ */
+export function applyRigChanges(changes: RigChanges): Map<string, string> {
+  const doc = state.doc!;
+  const byLabel = new Map<string, string>(doc.parts.map((p) => [p.label, p.id]));
+
+  for (const b of changes.addBones ?? []) {
+    if (byLabel.has(b.label)) continue; // labels must stay unique
+    const parentId = b.parent ? (byLabel.get(b.parent) ?? null) : null;
+    const bone = addNullPart('bone', b.pivot, parentId, b.label.replace(/\s+/g, '_'));
+    byLabel.set(bone.label, bone.id);
+  }
+  for (const r of changes.reparent ?? []) {
+    const childId = byLabel.get(r.part);
+    if (!childId) continue;
+    setParent(childId, r.parent ? (byLabel.get(r.parent) ?? null) : null);
+  }
+  for (const m of changes.movePivots ?? []) {
+    const id = byLabel.get(m.part);
+    const part = id ? partById(id) : null;
+    if (part) part.pivot = { x: m.x, y: m.y };
+  }
+  return byLabel;
+}
+
+/**
+ * Delete parts (layers). Children of a deleted part re-adopt its nearest SURVIVING
+ * ancestor (artwork is never deleted implicitly), the parts' tracks vanish from every
+ * clip, and skin bindings referencing deleted bones are dropped. Returns deleted ids
+ * so the canvas can unregister their groups.
+ */
+export function deleteParts(ids: string[]): string[] {
+  const doc = state.doc;
+  if (!doc) return [];
+  const dead = new Set(ids.filter((id) => doc.parts.some((p) => p.id === id)));
+  if (dead.size === 0) return [];
+
+  for (const part of doc.parts) {
+    if (dead.has(part.id) || !part.parentId || !dead.has(part.parentId)) continue;
+    let anc: RigPart | null = partById(part.parentId);
+    while (anc && dead.has(anc.id)) anc = anc.parentId ? partById(anc.parentId) : null;
+    part.parentId = anc?.id ?? null;
+  }
+  doc.parts = doc.parts.filter((p) => !dead.has(p.id));
+  for (const clip of doc.clips) {
+    clip.tracks = clip.tracks.filter((t) => !dead.has(t.target));
+  }
+  for (const part of doc.parts) {
+    if (part.skin) {
+      part.skin.bones = part.skin.bones.filter((b) => !dead.has(b.id));
+      if (part.skin.bones.length === 0) part.skin = null;
+    }
+  }
+  if (state.selectedPartId && dead.has(state.selectedPartId)) selectPart(null);
+  else state.selectedPartIds = state.selectedPartIds.filter((id) => !dead.has(id));
+  return [...dead];
+}
+
 // ---- Draw order (z-order) ----
 // doc.parts array order IS the paint order: last = drawn on top. The layers panel
 // lists topmost first, so "up the layer list" means "later in doc.parts".
@@ -309,6 +562,38 @@ function ease(t: number, easing: Easing): number {
 }
 
 /**
+ * CSS-style cubic-bezier easing: solve x(u) = t for u (Newton with bisection
+ * fallback), then evaluate y(u). Control x's are assumed clamped to 0..1.
+ */
+export function cubicBezierEase(
+  x1: number, y1: number, x2: number, y2: number, t: number,
+): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  const bx = (u: number) => 3 * u * (1 - u) * (1 - u) * x1 + 3 * u * u * (1 - u) * x2 + u ** 3;
+  const by = (u: number) => 3 * u * (1 - u) * (1 - u) * y1 + 3 * u * u * (1 - u) * y2 + u ** 3;
+  const dbx = (u: number) =>
+    3 * (1 - u) * (1 - u) * x1 + 6 * u * (1 - u) * (x2 - x1) + 3 * u * u * (1 - x2);
+  let u = t;
+  for (let i = 0; i < 8; i++) {
+    const err = bx(u) - t;
+    if (Math.abs(err) < 1e-6) return by(u);
+    const d = dbx(u);
+    if (Math.abs(d) < 1e-9) break;
+    u -= err / d;
+    if (u <= 0 || u >= 1) break;
+  }
+  let lo = 0, hi = 1;
+  u = t;
+  for (let i = 0; i < 24; i++) {
+    if (bx(u) < t) lo = u;
+    else hi = u;
+    u = (lo + hi) / 2;
+  }
+  return by(u);
+}
+
+/**
  * The value a part's channel displays at a time: the ABSOLUTE keyframed value when the
  * channel is keyed in the active clip, otherwise the part's rest value. This is what
  * makes editing the rest pose in Setup mode safe — it never shifts keyed animation.
@@ -328,15 +613,9 @@ export function channelValue(part: RigPart, channel: Channel, time: number | nul
   return sampleChannel(part.id, channel, time);
 }
 
-/** Sample a channel value from the active clip at the given time. */
-export function sampleChannel(target: string, channel: Channel, time: number): number {
-  const clip = activeClip();
-  const fallback = CHANNEL_DEFAULTS[channel];
-  if (!clip) return fallback;
-  const track = clip.tracks.find((t) => t.target === target && t.channel === channel);
-  if (!track || track.keyframes.length === 0) return fallback;
-
-  const keys = track.keyframes;
+/** Interpolate a sorted keyframe list at a time (pure — no state lookup). */
+export function sampleKeyList(keys: Keyframe[], time: number, fallback: number): number {
+  if (keys.length === 0) return fallback;
   if (time <= keys[0].time) return keys[0].value;
   const last = keys[keys.length - 1];
   if (time >= last.time) return last.value;
@@ -347,10 +626,23 @@ export function sampleChannel(target: string, channel: Channel, time: number): n
     if (time >= k0.time && time <= k1.time) {
       const span = k1.time - k0.time;
       const t = span === 0 ? 1 : (time - k0.time) / span;
-      return k0.value + (k1.value - k0.value) * ease(t, k1.easing);
+      const eased = k1.bezier
+        ? cubicBezierEase(k1.bezier[0], k1.bezier[1], k1.bezier[2], k1.bezier[3], t)
+        : ease(t, k1.easing);
+      return k0.value + (k1.value - k0.value) * eased;
     }
   }
   return fallback;
+}
+
+/** Sample a channel value from the active clip at the given time. */
+export function sampleChannel(target: string, channel: Channel, time: number): number {
+  const clip = activeClip();
+  const fallback = CHANNEL_DEFAULTS[channel];
+  if (!clip) return fallback;
+  const track = clip.tracks.find((t) => t.target === target && t.channel === channel);
+  if (!track) return fallback;
+  return sampleKeyList(track.keyframes, time, fallback);
 }
 
 /**
@@ -485,26 +777,47 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
   };
   for (const part of doc.parts) {
     trackId(part.id);
-    part.rest = part.rest ?? { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1 };
+    part.kind = part.kind ?? 'art';
+    part.rest = part.rest ?? { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 };
     part.rest.sx = part.rest.sx ?? 1;
     part.rest.sy = part.rest.sy ?? 1;
+    part.rest.kx = part.rest.kx ?? 0;
+    part.rest.ky = part.rest.ky ?? 0;
     part.parentId = part.parentId ?? null;
+    part.boneTip = part.boneTip ?? null;
+    part.skin = part.skin ?? null;
+    if (part.skin && !Array.isArray(part.skin.bones)) part.skin = null;
     part.pivotHint = part.pivotHint ?? null;
     part.paths.forEach((p, i) => {
       trackId(p.id);
       p.label = p.label ?? `path_${i + 1}`;
+      if (p.nodeTypes != null && typeof p.nodeTypes !== 'string') p.nodeTypes = null;
     });
   }
   // Drop dangling parent references (e.g. hand-edited files).
   const ids = new Set(doc.parts.map((p) => p.id));
   for (const part of doc.parts) {
     if (part.parentId && !ids.has(part.parentId)) part.parentId = null;
+    if (part.skin) {
+      part.skin.bones = part.skin.bones.filter((b) => ids.has(b.id));
+      if (part.skin.bones.length === 0) part.skin = null;
+    }
   }
   doc.clips = doc.clips?.length ? doc.clips : [{ name: 'idle', duration: 2000, tracks: [] }];
   for (const clip of doc.clips) {
     for (const track of clip.tracks) {
       for (const k of track.keyframes) {
         if (!EASINGS.includes(k.easing)) k.easing = 'easeInOut';
+        if (k.bezier != null) {
+          const b = k.bezier;
+          const ok =
+            Array.isArray(b) && b.length === 4 && b.every((n) => Number.isFinite(n));
+          if (!ok) k.bezier = null;
+          else {
+            b[0] = Math.min(1, Math.max(0, b[0]));
+            b[2] = Math.min(1, Math.max(0, b[2]));
+          }
+        }
       }
     }
   }

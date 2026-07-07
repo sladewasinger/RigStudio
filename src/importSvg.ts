@@ -21,6 +21,7 @@ import { PivotHint, RigDoc, RigPart, RigPath, freshId } from './model';
 import { rotationPivotOf } from './transforms';
 
 const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
+const SODIPODI_NS = 'http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd';
 
 export function importSvg(svgText: string, name: string): RigDoc {
   const parsed = new DOMParser().parseFromString(svgText, 'image/svg+xml');
@@ -90,8 +91,8 @@ function elementToPart(el: Element): RigPart {
   const pivotHint = rotationPivot ? null : transformCenterHint(el);
 
   return {
-    id: freshId('part'), label, transform, pivot, pivotHint, paths,
-    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1 },
+    id: freshId('part'), label, kind: 'art', transform, pivot, pivotHint, paths,
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
     parentId: null,
   };
 }
@@ -165,6 +166,13 @@ function shapeToPath(el: Element, transform: string): RigPath | null {
       el.getAttribute('inkscape:label') ??
       el.getAttribute('id') ??
       'shape',
+    // Inkscape's per-node type flags survive the trip (normalization keeps the node
+    // count: H/V/S/T/Q expand 1:1, arcs stay arcs). Shapes have no authored nodes.
+    nodeTypes:
+      el.tagName === 'path'
+        ? (el.getAttributeNS(SODIPODI_NS, 'nodetypes') ??
+           el.getAttribute('sodipodi:nodetypes'))
+        : null,
     d,
     fill: fillRaw === 'none' ? null : (fillRaw ?? '#000000'),
     fillOpacity: parseFloat(attr('fill-opacity') ?? '1'),

@@ -47,7 +47,31 @@ body {
 #layers { border-right: 1px solid #000; }
 #inspector { border-left: 1px solid #000; }
 
+#canvas-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+#canvas-tools {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  height: 40px;
+  flex: none;
+  padding: 0 10px;
+  background: var(--panel);
+  border-bottom: 1px solid #000;
+  overflow: hidden;
+  white-space: nowrap;
+}
+#canvas-tools button { padding: 3px 9px; font-size: 12px; }
+#canvas-tools button.armed { background: var(--accent-2); color: #101018; }
+#canvas-tools .tool-sep { width: 1px; height: 20px; background: #45454f; }
+#canvas-tools .hint { margin: 0; }
+
 #canvas {
+  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -337,4 +361,116 @@ input[type='number'] { width: 90px; }
 }
 
 .node-handle { fill: rgba(122, 162, 247, 0.7); stroke: #fff; stroke-width: 0.5; cursor: move; }
+.node-handle.selected { fill: #ffd166; stroke: #fff; }
 .ctrl-handle { fill: rgba(255, 209, 102, 0.7); stroke: #6b5b1e; stroke-width: 0.5; cursor: move; }
+.handle-line {
+  stroke: rgba(255, 209, 102, 0.5);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+/* Bone / group glyphs */
+.null-glyph { cursor: move; }
+.null-glyph.bone path {
+  fill: rgba(122, 162, 247, 0.35);
+  stroke: var(--accent-2);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+.null-glyph.group rect {
+  fill: rgba(255, 209, 102, 0.18);
+  stroke: #ffd166;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.null-glyph.selected path, .null-glyph.selected rect {
+  fill: rgba(255, 111, 97, 0.4);
+  stroke: var(--accent);
+}
+
+/* Layers tree kind icons */
+.layer-kind { width: 14px; text-align: center; flex: none; font-size: 11px; }
+.layer-kind.bone { color: var(--accent-2); }
+.layer-kind.group { color: #ffd166; }
+
+/* Align & distribute */
+.align-grid { display: flex; gap: 4px; flex-wrap: wrap; margin: 6px 0; }
+.align-grid button { padding: 3px 8px; font-size: 12px; min-width: 34px; }
+
+/* Graph (curve) editor */
+.graph-panel { margin-top: 8px; border-top: 1px solid #45454f; padding-top: 6px; }
+.graph-header { display: flex; gap: 10px; align-items: center; margin-bottom: 4px; }
+.graph-header .graph-track-name { color: var(--accent-2); font-weight: 600; }
+.graph-header button { padding: 3px 8px; font-size: 12px; height: 24px; }
+.graph-empty { color: var(--muted); padding: 14px 10px; }
+.graph-svg { display: block; width: 100%; height: 220px; touch-action: none; }
+.graph-grid-line { stroke: #3a3a44; stroke-width: 1; }
+.graph-axis-label { fill: var(--muted); font: 10px system-ui, sans-serif; }
+.graph-curve { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.graph-key { fill: var(--accent); stroke: #fff; stroke-width: 1; cursor: move; }
+.graph-key:hover { fill: #ffd166; }
+.graph-handle-line { stroke: rgba(122, 162, 247, 0.55); stroke-width: 1; pointer-events: none; }
+.graph-handle-line.preset { stroke: rgba(122, 162, 247, 0.25); stroke-dasharray: 3 3; }
+.graph-handle { fill: var(--accent-2); stroke: #fff; stroke-width: 0.8; cursor: move; }
+.graph-handle:hover { fill: #ffd166; }
+.graph-handle.preset { fill: rgba(122, 162, 247, 0.35); stroke: none; }
+.graph-handle.preset:hover { fill: #ffd166; }
+
+/* Icon buttons */
+.icon { display: inline-flex; align-items: center; }
+button .icon { margin-right: 1px; }
+button.icon-btn { display: inline-flex; align-items: center; gap: 4px; }
+#canvas-tools .tool-switch { display: flex; border: 1px solid #45454f; border-radius: 6px; overflow: hidden; }
+#canvas-tools .tool-switch button { border: none; border-radius: 0; padding: 4px 8px; }
+#canvas-tools .tool-switch button.active { background: var(--accent-2); color: #101018; }
+#canvas-tools .tool-switch button + button { border-left: 1px solid #45454f; }
+
+/* Transform gizmos */
+.tool-gizmo line, .tool-gizmo path, .tool-gizmo rect, .tool-gizmo circle { vector-effect: non-scaling-stroke; }
+.gizmo-axis-x { stroke: #e0564f; stroke-width: 1.6; }
+.gizmo-axis-x.head { fill: #e0564f; stroke: none; }
+.gizmo-axis-y { stroke: #4fbf67; stroke-width: 1.6; }
+.gizmo-axis-y.head { fill: #4fbf67; stroke: none; }
+.gizmo-hit { stroke: transparent; stroke-width: 10; cursor: pointer; }
+.gizmo-free { fill: rgba(122, 162, 247, 0.35); stroke: var(--accent-2); stroke-width: 1; cursor: move; }
+.gizmo-ring-visual { fill: none; stroke: var(--accent-2); stroke-width: 1.6; }
+.gizmo-ring-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: grab; }
+
+/* Bone tip + placement preview */
+.bone-tip-handle { fill: #ffd166; stroke: #6b5b1e; stroke-width: 0.8; cursor: move; vector-effect: non-scaling-stroke; }
+.null-glyph.placing { opacity: 0.6; pointer-events: none; }
+
+/* Skinned-part icon in layers */
+.layer-kind.skin { color: #4fbf67; }
+
+/* Skew handles (rotate handle set, side positions) */
+.skew-handle {
+  fill: rgba(255, 111, 97, 0.25);
+  stroke: var(--accent);
+  stroke-width: 0.8;
+  vector-effect: non-scaling-stroke;
+  cursor: col-resize;
+}
+.skew-handle.handle-e, .skew-handle.handle-w { cursor: row-resize; }
+.skew-handle:hover { fill: var(--accent); }
+
+/* Node types + rubber-band selection */
+.node-handle.nt-s { fill: rgba(79, 191, 103, 0.85); }
+.node-handle.nt-z { fill: rgba(255, 111, 97, 0.85); }
+.node-marquee {
+  position: absolute;
+  border: 1px dashed var(--accent-2);
+  background: rgba(122, 162, 247, 0.1);
+  pointer-events: none;
+  z-index: 5;
+}
+
+/* Anchor for the node-marquee overlay div */
+#canvas { position: relative; }
+
+/* Drill-down focus: parts outside the editing context fade and pass clicks through */
+g.dimmed { opacity: 0.22; pointer-events: none; transition: opacity 0.12s ease; }
+
+/* Inkscape node shape language: diamond = corner, square = smooth, circle = symmetric */
+.node-handle.nt-c { fill: rgba(122, 162, 247, 0.85); stroke: #fff; stroke-width: 0.5; }

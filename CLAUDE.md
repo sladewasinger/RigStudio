@@ -46,8 +46,16 @@ from the console.
 | `transforms.ts` | SVG transform-list parser plus a small affine `Mat` toolkit (`multiply`/`invertMat`/`applyMat`/`rotationMat`); `rotationPivotOf` finds a transform list's fixed point by testing the *composed matrix* for a rigid rotation, so it recovers pivots regardless of whether Inkscape wrote `rotate(...)` or an equivalent `matrix(...)` |
 | `exportCompose.ts` | `RigDoc` → Kotlin text (mood enum, keyframe choreography with all 4 easings mapped to Compose easings, rest-pose offsets folded into emitted channels, nested parent-chain `withTransform` calls, `DrawScope` replay of SVG transforms incl. `matrix(...)`) |
 | `exportLottie.ts` | `RigDoc` + one clip → Lottie JSON (v5.7.0, 60fps): a root null layer for whole-figure translate/scale, one shape layer per part with Lottie-native `parent` layer references mirroring the bone hierarchy, geometry flattened through baked SVG transforms with arcs converted to cubics, easings converted to bezier handles |
+| `ik.ts` | Analytic IK: `solveTwoBone` (law-of-cosines two-joint solve, bend-direction preserving, reach-clamped) and `solveAim`, both in degrees/root space |
+| `skin.ts` | Skinning math: `distToSegment`, `skinWeights` (normalized inverse-square distance to bind-time bone segments) |
+| `graph.ts` | Curve editor panel: value-vs-time plot per track, draggable keys, per-segment bezier handles writing `Keyframe.bezier` |
 | `claude.ts` | Anthropic SDK calls (`claude-opus-4-8`): `animateWithClaude` (adaptive thinking, structured outputs guaranteeing a valid clip JSON, parent-aware system prompt, optional base64 pose snapshot for vision grounding) and `critiqueWithClaude` (plain-text animation review) |
 | `main.ts` | Bootstrapping, toolbar (open SVG/project, sample, save project, undo/redo, Compose/Lottie export, Setup/Animate toggle), autosave to `localStorage`, keyboard shortcuts (Tab mode toggle, Ctrl+C/V keyframe copy-paste, Delete, arrow-key nudge-or-scrub, `F` fit-view, Space play) |
+
+## Roadmap
+
+Feature roadmap (v1 checklist + explicit v2 out-of-scope list) lives in `ROADMAP.md`.
+All v1 items are implemented and verified as of 2026-07-07.
 
 ## Conventions that must hold
 
@@ -75,6 +83,44 @@ from the console.
   ancestors' pose transforms (outermost first) followed by its own; `ancestorChain()` is
   cycle-safe and `setParent()` refuses to create one. Effective pivots for gizmos/bone
   lines account for the whole chain (`view.ts`'s `effectivePivot`/`chainMatOf`).
+- **Bones and groups are partless parts** (`part.kind: 'art'|'bone'|'group'`,
+  `paths: []`). They pose/animate/parent like any part; the canvas draws them as
+  interactive glyphs (diamond/square) carrying `data-part-id`. Compose export skips
+  their draw functions but keeps them in child transform chains; Lottie exports them
+  as null layers (ty 3). `ungroupPart()` dissolves a REST-POSED null exactly (angles
+  add; translations remap affinely, resampled on union key times when the group is
+  rotated) and refuses if the null itself has keyframes.
+- **Group-aware selection**: clicking artwork inside a closed `group` selects the
+  group; double-click steps in (group → part → path); Escape/blank click steps out
+  (`view.ts`'s `enteredGroups`).
+- **Flips are negative rest scale** pinned at the part's rendered bbox center — never
+  a geometry rewrite — so both exporters inherit them through the existing rest-scale
+  paths. The scale-drag clamp applies to drag factors, not stored values; don't
+  "sanitize" negative sx/sy anywhere.
+- **Keyed easing precedence:** `Keyframe.bezier` (CSS cubic-bezier on the ARRIVING
+  segment, set by the curve editor) overrides `Keyframe.easing` everywhere — model
+  sampling, Compose (`CubicBezierEasing`), Lottie (o/i handles). Presets stay the
+  fallback; the AI schema only speaks presets.
+- **Skinned parts** (`part.skin`) render via per-frame linear-blend deformation of
+  their REST path data (never mutate `path.d` at render time — only the DOM `d`
+  attribute). Binding bakes all static transforms into `path.d` and zeroes
+  pose/parent; weights are runtime-derived from `bindSeg` distances. Skinned parts
+  don't respond to pose drags and export rigidly.
+- **Tool semantics** (`state.tool`): 'select' keeps the classic mode-dependent drags;
+  'translate'/'rotate' force that manipulation in both editor modes (Setup → rest,
+  Animate → keys); 'ik' rotates the two nearest ancestor joints (`src/ik.ts`). Gizmo
+  drags reuse the exact same drag pipelines as body drags.
+- **Node types are Inkscape's convention** (`RigPath.nodeTypes`, one char per drawing
+  command, Z excluded): 'c' corner, 's' smooth (mirror direction), 'z' symmetric
+  (mirror direction + length). They BIND handle-drag behavior and are set by the node
+  ops; keep the string in sync through any command-count change (see
+  `editNodeStructure` / `ensureNodeTypes`). Untyped (null) paths use collinearity
+  detection — do not fabricate flags on import.
+- **Rest skew (`rest.kx/ky`, degrees)** lives with rest scale in the innermost local
+  transform around the local pivot and composes tan-additively during drags. Compose
+  export folds scale+skew into one `svgMatrix` ONLY when skew ≠ 0 — the plain
+  `scale(..., pivot = ...)` emission is load-bearing for skew-free parts (tests pin
+  it).
 - **Pivots are recovered from the composed transform matrix, not the transform-list
   syntax** — Inkscape freely rewrites `rotate(a,cx,cy)` as an equivalent `matrix(...)`,
   so `rotationPivotOf` in `transforms.ts` tests whether the *composed* matrix is a rigid
@@ -99,9 +145,173 @@ from the console.
 - **The canonical Pip artwork** is `Dosey/media/PIP_MASTER.svg`; `public/PIP_MASTER.svg`
   here is a bundled sample copy — re-sync it when the master changes.
 
+## Testing interactions (do not regress this)
+
+Synthetic-event verification MUST simulate real input or it will pass while the app
+is broken (this happened): dispatch to `document.elementFromPoint(x,y)` — the true
+hit target — not a hand-picked element; simulate full gestures (double-click =
+down/up ×2 + dblclick, re-resolving the target between clicks because overlays
+appear); re-query elements after any render and re-read `state.doc` after undo;
+assert numerically (px drift, cos angles) and on the DOM. Full checklist lives in
+ROADMAP.md "Testing conventions".
+
 ## Status
 
-### Second wave — implemented and verified (this session)
+### Seventh wave (drill-down UX overhaul) — implemented and verified
+
+All verified with REALISTIC gestures (true hit targets via elementFromPoint, full
+click sequences); build clean; 161 tests passing.
+
+- **Double-click drill-down FIXED** (the reported bug): the first click of a
+  double-click selects the group and draws its pivot grab circle at the selection
+  center — exactly where the second click lands — so the overlay ate the dblclick
+  (and could start an accidental pivot drag). dblclick now resolves artwork through
+  the overlay via `elementsFromPoint` (`view.ts artworkUnderPointer`); pivot grab
+  radius reduced 2.2×→1.6×. Verified with a true double-click on the body center of
+  a full-figure group: drills to the body.
+- **Focus/fade drill-down**: entered groups and node editing dim everything outside
+  the context (`focusContext()` → `g.dimmed`, opacity 0.22 + pointer-events none).
+  Faded parts can't be selected; clicks fall through (blank ⇒ exits focus). Verified:
+  7/8 parts dimmed in node mode; clicking faded artwork selected nothing.
+- **Node-mode canvas ownership**: canvas clicks in node mode never switch parts —
+  near the edited outline they start a SEGMENT BEND; anywhere else (including over
+  faded artwork) they rubber-band nodes. Verified a marquee swept across the faded
+  body selecting 7 leg nodes without touching the selection.
+- **Segment bending**: minimal-norm two-control-point solve keeps the endpoints
+  fixed and moves the grab-parameter point exactly with the pointer (verified 0.4 px
+  final error); L segments auto-convert to C ("handles grow"). `segmentHit` samples
+  L/C segments within a handle-size tolerance; arcs are not bendable (insert a node
+  to convert first). Two follow-up fixes, both verified on left_leg.leg's top edge:
+  (1) the implicit Z CLOSING segment is bendable — first movement splices an
+  explicit closing cubic in front of the Z (types string gets a 'c' for the new
+  node, shape stays closed, curve-through-pointer 0.1 px); (2) bend hit-testing is
+  GEOMETRIC against the edited paths only — the event target is ignored, so a
+  sibling path drawn on top (the leg's inner shadow) can't swallow the drag.
+- **Inkscape node shapes**: corner = diamond, smooth = square, symmetric = circle
+  (untyped = small circle). Verified 5 squares + 2 diamonds on left_leg's `csssssc`.
+
+### Sixth wave (bug fixes + polish) — implemented and verified
+
+- **Node-drag teleport FIXED**: node/handle drags used a captured overlay element's
+  screen matrix; the overlay rebuild on node-select detached that element, and a
+  detached element's CTM is garbage → nodes flew off-screen. Drags now map the
+  pointer through the svg's own screen CTM plus the TRANSFORM STRINGS
+  (`pointerInPathSpace`), which also makes them exact under any zoom/pan. Verified:
+  endpoint and control-handle drags land at 0.0 px from the pointer at 6× zoom with
+  the view panned. Rule going forward: never keep overlay DOM references across
+  renders — compute from strings.
+- **Delete removes layers** (Setup, pose tool): deletes every selected part;
+  children re-adopt the nearest surviving ancestor, tracks and skin references are
+  scrubbed, canvas groups unregistered. Verified for a group (children survive and
+  detach) and an art part, plus full undo. Delete still means keyframes in Animate
+  and nodes in node-editing mode — that precedence order lives in main.ts.
+- **Groups draw a dashed selection box** around the union of their descendants'
+  rendered boxes (root-space AABB, passive holder), primary/secondary styling like
+  parts. Verified on a body+face group.
+- **Click-vs-double-click**: re-verified — slow second click on the selected part
+  swaps scale/rotate handle sets; a quick double-click drills down
+  (group → part → path).
+
+### Fifth wave (v2 second batch) — implemented and verified
+
+All three remaining v2 items from the original list. Verified live (Pip sample +
+synthetic pointer/keyboard, DOM/numeric assertions), `npm run build` clean, **161
+unit tests passing** (adds sodipodi import, skew parse/compose, and skew-export
+tests; two stale tests updated for skew becoming a supported transform).
+
+- **Persistent node types**: `sodipodi:nodetypes` imports verbatim (verified
+  `cssssscc` on left_leg), tints handles, and drives dragging — a control-handle drag
+  on a typed 's' node mirrors its partner exactly (cos = −1) regardless of prior
+  collinearity; 'z' also matches lengths; 'c' is free; untyped falls back to
+  collinearity detection. smooth/symmetric/corner ops write the flag (verified a
+  marquee + corner op rewrote exactly the selected chars); insert/delete splice the
+  string; Inkscape's occasional extra closing char is normalized lazily.
+- **Node multi-select**: Shift+click toggle, blank-canvas rubber band (client-rect
+  hit test, div anchored to #canvas), group drag with identical deltas across nodes
+  (cross-path via holder-matrix conversion), multi-node ops, Delete, arrow nudge
+  (0.5 / Shift 5 doc units). Structure edits clear the node selection (indexes
+  shift).
+- **Skew handles**: in the rotate handle set, side handles shear with the opposite
+  edge pinned (verified kx = −5.6° with 0 px opposite-edge drift), tan-additive
+  composition, ±85° clamp. `rest.kx/ky` render via skewX/skewY in the innermost
+  local transform; skew parses/composes in transforms.ts (exhaustive union — the old
+  "ignore with warning" behavior is gone). Compose folds pivot+scale+skew into one
+  `svgMatrix(...)` (plain scale emission is preserved when skew is 0); Lottie bakes
+  skew into geometry; baked SVG skewX/skewY in imports also export now.
+
+### Fourth wave (v2 first batch) — implemented and verified
+
+All verified live (synthetic pointer/keyboard + DOM/numeric assertions), build clean,
+**158 unit tests passing** (adds `ik.test.ts` — solver reach/clamp/bend-direction and
+skin-weight math — and the curve editor's `graph.test.ts`).
+
+- **Context-aware movement** (bug fix): selecting a part inside a group via Layers
+  now opens its ancestor groups and canvas drags manipulate THAT part; verified the
+  reported scenario (group all but shadow → pick right_arm in Layers → drag moves the
+  arm, group untouched). Already-selected parts are never hijacked back to the group.
+- **Transform tools** (`state.tool`, keys V/T/R/I + icon switcher): translate gizmo
+  with axis arrows (verified: X-arrow drag with a diagonal pointer moved tx only),
+  rotate ring, IK tool. Flips rebound to Shift+H/V.
+- **IK**: two-bone analytic solve in `src/ik.ts`; verified live on a placed bone
+  chain — both ancestor joints rotate, the grabbed part's own channel untouched, the
+  grab point chases the pointer. Works on rest (Setup) and keys (Animate).
+- **Bones v2**: press-drag-release placement (origin→tip, live preview), kite glyph,
+  Setup tip handle. `RigPart.boneTip` in the part's own frame.
+- **Skinning**: `bindSelectedToBones()` bakes chain+rest+baked+path transforms into
+  rest geometry (stroke widths scaled), zeroes pose, stores per-bone `restWorldInv` +
+  `bindSeg`; per-frame LBS rewrites d attributes (`renderSkinnedPart`, runtime weight
+  cache keyed by geometry signature). Verified: bind → bone rotation deforms the
+  rendered path while `path.d` rest data stays untouched; Setup shows rest; unbind
+  restores rigidity. Exports render skinned parts RIGIDLY (documented limitation).
+- **Curve editor** (`src/graph.ts` + timeline "curves" toggle): verified a preset
+  handle grab converts the segment to a custom bezier (x-clamped, y overshoots
+  allowed), sampling honors it (rendered pose differs vs preset and restores
+  exactly), and both exporters map it (Compose `CubicBezierEasing`, Lottie o/i).
+  Gotcha fixed: never draw only inside requestAnimationFrame — headless previews
+  produce no frames; draw immediately, refine on rAF.
+- **Icons**: inline SVG set (`panels.ts` `ICON_PATHS`) for tools/flip/group/bone/
+  bind/align buttons.
+
+### Third wave (v1 roadmap) — implemented and verified
+
+Everything in ROADMAP.md's v1 sections, all verified live in the preview with
+numeric/DOM assertions; `npm run build` clean; **142 unit tests passing** (adds
+`align.test.ts` — 35 tests — plus bone/group/structural and exporter-null coverage).
+
+- **Flip H/V** (Setup: `H`/`V` keys + canvas-tools buttons): negates rest sx/sy with
+  bbox-center compensation — verified 0.1 px center drift, pivot untouched, flip-back
+  exact.
+- **Align & distribute** (inspector section, Setup, with reference dropdown:
+  selection/first/last/canvas): pure math in `src/align.ts`, applied through
+  parent-chain-aware rest translation. Verified left-align converges edges to within
+  the 0.1-unit rest rounding.
+- **Bezier node editing**: handle lines, node click-selection, one-shot
+  smooth/symmetric/corner(retract) ops, line↔curve conversion, and smooth-node
+  mirroring during control-point drags (Alt breaks). Verified numerically: symmetric
+  → equal lengths and cos = −1 opposition; mirror preserved through a drag; →line
+  removes and →curve restores control handles.
+- **Bones**: canvas-tools "+ bone" then click places a `kind:'bone'` part parented to
+  the selection (pivot stored through the parent's full pose chain). Diamond glyph is
+  selectable/draggable; bones ride parent chains and auto-key their own rotation in
+  Animate. Multi-joint chains = bones parented to bones.
+- **Groups**: Ctrl+G wraps selection (outermost members only, common parent adopted,
+  pivot at selection-bbox center); Ctrl+Shift+G dissolves — verified ZERO render
+  drift dissolving a 25°-rotated group, with keyed rotations shifted and keyed
+  translations remapped (union-time resampling when rotated; unit-tested against
+  composed matrices). Group-aware clicks: click selects group, dblclick enters,
+  Layers Ctrl+click toggles rows; bone ◆ / group ▣ icons; ancestors of the selection
+  auto-expand.
+- **Exporters**: Compose skips partless draw functions but keeps bones/groups in
+  child chains (unit-tested); Lottie emits them as ty:3 null layers (live-verified).
+- **AI structural mode**: "allow rig changes" toggle → extended structured-output
+  schema (addBones/reparent/movePivots by label), applied atomically before track
+  resolution in one undo step (`model.applyRigChanges`, unit-tested: cycle guards,
+  duplicate-label skip, label→id map). Scene JSON now carries part kinds. NOT run
+  against the live API (needs a real key) — the apply path is unit-tested, the
+  schema/prompt are reviewed only.
+- Layout: new slim canvas-tools bar above the canvas (`#canvas-col` wrapper).
+
+### Second wave — implemented and verified (previous session)
 
 All verified live in the preview (synthetic pointer/keyboard events + DOM assertions),
 type-check and `npm run build` clean, 40 existing unit tests still passing.
