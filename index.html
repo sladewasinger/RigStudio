@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rig Studio</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header id="toolbar">
+      <strong>Rig Studio</strong>
+      <button id="btn-open">Open SVG…</button>
+      <button id="btn-sample">Load Pip sample</button>
+      <button id="btn-undo" title="Ctrl+Z" disabled>&#x21B6; Undo</button>
+      <button id="btn-redo" title="Ctrl+Y" disabled>&#x21B7; Redo</button>
+      <span class="spacer"></span>
+      <button id="btn-export">Export Compose rig (.kt)</button>
+      <input id="file-input" type="file" accept=".svg" hidden />
+    </header>
+    <main id="layout">
+      <aside id="layers"></aside>
+      <section id="canvas"></section>
+      <aside id="inspector"></aside>
+    </main>
+    <footer id="timeline"></footer>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
