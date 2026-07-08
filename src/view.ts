@@ -343,6 +343,36 @@ export function partRootBoxes(ids: string[]): Map<string, { x: number; y: number
   return out;
 }
 
+/**
+ * Nudge the selected parts by a SCREEN-pixel delta (arrow keys), converted through
+ * the current zoom and each part's parent chain — the keyboard twin of a translate
+ * drag (Setup writes rest, Animate keys tx/ty at the playhead). Sub-0.1 steps at
+ * high zoom survive thanks to finer rounding. Returns whether anything moved.
+ */
+export function nudgeSelectedParts(dxPx: number, dyPx: number): boolean {
+  if (!svg) return false;
+  const parts = selectedParts().filter((p) => !p.skin);
+  if (parts.length === 0) return false;
+  const ctm = svg.getScreenCTM();
+  const scale = ctm ? Math.hypot(ctm.a, ctm.b) : 1;
+  const dx = dxPx / scale;
+  const dy = dyPx / scale;
+  const t = poseTime();
+  const setup = state.editorMode === 'setup';
+  for (const part of parts) {
+    const local = applyMat(linearOnly(invertMat(chainMatOf(part, t))), dx, dy);
+    if (setup) {
+      part.rest.tx = round3(part.rest.tx + local.x);
+      part.rest.ty = round3(part.rest.ty + local.y);
+    } else {
+      setKeyframe(part.id, 'tx', round3(channelValue(part, 'tx', t) + local.x));
+      setKeyframe(part.id, 'ty', round3(channelValue(part, 'ty', t) + local.y));
+    }
+  }
+  renderPose();
+  return true;
+}
+
 /** Apply root-space translation deltas (from align/distribute) via rest translation. */
 export function applyRootDeltas(deltas: Map<string, { dx: number; dy: number }>): void {
   const doc = state.doc;
@@ -476,18 +506,19 @@ function ownPoseTransform(part: RigPart, t: number | null): string {
 }
 
 /** The pivot mapped into the part's pre-baked local space (where rest scale applies). */
-function localPivotOf(part: RigPart): { x: number; y: number } {
-  return applyMat(invertMat(matrixOfTransform(part.transform)), part.pivot.x, part.pivot.y);
+function localPivotOf(part: RigPart, pivot = part.pivot): { x: number; y: number } {
+  return applyMat(invertMat(matrixOfTransform(part.transform)), pivot.x, pivot.y);
 }
 
 /**
  * Rest scale AND skew, applied innermost (after the baked transform) around the local
  * pivot: the artwork reshapes along its own axes and the joint stays exactly in place.
+ * `pivot` overrides the stored pivot (pivot drags evaluate candidate positions).
  */
-function innerLocalTransform(part: RigPart): string {
+function innerLocalTransform(part: RigPart, pivot = part.pivot): string {
   const { sx, sy, kx, ky } = part.rest;
   if (sx === 1 && sy === 1 && kx === 0 && ky === 0) return '';
-  const pl = localPivotOf(part);
+  const pl = localPivotOf(part, pivot);
   const ops = [`translate(${pl.x},${pl.y})`];
   if (sx !== 1 || sy !== 1) ops.push(`scale(${sx},${sy})`);
   if (kx !== 0) ops.push(`skewX(${kx})`);
@@ -1300,7 +1331,16 @@ type DragState =
       startClient: { x: number; y: number };
       active: boolean;
     }
-  | { kind: 'pivot'; part: RigPart; startClient: { x: number; y: number }; active: boolean }
+  | {
+      kind: 'pivot';
+      part: RigPart;
+      /** Pivot + own translate at drag start: compensation is solved absolutely from
+       * these so per-move rounding never accumulates into artwork drift. */
+      startPivot: { x: number; y: number };
+      startTranslate: { x: number; y: number };
+      startClient: { x: number; y: number };
+      active: boolean;
+    }
   | {
       kind: 'node'; part: RigPart; pathId: string; cmdIndex: number;
       field: 'x' | 'x1' | 'x2';
@@ -1729,7 +1769,14 @@ function wireInteractions(): void {
     if (pivotEl) {
       const part = selectedPart();
       if (!part) return;
-      drag = { kind: 'pivot', part, startClient: { x: ev.clientX, y: ev.clientY }, active: false };
+      drag = {
+        kind: 'pivot',
+        part,
+        startPivot: { ...part.pivot },
+        startTranslate: ownTranslateOf(part, poseTime()),
+        startClient: { x: ev.clientX, y: ev.clientY },
+        active: false,
+      };
       try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
@@ -1938,11 +1985,17 @@ function wireInteractions(): void {
       notifyTimelineOnly();
     } else if (drag.kind === 'translate') {
       const p = pointerInRoot(ev);
-      drag.current = { x: p.x, y: p.y };
       let dx = p.x - drag.startX;
       let dy = p.y - drag.startY;
       if (drag.axis === 'x') dy = 0;
-      if (drag.axis === 'y') dx = 0;
+      else if (drag.axis === 'y') dx = 0;
+      else if (ev.ctrlKey) {
+        // Ctrl constrains a free move to the dominant axis (Inkscape-style).
+        if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
+        else dx = 0;
+      }
+      // The constrained point, so the dashed line + Δ readout show the applied move.
+      drag.current = { x: drag.startX + dx, y: drag.startY + dy };
       for (const { part, startTx, startTy, invLinear } of drag.targets) {
         const local = applyMat(invLinear, dx, dy);
         const tx = round1(startTx + local.x);
@@ -2053,14 +2106,58 @@ function wireInteractions(): void {
       part.boneTip = { x: round1(local.x), y: round1(local.y) };
       renderPose();
     } else if (drag.kind === 'pivot') {
+      const d = drag;
       const p = pointerInRoot(ev);
-      const part = drag.part;
+      const part = d.part;
       const t = poseTime();
-      // Un-apply the ancestors' motion and the part's own translation so the stored
-      // pivot stays in rest/document coordinates.
+      // Un-apply the ancestors' motion so we work in the part's parent-chain frame
+      // (pivot + own translate live there: effectivePivot = chain · (pivot + ot)).
       const local = applyMat(invertMat(chainMatOf(part, t)), p.x, p.y);
-      const ot = ownTranslateOf(part, t);
-      part.pivot = { x: round1(local.x - ot.x), y: round1(local.y - ot.y) };
+      // Moving the joint must never move the artwork. The pivot anchors the part's
+      // own rotation AND the innermost rest scale/skew, so re-anchoring it shifts
+      // the rendered art unless the rest translation absorbs the difference. Solve
+      // both together: find pivot pv with pv + translate(pv) = pointer, where
+      // translate(pv) is the own-translate that keeps the drag-start own matrix
+      // intact. translate(pv) is affine in pv, so one Jacobian step (from finite
+      // differences) solves it exactly.
+      const rot = channelValue(part, 'rotate', t);
+      const ownMat = (pv: { x: number; y: number }): Mat =>
+        matrixOfTransform(
+          [`rotate(${rot},${pv.x},${pv.y})`, part.transform, innerLocalTransform(part, pv)]
+            .filter(Boolean)
+            .join(' '),
+        );
+      const m0 = ownMat(d.startPivot);
+      const translateFor = (pv: { x: number; y: number }) => {
+        // m0 · ownMat(pv)⁻¹ is a pure translation (identical linear parts).
+        const dm = multiply(m0, invertMat(ownMat(pv)));
+        return { x: d.startTranslate.x + dm.e, y: d.startTranslate.y + dm.f };
+      };
+      const F = (pv: { x: number; y: number }) => {
+        const tn = translateFor(pv);
+        return { x: pv.x + tn.x, y: pv.y + tn.y };
+      };
+      const seed = { x: local.x - d.startTranslate.x, y: local.y - d.startTranslate.y };
+      const f0 = F(seed);
+      const fx = F({ x: seed.x + 1, y: seed.y });
+      const fy = F({ x: seed.x, y: seed.y + 1 });
+      const ja = fx.x - f0.x, jb = fx.y - f0.y, jc = fy.x - f0.x, jd = fy.y - f0.y;
+      const det = ja * jd - jb * jc;
+      let pv = seed;
+      if (Math.abs(det) > 1e-9) {
+        const rx = local.x - f0.x, ry = local.y - f0.y;
+        pv = {
+          x: seed.x + (jd * rx - jc * ry) / det,
+          y: seed.y + (ja * ry - jb * rx) / det,
+        };
+      }
+      part.pivot = { x: round1(pv.x), y: round1(pv.y) };
+      // Recompute the compensation for the ROUNDED pivot so the artwork stays put
+      // exactly (finer rounding here — 0.1 on the translation would visibly wiggle
+      // the art while the pivot slides).
+      const tn = translateFor(part.pivot);
+      part.rest.tx = round3(tn.x);
+      part.rest.ty = round3(tn.y);
       renderPose();
     } else if (drag.kind === 'bendSegment') {
       const d = drag;
@@ -2566,6 +2663,12 @@ function round1(n: number): number {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** For values that must stay finer than the 0.1 rest grid (zoomed-in nudges, pivot
+ * compensation) — still coarse enough to keep serialized floats clean. */
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
 }
 
 // The timeline listens for this to redraw keyframe diamonds during a drag without the

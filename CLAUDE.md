@@ -93,6 +93,13 @@ All v1 items are implemented and verified as of 2026-07-07.
 - **Group-aware selection**: clicking artwork inside a closed `group` selects the
   group; double-click steps in (group → part → path); Escape/blank click steps out
   (`view.ts`'s `enteredGroups`).
+- **Moving a pivot never moves the artwork.** A Setup pivot drag solves the new pivot
+  together with a rest-translation compensation (`view.ts` pivot drag branch): the
+  pivot anchors both the part's own rotation and the innermost rest scale/skew, so
+  writing it alone shifts the rendered part. Keyed tx/ty are absolute and stay
+  untouched (moving a joint under keyed animation legitimately changes those frames).
+  Overlay handle strokes use `vector-effect: non-scaling-stroke` — widths are screen
+  px, radii doc units via `handleSize()`; keep new overlay chrome on that pattern.
 - **Flips are negative rest scale** pinned at the part's rendered bbox center — never
   a geometry rewrite — so both exporters inherit them through the existing rest-scale
   paths. The scale-drag clamp applies to drag factors, not stored values; don't
@@ -156,6 +163,38 @@ assert numerically (px drift, cos angles) and on the DOM. Full checklist lives i
 ROADMAP.md "Testing conventions".
 
 ## Status
+
+### Eighth wave (v2.6 bug fixes & small improvements) — implemented and verified
+
+All four ROADMAP v2.6 items, verified live with realistic gestures (true hit targets
+via elementFromPoint, full down/move/up sequences, numeric assertions); `npm run
+build` clean; 161 tests passing.
+
+- **Zoom-proof pivot handle**: the pivot ring/crosshair drew strokes in document
+  units while the radius stays screen-constant, so zooming in fattened the stroke
+  until the handle collapsed into a blob. Pivot handle, pivot ghosts, bone lines, and
+  drag-gizmo strokes now use `vector-effect: non-scaling-stroke`. Verified: ring held
+  a 13.2 px screen diameter from fit zoom through 9.9×.
+- **Pivot drags never move the artwork** (the reported bug): the pivot anchors the
+  part's own rotation AND the innermost rest scale/skew, so re-anchoring it shifted
+  any part with rest rotate/scale/skew. The drag now solves the new pivot together
+  with a rest-translation compensation in one exact Jacobian step (the own matrix is
+  affine in the pivot; compensation is computed absolutely from a drag-start snapshot
+  so per-move rounding never accumulates; the compensation uses 0.001 rounding —
+  `round3` — because 0.1 would visibly wiggle the art). Verified 0.002 px artwork
+  drift at 10× zoom dragging the pivot of a part with rotate 25° / sx 1.3 / skew 5°,
+  pivot marker chasing the pointer within 0.23 px; identity parts keep rest.tx/ty
+  exactly 0; one undo restores the whole gesture.
+- **Ctrl constrains moves to the dominant axis** in every free translate drag (Setup
+  body move, Animate Shift+move, gizmo center square); the dashed line + Δ readout
+  now show the CONSTRAINED point. Verified both dominance directions numerically
+  (frozen channel stayed byte-identical, gizmo line exactly axis-aligned).
+- **Arrow-key part nudge** (Setup pose mode): arrows nudge all selected non-skinned
+  parts 2 screen px (Shift = 20) through the zoom and each part's parent chain
+  (`view.ts nudgeSelectedParts`), checkpointed per press. Verified 0.855 units at
+  2.34× fit zoom and 0.141 at 14×, both exactly 2 px; no tracks created in Setup;
+  Animate arrows still nudge keys / scrub the playhead (precedence unchanged: nodes →
+  setup parts → keys/scrub in main.ts).
 
 ### Seventh wave (drill-down UX overhaul) — implemented and verified
 

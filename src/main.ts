@@ -5,7 +5,7 @@ import {
 import { importSvg } from './importSvg';
 import {
   buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, clearGroupEntry,
-  hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, unregisterPart,
+  hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, nudgeSelectedParts, unregisterPart,
 } from './view';
 import { checkpoint } from './history';
 import {
@@ -323,6 +323,21 @@ document.addEventListener('keydown', (ev) => {
       const dy = ev.key === 'ArrowUp' ? -step : ev.key === 'ArrowDown' ? step : 0;
       checkpoint();
       nudgeSelectedNodes(dx, dy);
+      return;
+    }
+    // Setup pose mode: arrows nudge the selected parts, 2 screen px per press
+    // (Shift = 20) so the step follows the zoom level. Animate keeps arrows for
+    // keyframe nudge / playhead scrub below.
+    if (
+      state.editorMode === 'setup' && state.mode === 'rig' &&
+      state.selectedPartIds.length > 0
+    ) {
+      ev.preventDefault();
+      const px = ev.shiftKey ? 20 : 2;
+      const dx = ev.key === 'ArrowLeft' ? -px : ev.key === 'ArrowRight' ? px : 0;
+      const dy = ev.key === 'ArrowUp' ? -px : ev.key === 'ArrowDown' ? px : 0;
+      checkpoint();
+      if (nudgeSelectedParts(dx, dy)) notify();
       return;
     }
     if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;

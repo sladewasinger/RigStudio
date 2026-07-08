@@ -293,7 +293,7 @@ input[type='number'] { width: 90px; }
 .onion-ghost.onion-prev path { fill: var(--accent); }
 .onion-ghost.onion-next path { fill: var(--accent-2); }
 
-.bone-line { stroke: rgba(122, 162, 247, 0.55); stroke-width: 1; }
+.bone-line { stroke: rgba(122, 162, 247, 0.55); stroke-width: 1; vector-effect: non-scaling-stroke; }
 
 .select-box.secondary { stroke: rgba(122, 162, 247, 0.45); }
 
@@ -335,11 +335,26 @@ input[type='number'] { width: 90px; }
 .pivot-handle.locked .pivot-dot { fill: var(--muted); }
 .pivot-handle.locked line { stroke: var(--muted); }
 .pivot-handle .pivot-grab { fill: transparent; stroke: none; }
-.pivot-handle .pivot-ring { fill: none; stroke: var(--accent); stroke-width: 1.2; }
+.pivot-handle .pivot-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
 .pivot-handle .pivot-dot { fill: var(--accent); stroke: none; }
-.pivot-handle line { stroke: var(--accent); stroke-width: 1; pointer-events: none; }
+.pivot-handle line {
+  stroke: var(--accent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
 
-.pivot-ghost { fill: rgba(255, 111, 97, 0.25); stroke: rgba(255, 111, 97, 0.6); stroke-width: 0.6; }
+.pivot-ghost {
+  fill: rgba(255, 111, 97, 0.25);
+  stroke: rgba(255, 111, 97, 0.6);
+  stroke-width: 0.6;
+  vector-effect: non-scaling-stroke;
+}
 
 .select-box {
   fill: none;
@@ -349,8 +364,8 @@ input[type='number'] { width: 90px; }
 }
 .select-corner { fill: var(--accent-2); stroke: none; }
 
-.gizmo-line { stroke: #ffd166; stroke-width: 1; }
-.gizmo-arc { fill: rgba(255, 209, 102, 0.22); stroke: #ffd166; stroke-width: 0.8; }
+.gizmo-line { stroke: #ffd166; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.gizmo-arc { fill: rgba(255, 209, 102, 0.22); stroke: #ffd166; stroke-width: 0.8; vector-effect: non-scaling-stroke; }
 .gizmo-text { fill: #ffd166; font-family: system-ui, sans-serif; font-weight: 600; }
 .gizmo-text-halo {
   fill: none;

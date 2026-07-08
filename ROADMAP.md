@@ -129,6 +129,28 @@ stays honest. Checkboxes track implementation status.
   curve through the pointer (minimal-norm control-point solve, exact at the grab
   parameter); straight segments auto-convert to curves, growing handles.
 
+## v2.6 — bug fixes & small improvements (done)
+
+- [x] **Zoom-proof pivot handle** — the pivot crosshair/ring drew its strokes in
+  document units while its radius stays screen-constant, so zooming in fattened the
+  strokes until the handle collapsed into a featureless blob. Overlay strokes (pivot
+  handle, pivot ghosts, bone lines, drag-gizmo lines/arcs) now use
+  `vector-effect: non-scaling-stroke`.
+- [x] **Pivot drags never move the artwork** — the pivot participates in the part's
+  own rotation and in the innermost rest scale/skew anchor, so re-anchoring it used
+  to shift the rendered part whenever the part had any rest rotation, scale, or skew.
+  The drag now solves the pivot and a rest-translation compensation together, so the
+  joint follows the pointer and the artwork stays exactly put. (Setup-only, like all
+  pivot editing; keyed tx/ty values are absolute and intentionally unaffected.)
+- [x] **Ctrl constrains moves to an axis** — holding Ctrl during any free translate
+  drag (Setup body move, Animate Shift+move, the translate gizmo's center square)
+  locks the delta to the dominant axis — perfectly horizontal or vertical. The dashed
+  drag line and Δ readout show the constrained movement.
+- [x] **Arrow-key part nudge** — in Setup pose mode, arrows nudge the selected parts
+  by 2 screen pixels (Shift = 20), converted through the current zoom and each part's
+  parent chain like a translate drag. Animate keeps arrows for keyframe nudge /
+  playhead scrub; node editing keeps its node nudge.
+
 ## Testing conventions (hard-learned)
 
 - **Dispatch to the true hit target**: interaction tests must target
