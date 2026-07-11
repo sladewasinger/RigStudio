@@ -90,7 +90,7 @@ from the console; `window.__smPanel` drives the state-machine editor determinist
 
 ## Roadmap
 
-Feature roadmap lives in `ROADMAP.md`: v1 through v2.11 are all implemented and
+Feature roadmap lives in `ROADMAP.md`: v1 through v2.12 are all implemented and
 verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
 
 ## Conventions that must hold
@@ -284,6 +284,51 @@ harness (`src/__tests__/interaction/harness.ts` — use its helpers rather than
 hand-rolling gestures) and enforced by `npm run test:interaction`.
 
 ## Status
+
+### Fourteenth wave (v2.12: UX overhaul program) — implemented and verified
+
+Built 2026-07-11 as 8 phased subagent waves (P1 solo → P2a/b/c parallel → P3 →
+P4 → P5a/b parallel), each audited and committed separately; final gates:
+`npm run build` clean, **301 unit tests / 11 files**, **36 interaction tests /
+7 files**. Locked decisions: Setup→**Edit** (UI only, enum stays `setup`);
+bones **auto-bind on placement**; AI snapshot = current playhead pose; AI
+schema targets the new bone system.
+
+- **P1**: feature-folder reorg (core/geometry/io/view/timeline/panels/ui/ai),
+  panels.ts split behind a facade, Code architecture section added.
+- **P2a**: in-app dialog system (ui/dialogs.ts — zero browser alert/prompt/
+  confirm remain), inline layer rename, right-click context menus (layers +
+  canvas via ui/contextMenu.ts + ui/actions.ts), Edit rename.
+- **P2b**: fixed the gray-triangle drag-label artifact (halo missing
+  non-scaling-stroke), rotation drags record accumulated wrapped angles (the
+  "wrong direction" playback bug), segment bends preserve smooth/symmetric
+  mirrors, node glyphs screen-constant at any zoom, selected-node rings,
+  zero-length handles hidden.
+- **P2c**: optional artboard (`doc.artboard`, normalizeDoc-seeded from
+  viewBox) rendered as a page rect; inspector section; both exporters use it
+  as the reference frame when enabled (disabled = byte-identical, pinned).
+- **P3**: Inkscape group dive-in (dblclick enters WITHOUT selecting; single
+  clicks select children; Escape/blank steps out one level), layers Shift
+  range + Ctrl toggle, canvas Ctrl+click joins selection, unified V gizmo
+  (first click translate handles/body-drag translates; second click rotate
+  handles/body-drag rotates about the pivot; pivot circle + center cross) —
+  consistent across Edit and Animate (rest vs keys).
+- **P4 Bones 2.0**: femur icon; child bones anchor origin at the parent tip;
+  auto-bind on placement (chain resolution + overlap test, one undo);
+  sharpened auto weights (power 4); per-node {a,b,t} overrides via the
+  inspector node-binding editor; IK verified through a skinned 3-bone chain.
+  See the "Bone system" section.
+- **P5a**: fixed-height timeline + persisted resize splitter (creating a
+  keyframe can no longer resize the canvas mid-drag — a P3-discovered CTM
+  bug, now test-pinned); transport buttons; alternating lanes; marquee
+  padding; curves/logic mode picker; curves pan/zoom (fixed an anchor-desync
+  bug), value headroom + drag value-snap (Alt bypasses).
+- **P5b**: per-property keyframe toggle circles in the Animate inspector
+  (keyAt/removeKeyAt helpers, timeline-consistent semantics); AI panel
+  Animate-only with busy overlay + Cancel (AbortSignal; canceling leaves the
+  doc untouched); snapshot labeled current-playhead with a help tooltip;
+  structural schema extended (addBones tips + bindParts, bound atomically
+  with the clip in one undo step via the view facade at the ai.ts layer).
 
 ### Thirteenth wave (v2.11: interaction harness + view.ts modular split) — implemented and verified
 
