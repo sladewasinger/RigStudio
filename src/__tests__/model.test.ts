@@ -660,7 +660,7 @@ describe('normalizeDoc', () => {
     expect(kinds).toContain('exit');
   });
 
-  it('prunes dangling transitions, conditions, listeners, and actions, and clamps durationMs', () => {
+  it('prunes dangling-toId transitions, listeners, and actions, and clamps durationMs', () => {
     const doc = makeDoc([makePart('p1')]);
     doc.stateMachines = [
       {
@@ -673,15 +673,12 @@ describe('normalizeDoc', () => {
           { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle', loop: true },
         ],
         transitions: [
-          // one ref resolves, one dangles (dropped); durationMs is negative (clamped)
+          // its only condition resolves cleanly; durationMs is negative (clamped)
           {
             id: 'tr_ok', fromId: 'st_entry', toId: 'st_a', durationMs: -50,
-            conditions: [
-              { inputId: 'in_a', op: '==', value: true }, // kept
-              { inputId: 'ghost_input', op: '==', value: true }, // dropped
-            ],
+            conditions: [{ inputId: 'in_a', op: '==', value: true }],
           },
-          { id: 'tr_bad', fromId: 'st_a', toId: 'st_ghost', durationMs: 100, conditions: [] },
+          { id: 'tr_bad', fromId: 'st_a', toId: 'st_ghost', durationMs: 100, conditions: [] }, // dangling toId
         ],
         listeners: [
           {
@@ -702,6 +699,45 @@ describe('normalizeDoc', () => {
     expect(sm.transitions[0].conditions.map((c) => c.inputId)).toEqual(['in_a']);
     expect(sm.listeners.map((l) => l.id)).toEqual(['ls_ok']); // dangling targetPart dropped
     expect(sm.listeners[0].actions.map((a) => a.inputId)).toEqual(['in_a']);
+  });
+
+  it('drops the WHOLE transition (not just the offending condition) when any condition references a missing input', () => {
+    // Pins the semantic fix: a condition whose inputId no longer resolves makes
+    // conditionPasses() return false forever (stateMachine.ts), so the transition can
+    // never fire. Silently stripping just that condition used to resurrect the
+    // transition as unconditional (or partially-conditioned) after save/reload — the
+    // opposite of what was authored. normalizeDoc now drops the whole transition instead.
+    const doc = makeDoc([makePart('p1')]);
+    doc.stateMachines = [
+      {
+        id: 'sm_1',
+        name: 'm',
+        inputs: [{ id: 'in_a', name: 'a', type: 'bool', default: false }],
+        states: [
+          { id: 'st_entry', name: 'Entry', kind: 'entry' },
+          { id: 'st_any', name: 'Any', kind: 'any' },
+          { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle', loop: true },
+        ],
+        transitions: [
+          // one condition resolves, one dangles — the WHOLE transition must go.
+          {
+            id: 'tr_partial', fromId: 'st_entry', toId: 'st_a', durationMs: 0,
+            conditions: [
+              { inputId: 'in_a', op: '==', value: true },
+              { inputId: 'ghost_input', op: '==', value: true },
+            ],
+          },
+          // every condition dangles — also dropped.
+          {
+            id: 'tr_all_bad', fromId: 'st_any', toId: 'st_a', durationMs: 0,
+            conditions: [{ inputId: 'ghost_input_2', op: '==', value: true }],
+          },
+        ],
+        listeners: [],
+      },
+    ];
+    const out = normalizeDoc(doc);
+    expect(out.stateMachines![0].transitions).toEqual([]);
   });
 
   it('KEEPS a state whose clipName no longer resolves (evaluator treats it as rest)', () => {

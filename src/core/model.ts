@@ -1213,12 +1213,28 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     const stateIds = new Set(sm.states.map((s) => s.id));
     const stateKind = new Map(sm.states.map((s) => [s.id, s.kind]));
     const inputIds = new Set(sm.inputs.map((i) => i.id));
-    sm.transitions = sm.transitions.filter((t) => stateIds.has(t.fromId) && stateIds.has(t.toId));
+    // Drop the WHOLE transition when its endpoints don't resolve, OR when ANY of its
+    // conditions references an input that no longer exists. The evaluator's
+    // conditionPasses() returns false for an unresolved input (see stateMachine.ts), so a
+    // transition carrying a dangling condition can NEVER fire — it is permanently blocked,
+    // not "the other conditions still apply". The old behavior silently stripped just the
+    // bad condition, which meant a transition with e.g. one dangling + one valid condition
+    // would survive save/reload holding ONLY the valid one — turning a never-fires
+    // transition into a fires-whenever-that-one-condition-is-true transition, and a
+    // transition whose ONLY condition dangled would come back fully UNCONDITIONAL. Both are
+    // silent behavior changes on a file that never touched the editor. Dropping the whole
+    // transition instead matches the evaluator's never-fire semantics exactly. Listener
+    // actions keep the old strip-in-place pruning (below): an action-less listener is inert
+    // but harmless (and now visibly warned in the editor), so there is no equivalent
+    // meaning-flip risk.
+    sm.transitions = sm.transitions.filter((t) => {
+      if (!stateIds.has(t.fromId) || !stateIds.has(t.toId)) return false;
+      const conds = Array.isArray(t.conditions) ? t.conditions : [];
+      return conds.every((c) => inputIds.has(c.inputId));
+    });
     for (const t of sm.transitions) {
       t.durationMs = Math.max(0, Number.isFinite(t.durationMs) ? t.durationMs : 0);
-      t.conditions = Array.isArray(t.conditions)
-        ? t.conditions.filter((c) => inputIds.has(c.inputId))
-        : [];
+      t.conditions = Array.isArray(t.conditions) ? t.conditions : [];
       // Exit time is only meaningful leaving an ANIMATION state. Clamp a present value
       // into [0,1]; strip it (→ null) from non-animation fromIds or a non-finite value.
       // Absent stays absent (no serialization change for docs that never set it).

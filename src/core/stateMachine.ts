@@ -297,7 +297,13 @@ class Instance implements SMInstance {
 
   private conditionPasses(c: SMCondition): boolean {
     const inp = this.inputById.get(c.inputId);
-    if (!inp) return false; // unresolved input → false, never throws
+    // Unresolved input → false, never throws. This makes the whole transition permanently
+    // un-fireable (conditionsPass ANDs every condition), which is why model.ts's
+    // normalizeDoc drops the ENTIRE transition on load rather than just this condition —
+    // stripping only the condition would silently turn a never-fires transition into one
+    // that fires whenever its remaining conditions hold (or unconditionally, if this was
+    // its only condition), which contradicts what runs here.
+    if (!inp) return false;
     if (inp.type === 'trigger') return this.armed.has(c.inputId); // op/value ignored
     if (inp.type === 'bool') {
       // Bool accepts only ==/!= (missing op = ==); anything else is malformed → false.

@@ -22,6 +22,7 @@ import {
 import { checkpoint } from '../core/history';
 import { renderPose, setPoseSampler } from '../view';
 import { createSMInstance, SMInstance, SM_REST_STATE_ID } from '../core/stateMachine';
+import { dialog } from '../ui/dialogs';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -731,21 +732,36 @@ function deleteState(sm: StateMachine, st: SMState): void {
 }
 
 // =====================================================================================
-// Right column: inputs / properties / listeners
+// Right column: SELECTED-ITEM PROPERTIES FIRST, then the machine-wide sections
+//
+// The selected state/transition's own properties are scoped to that one item; Inputs and
+// Listeners are scoped to the WHOLE machine (every state can read every input; a listener
+// fires regardless of what's selected). A real user added a trigger input and a listener
+// while a state was selected and believed both were scoped to it — nothing on screen said
+// otherwise. Properties now leads (titled with the selected item's own name) and the two
+// machine-wide sections are grouped into one visually distinct card below, each headed
+// "— machine-wide" so the scope is never ambiguous.
 // =====================================================================================
 
 function buildSide(doc: { parts: { id: string; label: string }[]; clips: { name: string }[] }, sm: StateMachine): HTMLElement {
   const side = div('sm-side');
-  side.appendChild(buildInputs(sm));
   side.appendChild(buildProps(doc, sm));
-  side.appendChild(buildListeners(doc, sm));
+
+  const scoped = div('sm-scope-group');
+  scoped.appendChild(buildInputs(sm));
+  scoped.appendChild(buildListeners(doc, sm));
+  side.appendChild(scoped);
+
   return side;
 }
 
-// ---- Inputs ----
+// ---- Inputs (machine-wide) ----
 
 function buildInputs(sm: StateMachine): HTMLElement {
-  const sec = section('Inputs');
+  const sec = section('Inputs — machine-wide');
+  sec.appendChild(hintBlock(
+    'Inputs are signals for the whole machine; conditions on transitions decide when they matter.',
+  ));
   for (const inp of sm.inputs) sec.appendChild(inputRow(sm, inp));
   if (!sm.inputs.length) sec.appendChild(hintBlock('No inputs. Add bool / number / trigger controls.'));
   const add = div('sm-add-row');
@@ -825,7 +841,33 @@ function addInput(sm: StateMachine, type: SMInputType): void {
   notify();
 }
 
-function removeInput(sm: StateMachine, inp: SMInput): void {
+/**
+ * Deleting an input that's still referenced (by a transition condition or a listener
+ * action) silently orphaned those references before — the deleted input's id just stayed
+ * on the condition/action, unresolved forever (which reads as "always false" per
+ * stateMachine.ts's conditionPasses, i.e. a transition that can never fire again). That
+ * broke a real user's saved file. Now: count the usages BEFORE removing anything; if
+ * there are any, confirm with the exact counts and, on confirm, cascade-delete the
+ * referencing conditions/actions in the SAME checkpoint as the input removal (one undo
+ * step). Unreferenced inputs still delete instantly, no prompt.
+ */
+async function removeInput(sm: StateMachine, inp: SMInput): Promise<void> {
+  let condCount = 0;
+  for (const tr of sm.transitions) condCount += tr.conditions.filter((c) => c.inputId === inp.id).length;
+  let actionCount = 0;
+  for (const ls of sm.listeners) actionCount += ls.actions.filter((a) => a.inputId === inp.id).length;
+
+  if (condCount > 0 || actionCount > 0) {
+    const parts: string[] = [];
+    if (condCount > 0) parts.push(`${condCount} transition condition${condCount === 1 ? '' : 's'}`);
+    if (actionCount > 0) parts.push(`${actionCount} listener action${actionCount === 1 ? '' : 's'}`);
+    const ok = await dialog.confirm(
+      `Used by ${parts.join(' and ')} — deleting removes those too.`,
+      { title: `Delete input "${inp.name}"?`, okText: 'Delete', danger: true },
+    );
+    if (!ok) return;
+  }
+
   checkpoint();
   sm.inputs = sm.inputs.filter((i) => i !== inp);
   for (const tr of sm.transitions) tr.conditions = tr.conditions.filter((c) => c.inputId !== inp.id);
@@ -833,29 +875,41 @@ function removeInput(sm: StateMachine, inp: SMInput): void {
   notify();
 }
 
-// ---- Properties (selected transition OR state) ----
+// ---- Properties (selected transition OR state — leads the column, titled with the
+// selected item's own name so it reads unmistakably as THIS item's scope, not the
+// machine's) ----
 
 function buildProps(doc: { clips: { name: string }[] }, sm: StateMachine): HTMLElement {
-  const sec = section('Properties');
   const tr = sm.transitions.find((t) => t.id === selTransitionId);
   const st = sm.states.find((s) => s.id === selStateId);
+
+  const sec = div('sm-section sm-props-section');
+  const head = div('sm-prop-head');
+  const title = tr
+    ? `Transition ${stateName(sm, tr.fromId)} → ${stateName(sm, tr.toId)}`
+    : st
+      ? (st.kind === 'animation' ? `State: ${st.name}` : `${cap(st.kind)} state`)
+      : 'Properties';
+  head.appendChild(span('sm-prop-title', title));
+  if (tr) {
+    head.appendChild(button('delete', () => {
+      checkpoint();
+      sm.transitions = sm.transitions.filter((t) => t !== tr);
+      selTransitionId = null;
+      notify();
+    }));
+  } else if (st?.kind === 'animation') {
+    head.appendChild(button('delete', () => deleteState(sm, st)));
+  }
+  sec.appendChild(head);
+
   if (tr) buildTransitionProps(sec, sm, tr);
   else if (st) buildStateProps(sec, doc, sm, st);
-  else sec.appendChild(hintBlock('Select a state or transition to edit it.'));
+  else sec.appendChild(hintBlock('Nothing selected — select a state or transition to edit it.'));
   return sec;
 }
 
 function buildTransitionProps(sec: HTMLElement, sm: StateMachine, tr: SMTransition): void {
-  const head = div('sm-prop-head');
-  head.appendChild(span('sm-prop-title', `${stateName(sm, tr.fromId)} → ${stateName(sm, tr.toId)}`));
-  head.appendChild(button('delete', () => {
-    checkpoint();
-    sm.transitions = sm.transitions.filter((t) => t !== tr);
-    selTransitionId = null;
-    notify();
-  }));
-  sec.appendChild(head);
-
   const durRow = labeledRow('blend (ms)');
   durRow.appendChild(numberInput(tr.durationMs, (v) => {
     checkpoint();
@@ -987,13 +1041,6 @@ function defaultCondition(inp: SMInput): SMCondition {
 function buildStateProps(
   sec: HTMLElement, doc: { clips: { name: string }[] }, sm: StateMachine, st: SMState,
 ): void {
-  const head = div('sm-prop-head');
-  head.appendChild(span('sm-prop-title', `${cap(st.kind)} state`));
-  if (st.kind === 'animation') {
-    head.appendChild(button('delete', () => deleteState(sm, st)));
-  }
-  sec.appendChild(head);
-
   if (st.kind !== 'animation') {
     sec.appendChild(hintBlock(kindHint(st.kind)));
     return;
@@ -1030,12 +1077,12 @@ function kindHint(kind: string): string {
   return 'Exit ends the machine and freezes the last pose.';
 }
 
-// ---- Listeners ----
+// ---- Listeners (machine-wide) ----
 
 function buildListeners(
   doc: { parts: { id: string; label: string }[] }, sm: StateMachine,
 ): HTMLElement {
-  const sec = section('Listeners');
+  const sec = section('Listeners — machine-wide');
   for (const ls of sm.listeners) sec.appendChild(listenerRow(doc, sm, ls));
   if (!sm.listeners.length) sec.appendChild(hintBlock('No listeners. Map a click/hover on a part to an input.'));
   const add = div('sm-add-row');

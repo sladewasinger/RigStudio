@@ -917,3 +917,28 @@ g.dimmed { opacity: 0.22; pointer-events: none; transition: opacity 0.12s ease; 
 .sm-listener.sm-listener-warn { border-color: #e0a54f; box-shadow: inset 0 0 0 1px rgba(224, 165, 79, 0.35); }
 .sm-warn-badge { color: #e0a54f; font-size: 13px; flex: 0 0 auto; }
 .sm-warn { display: block; color: #e0a54f; font-size: 11px; padding: 2px 2px 0; }
+
+/* ============================================================================
+   Right-column scope clarity: selected-item Properties leads (plain .sm-section
+   styling — nothing extra, it's the "current" thing); Inputs + Listeners are
+   MACHINE-WIDE, not scoped to whatever's selected, so they're grouped into one
+   visually distinct dashed/tinted card with their own "— machine-wide" headers.
+   Nested .sm-section borders are stripped so the outer card reads as the one
+   boundary, not two nested boxes.
+   ============================================================================ */
+.sm-props-section { border-color: var(--border-strong); }
+
+.sm-scope-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-sm);
+  padding: var(--sp-2);
+  background: rgba(122, 162, 247, 0.05);
+}
+.sm-scope-group .sm-section {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
