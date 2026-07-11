@@ -1,7 +1,7 @@
 # Rig Studio Roadmap
 
 Goal: a full-fledged 2D rigging/bones/animation tool with basic vector editing —
-modeled loosely after Rive, but simple. Everything through **v2.10 is implemented and
+modeled loosely after Rive, but simple. Everything through **v2.11 is implemented and
 verified** (checkboxes track status); **v3 — Future** at the bottom is the honest
 out-of-scope list that new work should be drawn from.
 
@@ -220,14 +220,15 @@ out-of-scope list that new work should be drawn from.
 - [x] **Exit state always exists** — entry/any/exit minted together, re-established
   on load, undeletable in the editor (matches what Rive runtimes require).
 
-## Committed next (accepted features, implementation deferred — 2026-07-10)
+## v2.11 — interaction harness + view.ts split (done)
 
-- [ ] **view.ts modular split + interaction-test harness** — break the ~110 KB
-  view.ts monolith into focused modules (render/camera, drag pipelines, node
-  editing, overlay chrome, snapping wiring) with zero behavior change. The headless
-  interaction-test harness (realistic-gesture helpers from "Testing conventions",
-  runnable as a script) lands FIRST so the split is regression-guarded; then the
-  split ships as its own wave.
+- [x] **Headless interaction-test harness** — Vitest Browser Mode (headless
+  Chromium), `npm run test:interaction`: 19 real-gesture tests pinning the 12
+  hard-learned canvas invariants in ~1 s; mutation-checked before being trusted.
+- [x] **view.ts modular split** — 3,089-line monolith → permanent 33-line facade +
+  13 layered `src/view/` modules with a binding import-layering rule; zero behavior
+  change (all gates green after every mechanical step; export surface
+  diff-identical; live manual pass at the end).
 
 ## Testing conventions (hard-learned)
 

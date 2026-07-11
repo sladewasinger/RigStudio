@@ -24,9 +24,10 @@ prompt, or critiques the existing clip.
 
 ```sh
 npm install
-npm run dev        # Vite dev server, http://localhost:5173
-npm run build      # tsc --noEmit type-check, then vite build
-npm test           # vitest run — unit tests for the pure modules
+npm run dev              # Vite dev server, http://localhost:5173
+npm run build            # tsc --noEmit type-check, then vite build
+npm test                 # vitest unit project — pure-module tests
+npm run test:interaction # vitest browser project (headless Chromium) — real-gesture canvas tests
 ```
 
 Verify UI changes by loading `public/PIP_MASTER.svg` via the "Load sample" button.
@@ -40,7 +41,7 @@ from the console; `window.__smPanel` drives the state-machine editor determinist
 |---|---|
 | `model.ts` | Document model (`RigDoc`/`RigPart`/`Clip`/`Track`/`Keyframe`), part hierarchy helpers (`ancestorChain`, `setParent`, cycle-safe), rest pose, app state singleton (`editorMode`: `setup`\|`animate`, multi-selection, playback speed/ping-pong/onion flags), pub/sub (`subscribe`/`notify`), pose sampling (`sampleChannel`, 4 easings), keyframe clipboard (`copyKeys`/`pasteKeysAt`/`copyPoseAt`), project (de)serialization (`serializeDoc`/`deserializeDoc`/`normalizeDoc`) |
 | `importSvg.ts` | SVG file → `RigDoc`. Unwraps Inkscape layers; named groups → parts; ellipse/circle/rect → path data; pivots seeded from the *composed matrix's fixed point* (works whether the group is authored as `rotate(a,cx,cy)` or the `matrix(...)` Inkscape rewrites it into) or from `inkscape:transform-center-x/y` as a `pivotHint` resolved once geometry is measurable |
-| `view.ts` | Canvas: renders the rig as live SVG, wheel-zoom-at-cursor + middle-drag pan, Setup-vs-Animate drag semantics (Setup drags MOVE the part, Inkscape-style scale/rotate handle sets toggled by re-clicking the selection; Animate drags rotate around the pivot and auto-key), parent-chain-aware pose composition and effective pivots, bone lines, onion-skin ghost layers, multi-part selection/drag, path "entering" via double-click, node editing, overlay visuals |
+| `view.ts` | **Pure re-export facade (33 lines)** over the `src/view/` modules — consumers import ONLY `./view`, never deep paths. The canvas responsibilities live in 13 layered modules: `view/context.ts` (shared mutable state `ctx`, DragState type, constants, micro-utils), `view/coords.ts` (screen↔doc conversion from live CTM/transform strings), `view/pose.ts` (pose composition, effective pivots, `partRootBoxes`), `view/focus.ts` (drill-down/dimming, `artworkUnderPointer`), `view/skinRender.ts` (LBS deformation + private cache), `view/overlay.ts` (selection boxes, handle sets, pivots, gizmos, node handles — render-time side effects live here on purpose), `view/snapping.ts` (candidate collection wiring), `view/render.ts` (`renderPose`, onion skins, `setPoseSampler`), `view/partDom.ts` (part-group/path DOM registry), `view/nodeEditing.ts` (node ops, drag math, structural join/delete), `view/rigOps.ts` (flip/nudge/bind/bone placement), `view/camera.ts` (viewBox zoom/pan/fit), `view/interactions.ts` (pointer routing, every drag pipeline, checkpoint deferral), `view/canvas.ts` (`buildCanvas`, render-then-measure pivot seeding) |
 | `timeline.ts` | Clip transport (play/pause/duplicate/rename/delete/duration, speed selector, ping-pong, onion toggle, fps readout), scrubber, keyframe lanes with click/shift-click/marquee selection, retime drag, a key-property row (time/value/easing) for the selection, copy/paste/nudge/column-select |
 | `panels.ts` | Layers **tree** (parts nest under their parent, fold open to show child paths, drag-to-parent / drop-to-unparent), inspector (Setup: rest/pivot/parent fields; Animate: keyed channel fields), Claude assistant panel (prompt animate, critique, optional pose-snapshot attachment) |
 | `history.ts` | Snapshot-based undo/redo; call `checkpoint()` BEFORE any doc mutation, one per user gesture |
@@ -61,10 +62,8 @@ from the console; `window.__smPanel` drives the state-machine editor determinist
 
 ## Roadmap
 
-Feature roadmap lives in `ROADMAP.md`: v1 through v2.10 are all implemented and
-verified as of 2026-07-11; "Committed next" holds the accepted-but-deferred
-view.ts split + interaction harness; "v3 — Future" is the out-of-scope / next-up
-list.
+Feature roadmap lives in `ROADMAP.md`: v1 through v2.11 are all implemented and
+verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
 
 ## Conventions that must hold
 
@@ -175,6 +174,17 @@ list.
   the rAF loop; the ONLY view.ts hook is `setPoseSampler(fn|null)` (renderPose
   samples through it when set). Canvas pointer events during preview are consumed
   by capture-phase listeners on `#canvas` — selection/drag never fire.
+- **The `src/view/` layering is binding**: context ← coords/pose/focus ← skinRender
+  ← overlay/snapping ← render ← partDom/nodeEditing/rigOps/camera ← interactions ←
+  canvas. A `view/*` module NEVER imports `../view` (the facade) nor a higher layer;
+  consumers import ONLY `./view` (no deep paths). The facade is permanent — new
+  public symbols are added to their module AND re-exported there. Overlay render-time
+  side effects (handleMode reset, stale node-selection pruning) belong inside the
+  render functions — do not "clean them up" out.
+- **Any change under `src/view/` must pass `npm run test:interaction`** (19 real-
+  gesture tests, headless Chromium, ~1 s). New interaction features get a scenario
+  there; the suite was mutation-checked (sabotaging a pipeline makes its scenario
+  fail), keep it that trustworthy.
 - **`public/PIP_MASTER.svg` is the bundled sample artwork** ("Load sample" button),
   used for demos and live verification. It is just an asset — nothing in the code may
   depend on its specific structure.
@@ -187,9 +197,40 @@ hit target — not a hand-picked element; simulate full gestures (double-click =
 down/up ×2 + dblclick, re-resolving the target between clicks because overlays
 appear); re-query elements after any render and re-read `state.doc` after undo;
 assert numerically (px drift, cos angles) and on the DOM. Full checklist lives in
-ROADMAP.md "Testing conventions".
+ROADMAP.md "Testing conventions". These rules are CODIFIED in the interaction
+harness (`src/__tests__/interaction/harness.ts` — use its helpers rather than
+hand-rolling gestures) and enforced by `npm run test:interaction`.
 
 ## Status
+
+### Thirteenth wave (v2.11: interaction harness + view.ts modular split) — implemented and verified
+
+Built 2026-07-11 in four audited chunks (harness, then B1–B5 / B6–B10 / B11–B13 of
+the approved plan), each chunk gated on build + unit + interaction suites and
+committed separately for bisectability. ZERO behavior change by mandate.
+
+- **Interaction-test harness** (`npm run test:interaction`): Vitest Browser Mode on
+  headless Chromium as a second vitest project (jsdom was assessed and rejected —
+  no elementFromPoint/getScreenCTM/getBBox, mocking them would test the mocks).
+  19 tests / 5 files, ~1 s wall clock, pinning the 12 hard-learned gesture
+  invariants (setup drag-move, scale/rotate handle sets, pivot compensation ≤0.05 px,
+  animate auto-key, node drag at zoom incl. 's'-mirror, closing-Z bend, marquee
+  across dimmed art, drill-down + Escape tiers, snapping byte-equal + Ctrl
+  axis-freeze, camera invariants, checkpoint deferral) plus the boot pivot
+  assertion. Mutation-checked: sabotaging the pivot/translate/node pipelines makes
+  the matching scenario fail (10.8 px vs 0.05 threshold, etc.).
+- **view.ts split**: 3,089-line monolith → **33-line permanent re-export facade +
+  13 layered modules** (3,349 lines total; see the architecture table). Facade
+  export surface diff-verified identical to the pre-split monolith (31 names);
+  consumers untouched. Only new symbol across the whole refactor:
+  `invalidateSkinCache`. Shared mutable state consolidated in `view/context.ts`'s
+  `ctx` object (371 occurrences converted by a string/comment-aware tokenizer).
+  Cycle resolutions per plan: partDom below interactions / canvas above; skinRender
+  (cache owner) below render / rigOps above.
+- **Live manual pass** after the final chunk: boot pivot exact, setup drag writes
+  rest only, animate drag keys rotate, node drag 0 px error, wheel-zoom ratio
+  exact with ~0 cursor drift, undo rebuild works, and the state-machine preview
+  still poses the canvas through `setPoseSampler`.
 
 ### Twelfth wave (v2.10: generic editor, Compose removal, SM editor pan/zoom) — implemented and verified
 
