@@ -27,14 +27,16 @@
  *    leaving an ANIMATION state with exitFraction set is eligible only once the state's
  *    clip clock has reached fraction*duration; conditions still AND on top. It gates only
  *    CURRENT-state transitions — any/entry/exit transitions ignore it (meaningless there,
- *    and normalizeDoc strips it from non-animation fromIds). The clock rule differs by mode:
- *      · non-looping (clamped) state: eligible once localTime >= fraction*duration, and it
+ *    and normalizeDoc strips it from non-animation fromIds). The clock rule differs by
+ *    whether the state's CLIP loops (`Clip.loop`, read as `clip.loop !== false` — looping
+ *    is a property of the clip, not the state, matching Rive's LinearAnimation.loopValue):
+ *      · non-looping (clamped) clip: eligible once localTime >= fraction*duration, and it
  *        STAYS eligible afterward (the clock clamps at the clip end);
- *      · looping state: eligible when the position WITHIN THE CURRENT ITERATION
+ *      · looping clip: eligible when the position WITHIN THE CURRENT ITERATION
  *        ((t mod d)) >= fraction*duration — so it re-arms each loop;
- *      · fraction >= 1 on a LOOPING state is special-cased to "after the first completion"
+ *      · fraction >= 1 on a LOOPING clip is special-cased to "after the first completion"
  *        (total elapsed >= duration), because (t mod d) >= d is never true, so the naive
- *        per-iteration test would never fire. (For a non-looping state fraction==1 is just
+ *        per-iteration test would never fire. (For a non-looping clip fraction==1 is just
  *        localTime >= duration — "wait for the animation to finish".)
  *    Evaluation runs BEFORE time integration, so the gate reads the pre-advance clock; the
  *    transition therefore fires on the first advance whose starting clock has crossed the
@@ -259,7 +261,7 @@ class Instance implements SMInstance {
     const frac = clamp01(t.exitFraction);
     const threshold = frac * clip.duration;
     const t0 = this.current.timeMs;
-    const looping = st.loop !== false;
+    const looping = clip.loop !== false;
     if (looping) {
       // fraction>=1 can never be met by (t mod d)>=d, so mean "after the first completion".
       if (frac >= 1) return t0 >= clip.duration;
@@ -336,7 +338,7 @@ class Instance implements SMInstance {
     if (!st || st.kind !== 'animation' || !st.clipName) return rest;
     const clip = this.doc.clips.find((c) => c.name === st.clipName);
     if (!clip) return rest; // dangling clipName → rest pose
-    const time = effClipTime(clip, clock.timeMs, st.loop !== false);
+    const time = effClipTime(clip, clock.timeMs, clip.loop !== false);
     const track = clip.tracks.find((t) => t.target === target && t.channel === channel);
     // Keyed channel → absolute sampled value; unkeyed → rest (the load-bearing rule).
     if (!track || track.keyframes.length === 0) return rest;

@@ -413,6 +413,22 @@ export function render(): void {
     };
     durLabel.appendChild(dur);
     clipCluster.appendChild(durLabel);
+
+    // Loop is DOC data (serialized, undoable) — unlike ping-pong below, which is an
+    // app-state PREVIEW preference shared across every clip. This flag instead drives
+    // the state-machine evaluator (a non-looping clip's clock clamps at its end, so an
+    // exit-time transition can fire once and only once past it) and the .riv export's
+    // LinearAnimation loopValue. The timeline's own scrub/playback preview keeps
+    // looping regardless — that's transport behavior, not this flag.
+    const loopBtn = button('↻ loop', () => {
+      checkpoint();
+      clip.loop = !(clip.loop !== false);
+      notify();
+    });
+    loopBtn.dataset.tlAction = 'clip-loop';
+    if (clip.loop !== false) loopBtn.classList.add('active');
+    loopBtn.title = 'Loop this clip in the state machine / .riv export (playback preview always loops)';
+    clipCluster.appendChild(loopBtn);
   }
 
   bar.appendChild(clipCluster);

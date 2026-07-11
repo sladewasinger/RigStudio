@@ -145,6 +145,17 @@ export interface Track {
 export interface Clip {
   name: string;
   duration: number; // ms
+  /**
+   * Loop the clip. Governs the state-machine evaluator (`stateMachine.ts`'s
+   * `clip.loop !== false`) and the .riv export's LinearAnimation loopValue. Default
+   * true (absent = looping); only an explicit `false` clamps at the clip's end. This is
+   * DOC data (serialized, undoable) — unlike the timeline's ping-pong toggle, which is
+   * an app-state playback preference. The timeline's own scrub/playback preview always
+   * loops regardless of this flag (that's transport behavior, separate from what the
+   * SM evaluator and exporter do). Moved here from `SMState.loop` (v2.12) to match
+   * Rive, where looping is a property of the LinearAnimation, not the state that plays it.
+   */
+  loop?: boolean;
   tracks: Track[];
 }
 
@@ -179,8 +190,6 @@ export interface SMState {
   kind: SMStateKind;
   /** The clip this state plays (kind 'animation' only). A dangling name samples rest. */
   clipName?: string;
-  /** Loop the clip (kind 'animation'); defaults true — false clamps at the clip end. */
-  loop?: boolean;
   /** Cosmetic graph-editor position (smPanel). Persisted for free; never affects runtime. */
   x?: number;
   y?: number;
@@ -1154,6 +1163,11 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
   }
   doc.clips = doc.clips?.length ? doc.clips : [{ name: 'idle', duration: 2000, tracks: [] }];
   for (const clip of doc.clips) {
+    // Loop lives on the CLIP (v2.12; moved off SMState — see the legacy-migration block
+    // below and the Clip.loop doc comment). Default true, written explicitly so every
+    // normalized doc carries a real boolean, matching the rest.sx/kind-style back-compat
+    // fields above rather than leaving it silently absent.
+    clip.loop = clip.loop ?? true;
     for (const track of clip.tracks) {
       for (const k of track.keyframes) {
         if (!EASINGS.includes(k.easing)) k.easing = 'easeInOut';
@@ -1201,6 +1215,20 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     sm.states = Array.isArray(sm.states) ? sm.states : [];
     sm.transitions = Array.isArray(sm.transitions) ? sm.transitions : [];
     sm.listeners = Array.isArray(sm.listeners) ? sm.listeners : [];
+    // Legacy SMState.loop -> Clip.loop migration (v2.12): a pre-migration state with an
+    // explicit `loop === false` marks its referenced clip non-looping (best-effort — if
+    // two legacy states pointed at the same clip with conflicting loop flags, whichever
+    // is processed last wins). The field itself never re-serializes: it is stripped off
+    // every state regardless of whether it triggered a migration, since SMState no
+    // longer declares it.
+    for (const st of sm.states) {
+      const legacy = st as SMState & { loop?: boolean };
+      if (legacy.loop === false && legacy.kind === 'animation' && legacy.clipName) {
+        const target = doc.clips.find((c) => c.name === legacy.clipName);
+        if (target) target.loop = false;
+      }
+      delete legacy.loop;
+    }
     if (!sm.states.some((s) => s.kind === 'entry')) {
       sm.states.unshift({ id: freshId('state'), name: 'Entry', kind: 'entry' });
     }

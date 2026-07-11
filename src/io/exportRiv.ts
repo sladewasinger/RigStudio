@@ -599,7 +599,7 @@ export function exportRiv(doc: RigDoc): Uint8Array {
 
   interface PlanKey { frame: number; value: number; interpType: number; interpId: number }
   interface PlanProp { objectId: number; propertyKey: number; keys: PlanKey[] }
-  interface PlanClip { name: string; duration: number; props: PlanProp[] }
+  interface PlanClip { name: string; duration: number; loop: boolean; props: PlanProp[] }
 
   // Canonical, deterministic per-target channel plan: [target, channel, propertyKey,
   // base offset, isAngle]. root first, then parts in doc order; fixed channel order.
@@ -659,6 +659,9 @@ export function exportRiv(doc: RigDoc): Uint8Array {
     return {
       name: clip.name,
       duration: Math.max(1, Math.round((clip.duration / 1000) * FPS)),
+      // Rive parity: looping is a LinearAnimation property (loopValue), not a per-state
+      // one — see Clip.loop's doc comment in model.ts. Default true (absent = looping).
+      loop: clip.loop !== false,
       props,
     };
   });
@@ -669,7 +672,7 @@ export function exportRiv(doc: RigDoc): Uint8Array {
     scene.propString(P_ANIM_NAME, plan.name);
     scene.propUint(P_FPS, FPS);
     scene.propUint(P_DURATION, plan.duration);
-    scene.propUint(P_LOOP, 1); // loop
+    scene.propUint(P_LOOP, plan.loop ? 1 : 0); // 1 loop / 0 oneShot (loopValue table above)
     scene.end();
 
     for (const prop of plan.props) {
@@ -750,9 +753,6 @@ export function exportRiv(doc: RigDoc): Uint8Array {
  *    but not exit, so a bare Exit is synthesized when absent.
  *
  * Documented limitations:
- *  - Per-state loop (SMState.loop) is NOT independently expressible: looping is a property
- *    of the LinearAnimation (loopValue), and the animation exporter emits every animation
- *    as looped. A state's loop flag is therefore ignored; the shared clip's loop governs.
  *  - Listener event type is carried on StateMachineListenerSingle.listenerTypeValue (the
  *    classic representation). Very new runtimes that read the type only from separate
  *    ListenerInputType child objects may not fire pointer listeners; the rest of the

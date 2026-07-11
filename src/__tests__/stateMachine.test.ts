@@ -27,8 +27,8 @@ import { makeClip, makeDoc, makePart, makeTrack, resetState } from './helpers';
 const entry = (id = 'entry'): SMState => ({ id, name: id, kind: 'entry' });
 const anyState = (id = 'any'): SMState => ({ id, name: id, kind: 'any' });
 const exitState = (id = 'exit'): SMState => ({ id, name: id, kind: 'exit' });
-const anim = (id: string, clipName: string, loop = true): SMState =>
-  ({ id, name: id, kind: 'animation', clipName, loop });
+const anim = (id: string, clipName: string): SMState =>
+  ({ id, name: id, kind: 'animation', clipName });
 
 const tr = (
   id: string, fromId: string, toId: string,
@@ -399,16 +399,22 @@ describe('crossfade', () => {
 
 // ---- Looping vs clamping ----
 
-describe('looping vs clamping states', () => {
-  const ramp = () =>
-    makeClip({ name: 'ramp', duration: 1000, tracks: [makeTrack('p1', 'rotate', [[0, 0, 'linear'], [1000, 100, 'linear']])] });
+describe('looping vs clamping clips', () => {
+  // Loop lives on the CLIP (v2.12 — moved off SMState to match Rive's
+  // LinearAnimation.loopValue), so `runTo` sets it on the clip passed to docWith, not on
+  // the anim() state.
+  const ramp = (loop: boolean) =>
+    makeClip({
+      name: 'ramp', duration: 1000, loop,
+      tracks: [makeTrack('p1', 'rotate', [[0, 0, 'linear'], [1000, 100, 'linear']])],
+    });
 
   const runTo = (loop: boolean, timeMs: number): number => {
     const sm = machine({
-      states: [entry(), anyState(), anim('S', 'ramp', loop)],
+      states: [entry(), anyState(), anim('S', 'ramp')],
       transitions: [tr('te', 'entry', 'S')],
     });
-    const inst = createSMInstance(docWith(sm, [ramp()]), sm);
+    const inst = createSMInstance(docWith(sm, [ramp(loop)]), sm);
     inst.advance(timeMs);
     return inst.channelValue('p1', 'rotate');
   };
@@ -419,6 +425,21 @@ describe('looping vs clamping states', () => {
     expect(runTo(false, 1500)).toBeCloseTo(100, 9); // clamped at 1000 → 100
     expect(runTo(false, 5000)).toBeCloseTo(100, 9);
   });
+
+  it('ignores a stray legacy loop field on the state — only clip.loop governs', () => {
+    // Simulates an unmigrated (pre-v2.12) state shape reaching the evaluator directly
+    // (normalizeDoc's migration runs on load, not inside createSMInstance). The
+    // evaluator must read looping from the clip only, never from the state.
+    const staleState = { id: 'S', name: 'S', kind: 'animation', clipName: 'ramp', loop: true } as unknown as SMState;
+    const sm = machine({
+      states: [entry(), anyState(), staleState],
+      transitions: [tr('te', 'entry', 'S')],
+    });
+    const inst = createSMInstance(docWith(sm, [ramp(false)]), sm); // clip says non-looping
+    inst.advance(1500);
+    // Clamped (100), not wrapped (50) — the stale state.loop:true is ignored.
+    expect(inst.channelValue('p1', 'rotate')).toBeCloseTo(100, 9);
+  });
 });
 
 // ---- Exit time (SMTransition.exitFraction) ----
@@ -428,8 +449,12 @@ describe('looping vs clamping states', () => {
 // advance whose starting clock is past the threshold.
 
 describe('exit time', () => {
-  const ramp = () =>
-    makeClip({ name: 'ramp', duration: 1000, tracks: [makeTrack('p1', 'rotate', [[0, 0, 'linear'], [1000, 100, 'linear']])] });
+  // Loop lives on the CLIP (v2.12), so `build` sets opts.loop on the 'ramp' clip itself.
+  const ramp = (loop: boolean) =>
+    makeClip({
+      name: 'ramp', duration: 1000, loop,
+      tracks: [makeTrack('p1', 'rotate', [[0, 0, 'linear'], [1000, 100, 'linear']])],
+    });
 
   function build(opts: {
     loop: boolean;
@@ -444,10 +469,10 @@ describe('exit time', () => {
     };
     const sm = machine({
       inputs: opts.inputs ?? [],
-      states: [entry(), anyState(), anim('S', 'ramp', opts.loop), anim('T', 't')],
+      states: [entry(), anyState(), anim('S', 'ramp'), anim('T', 't')],
       transitions: [tr('te', 'entry', 'S'), gated],
     });
-    return createSMInstance(docWith(sm, [ramp(), constClip('t', 200)]), sm);
+    return createSMInstance(docWith(sm, [ramp(opts.loop), constClip('t', 200)]), sm);
   }
 
   it('a clamped (non-looping) state waits until localTime reaches fraction*duration', () => {

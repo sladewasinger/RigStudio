@@ -794,9 +794,18 @@ g.dimmed { opacity: 0.22; pointer-events: none; transition: opacity 0.12s ease; 
 
 .sm-empty { display: flex; flex-direction: column; gap: var(--sp-2); align-items: flex-start; padding: var(--sp-3) var(--sp-2); }
 
+/* Three columns: left = machine-wide (Inputs/Listeners), center = graph canvas,
+   right = selected-item Properties. Both side panels get their own internal scroll and
+   sensible min/max widths so the graph keeps the bulk of the space; the graph's own
+   pan/zoom/fit is unaffected (it lives entirely inside .sm-graph). */
 .sm-body { display: flex; gap: var(--sp-3); align-items: stretch; }
 .sm-graph { flex: 1 1 auto; min-width: 0; }
-.sm-side { flex: 0 0 300px; max-width: 300px; display: flex; flex-direction: column; gap: var(--sp-2); overflow-y: auto; max-height: 34vh; }
+.sm-side {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  overflow-y: auto; max-height: 34vh;
+}
+.sm-side-left { flex: 0 0 260px; min-width: 200px; max-width: 260px; }
+.sm-side-right { flex: 0 0 300px; min-width: 240px; max-width: 300px; }
 
 .sm-graph-bar { display: flex; gap: var(--sp-2); align-items: center; margin-bottom: var(--sp-1); flex-wrap: wrap; }
 .sm-graph-bar button { padding: 0 var(--sp-2); font-size: 12px; height: var(--ctrl-h-sm); }
@@ -855,7 +864,7 @@ g.dimmed { opacity: 0.22; pointer-events: none; transition: opacity 0.12s ease; 
 
 @media (max-width: 720px) {
   .sm-body { flex-direction: column; }
-  .sm-side { flex-basis: auto; max-width: none; max-height: none; }
+  .sm-side, .sm-side-left, .sm-side-right { flex-basis: auto; max-width: none; max-height: none; }
 }
 
 /* ---- Unified select-tool gizmo (rotate circle + move cross), src/view/overlay.ts ---- */
@@ -919,12 +928,13 @@ g.dimmed { opacity: 0.22; pointer-events: none; transition: opacity 0.12s ease; 
 .sm-warn { display: block; color: #e0a54f; font-size: 11px; padding: 2px 2px 0; }
 
 /* ============================================================================
-   Right-column scope clarity: selected-item Properties leads (plain .sm-section
-   styling — nothing extra, it's the "current" thing); Inputs + Listeners are
-   MACHINE-WIDE, not scoped to whatever's selected, so they're grouped into one
-   visually distinct dashed/tinted card with their own "— machine-wide" headers.
-   Nested .sm-section borders are stripped so the outer card reads as the one
-   boundary, not two nested boxes.
+   Side-panel scope clarity: RIGHT is the selected state/transition's own Properties
+   (plain .sm-section styling — nothing extra, it's the "current" thing); LEFT is
+   Inputs + Listeners, MACHINE-WIDE and not scoped to whatever's selected, grouped into
+   one visually distinct dashed/tinted card with "— machine-wide" section headers so the
+   split reads unambiguously even before you notice which side of the graph it's on.
+   Nested .sm-section borders are stripped so the outer card reads as the one boundary,
+   not two nested boxes.
    ============================================================================ */
 .sm-props-section { border-color: var(--border-strong); }
 

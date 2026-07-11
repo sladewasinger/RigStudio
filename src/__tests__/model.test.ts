@@ -636,9 +636,9 @@ describe('normalizeDoc', () => {
       rootPivot: { x: 5, y: 8 },
       parts: [],
     } as unknown as RigDoc;
-    expect(normalizeDoc(bare).clips).toEqual([{ name: 'idle', duration: 2000, tracks: [] }]);
+    expect(normalizeDoc(bare).clips).toEqual([{ name: 'idle', duration: 2000, tracks: [], loop: true }]);
     const empty = makeDoc([], []);
-    expect(normalizeDoc(empty).clips).toEqual([{ name: 'idle', duration: 2000, tracks: [] }]);
+    expect(normalizeDoc(empty).clips).toEqual([{ name: 'idle', duration: 2000, tracks: [], loop: true }]);
   });
 
   it('defaults stateMachines to [] on a document written before they existed', () => {
@@ -670,7 +670,7 @@ describe('normalizeDoc', () => {
         states: [
           { id: 'st_entry', name: 'Entry', kind: 'entry' },
           { id: 'st_any', name: 'Any', kind: 'any' },
-          { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle', loop: true },
+          { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle' },
         ],
         transitions: [
           // its only condition resolves cleanly; durationMs is negative (clamped)
@@ -716,7 +716,7 @@ describe('normalizeDoc', () => {
         states: [
           { id: 'st_entry', name: 'Entry', kind: 'entry' },
           { id: 'st_any', name: 'Any', kind: 'any' },
-          { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle', loop: true },
+          { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle' },
         ],
         transitions: [
           // one condition resolves, one dangles — the WHOLE transition must go.
@@ -750,7 +750,7 @@ describe('normalizeDoc', () => {
         states: [
           { id: 'st_entry', name: 'Entry', kind: 'entry' },
           { id: 'st_any', name: 'Any', kind: 'any' },
-          { id: 'st_gone', name: 'Gone', kind: 'animation', clipName: 'deleted_clip', loop: true },
+          { id: 'st_gone', name: 'Gone', kind: 'animation', clipName: 'deleted_clip' },
         ],
         transitions: [],
         listeners: [],
@@ -781,7 +781,7 @@ describe('normalizeDoc', () => {
         states: [
           { id: 'st_entry', name: 'Entry', kind: 'entry' },
           { id: 'st_any', name: 'Any', kind: 'any' },
-          { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle', loop: false },
+          { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle' },
           { id: 'st_exit', name: 'Exit', kind: 'exit' },
         ],
         transitions: [
@@ -802,6 +802,74 @@ describe('normalizeDoc', () => {
     expect(byId('t_neg').exitFraction).toBe(0); // clamped up
     expect(byId('t_entry').exitFraction).toBeNull(); // stripped (from a non-animation state)
     expect('exitFraction' in byId('t_plain')).toBe(false); // absent stays absent (no null added)
+  });
+
+  it('defaults every clip.loop to true on a doc written before the field existed', () => {
+    const doc = {
+      name: 'old',
+      viewBox: { x: 0, y: 0, w: 10, h: 10 },
+      rootPivot: { x: 5, y: 8 },
+      parts: [],
+      clips: [{ name: 'idle', duration: 2000, tracks: [] }],
+    } as unknown as RigDoc;
+    const out = normalizeDoc(doc);
+    expect(out.clips[0].loop).toBe(true);
+  });
+
+  it('migrates a legacy SMState.loop:false onto its referenced clip.loop and strips the field', () => {
+    // Pre-v2.12 shape: loop lived on the animation STATE, not the clip. normalizeDoc
+    // must migrate a legacy `loop: false` onto the clip it references (best-effort —
+    // last state processed wins if two legacy states disagree) and delete the field
+    // from the state so it never resurfaces on a later save.
+    const doc = {
+      name: 'old',
+      viewBox: { x: 0, y: 0, w: 10, h: 10 },
+      rootPivot: { x: 5, y: 8 },
+      parts: [],
+      clips: [{ name: 'walk', duration: 1000, tracks: [] }],
+      stateMachines: [
+        {
+          id: 'sm_1', name: 'm', inputs: [],
+          states: [
+            { id: 'st_entry', name: 'Entry', kind: 'entry' },
+            { id: 'st_any', name: 'Any', kind: 'any' },
+            { id: 'st_w', name: 'Walk', kind: 'animation', clipName: 'walk', loop: false },
+          ],
+          transitions: [],
+          listeners: [],
+        },
+      ],
+    } as unknown as RigDoc;
+    const out = normalizeDoc(doc);
+    expect(out.clips.find((c) => c.name === 'walk')!.loop).toBe(false); // migrated
+    const walkState = out.stateMachines![0].states.find((s) => s.id === 'st_w')!;
+    expect('loop' in walkState).toBe(false); // field stripped — never re-serializes
+  });
+
+  it('a legacy loop:true state leaves the clip at its (already-true) default, and strips the field', () => {
+    const doc = {
+      name: 'old',
+      viewBox: { x: 0, y: 0, w: 10, h: 10 },
+      rootPivot: { x: 5, y: 8 },
+      parts: [],
+      clips: [{ name: 'walk', duration: 1000, tracks: [] }],
+      stateMachines: [
+        {
+          id: 'sm_1', name: 'm', inputs: [],
+          states: [
+            { id: 'st_entry', name: 'Entry', kind: 'entry' },
+            { id: 'st_any', name: 'Any', kind: 'any' },
+            { id: 'st_w', name: 'Walk', kind: 'animation', clipName: 'walk', loop: true },
+          ],
+          transitions: [],
+          listeners: [],
+        },
+      ],
+    } as unknown as RigDoc;
+    const out = normalizeDoc(doc);
+    expect(out.clips.find((c) => c.name === 'walk')!.loop).toBe(true);
+    const walkState = out.stateMachines![0].states.find((s) => s.id === 'st_w')!;
+    expect('loop' in walkState).toBe(false);
   });
 
   it('seeds an absent artboard as disabled, matching the current viewBox (back-compat: pre-P2c docs and fresh SVG imports)', () => {
@@ -1147,6 +1215,7 @@ function maximalDoc(): RigDoc {
       {
         name: 'idle',
         duration: 2000,
+        loop: true,
         tracks: [
           {
             target: TORSO, channel: 'rotate',
@@ -1185,6 +1254,7 @@ function maximalDoc(): RigDoc {
       {
         name: 'wave',
         duration: 3500, // a second clip with a DIFFERENT duration
+        loop: false, // mirrors the loop:false this clip's state used to carry pre-v2.12
         tracks: [
           {
             target: ELBOW, channel: 'rotate',
@@ -1221,8 +1291,8 @@ function maximalDoc(): RigDoc {
           { id: 'st_entry', name: 'Entry', kind: 'entry' },
           { id: 'st_any', name: 'Any', kind: 'any' },
           { id: 'st_exit', name: 'Exit', kind: 'exit' },
-          { id: 'st_idle', name: 'Idle', kind: 'animation', clipName: 'idle', loop: true },
-          { id: 'st_wave', name: 'Wave', kind: 'animation', clipName: 'wave', loop: false },
+          { id: 'st_idle', name: 'Idle', kind: 'animation', clipName: 'idle' },
+          { id: 'st_wave', name: 'Wave', kind: 'animation', clipName: 'wave' },
         ],
         transitions: [
           { id: 'tr_enter', fromId: 'st_entry', toId: 'st_idle', durationMs: 0, conditions: [] },
@@ -1324,6 +1394,8 @@ describe('serializeDoc / deserializeDoc round trip', () => {
     const doc = maximalDoc();
     const restored = deserializeDoc(serializeDoc(doc));
     expect(restored.clips.map((c) => [c.name, c.duration])).toEqual([['idle', 2000], ['wave', 3500]]);
+    // loop moved from SMState to Clip (v2.12) — round-trips as ordinary clip data.
+    expect(restored.clips.map((c) => c.loop)).toEqual([true, false]);
 
     const rot = restored.clips[0].tracks.find((t) => t.target === TORSO && t.channel === 'rotate')!;
     expect(rot.keyframes.map((k) => k.easing)).toEqual(['linear', 'easeIn', 'easeOut', 'easeInOut']);
@@ -1355,7 +1427,8 @@ describe('serializeDoc / deserializeDoc round trip', () => {
     expect(sm.inputs.map((i) => i.type)).toEqual(['number', 'bool', 'trigger']);
     expect(sm.states.map((s) => s.kind)).toEqual(['entry', 'any', 'exit', 'animation', 'animation']);
     const wave = sm.states.find((s) => s.id === 'st_wave')!;
-    expect(wave).toMatchObject({ clipName: 'wave', loop: false });
+    expect(wave).toMatchObject({ clipName: 'wave' });
+    expect('loop' in wave).toBe(false); // loop lives on the clip now, never the state
     // Unconditional entry transition, conditional bool/trigger/number transitions, blends.
     expect(sm.transitions.map((t) => t.durationMs)).toEqual([0, 200, 300, 0]);
     expect(sm.transitions[0].conditions).toEqual([]); // unconditional

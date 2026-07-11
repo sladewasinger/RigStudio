@@ -581,6 +581,31 @@ describe('exportRiv artboard', () => {
   });
 });
 
+// ---- Clip loop -> LinearAnimation loopValue (v2.12: loop moved off SMState onto Clip) ----
+
+describe('exportRiv clip loop', () => {
+  it('clip.loop absent or explicit true exports loopValue 1 (loop), byte-identical either way', () => {
+    const withoutField = exportRiv(pipDoc());
+    const explicitTrue = pipDoc();
+    explicitTrue.clips = explicitTrue.clips.map((c) => ({ ...c, loop: true }));
+    const withTrue = exportRiv(explicitTrue);
+    expect(Array.from(withTrue)).toEqual(Array.from(withoutField));
+
+    const d = decodeRiv(withoutField);
+    expect(d.animations.every((a) => a.loop === 1)).toBe(true);
+  });
+
+  it('clip.loop === false exports loopValue 0 (oneShot) for that clip only', () => {
+    const doc = pipDoc();
+    doc.clips[1].loop = false; // 'wave' only — 'idle' stays default/looping
+    const d = decodeRiv(exportRiv(doc));
+    const idle = d.animations.find((a) => a.name === 'idle')!;
+    const wave = d.animations.find((a) => a.name === 'wave')!;
+    expect(idle.loop).toBe(1);
+    expect(wave.loop).toBe(0);
+  });
+});
+
 // ---- Draw order ----
 //
 // Rule pinned from rive-runtime/src/artboard.cpp: m_Drawables fills in file order,

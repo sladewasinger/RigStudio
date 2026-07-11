@@ -89,8 +89,9 @@ export function buildSMPanel(container: HTMLElement): void {
   ensureLayout(sm);
 
   const body = div('sm-body');
+  body.appendChild(buildLeftPanel(doc, sm));
   body.appendChild(buildGraph(doc, sm));
-  body.appendChild(buildSide(doc, sm));
+  body.appendChild(buildRightPanel(doc, sm));
   container.appendChild(body);
 }
 
@@ -401,7 +402,7 @@ function buildGraph(doc: { clips: { name: string }[] }, sm: StateMachine): HTMLE
     checkpoint();
     const clipName = clipSel.value || doc.clips[0].name;
     const st: SMState = {
-      id: freshId('state'), name: clipName, kind: 'animation', clipName, loop: true,
+      id: freshId('state'), name: clipName, kind: 'animation', clipName,
     };
     sm.states.push(st);
     selStateId = st.id;
@@ -732,26 +733,31 @@ function deleteState(sm: StateMachine, st: SMState): void {
 }
 
 // =====================================================================================
-// Right column: SELECTED-ITEM PROPERTIES FIRST, then the machine-wide sections
-//
-// The selected state/transition's own properties are scoped to that one item; Inputs and
-// Listeners are scoped to the WHOLE machine (every state can read every input; a listener
-// fires regardless of what's selected). A real user added a trigger input and a listener
-// while a state was selected and believed both were scoped to it — nothing on screen said
-// otherwise. Properties now leads (titled with the selected item's own name) and the two
-// machine-wide sections are grouped into one visually distinct card below, each headed
-// "— machine-wide" so the scope is never ambiguous.
+// Side panels: LEFT is machine-wide (Inputs, Listeners — every state can read every
+// input, a listener fires regardless of what's selected), RIGHT is the selected state's
+// or transition's own Properties. Splitting them into separate columns (rather than
+// stacking machine-wide sections below Properties in one shared column, the previous
+// layout) makes the scope distinction structural instead of relying on a "— machine-wide"
+// label alone — a real user once added a trigger input and a listener while a state was
+// selected and believed both were scoped to it because everything sat in one column.
 // =====================================================================================
 
-function buildSide(doc: { parts: { id: string; label: string }[]; clips: { name: string }[] }, sm: StateMachine): HTMLElement {
-  const side = div('sm-side');
-  side.appendChild(buildProps(doc, sm));
-
+function buildLeftPanel(
+  doc: { parts: { id: string; label: string }[] }, sm: StateMachine,
+): HTMLElement {
+  const side = div('sm-side sm-side-left');
   const scoped = div('sm-scope-group');
   scoped.appendChild(buildInputs(sm));
   scoped.appendChild(buildListeners(doc, sm));
   side.appendChild(scoped);
+  return side;
+}
 
+function buildRightPanel(
+  doc: { clips: { name: string }[] }, sm: StateMachine,
+): HTMLElement {
+  const side = div('sm-side sm-side-right');
+  side.appendChild(buildProps(doc, sm));
   return side;
 }
 
@@ -1062,13 +1068,10 @@ function buildStateProps(
   clipRow.appendChild(clipSel);
   sec.appendChild(clipRow);
 
-  const loopRow = labeledRow('loop');
-  const loop = document.createElement('input');
-  loop.type = 'checkbox';
-  loop.checked = st.loop !== false;
-  loop.onchange = () => { checkpoint(); st.loop = loop.checked; notify(); };
-  loopRow.appendChild(loop);
-  sec.appendChild(loopRow);
+  // Loop is CLIP data now (v2.12 — matches Rive: looping is a LinearAnimation property,
+  // not a per-state one), so it's set once per clip in the timeline's clip-management
+  // cluster rather than here per state.
+  sec.appendChild(hintBlock('Looping is set on the clip itself — see the loop toggle in Timeline → clip management.'));
 }
 
 function kindHint(kind: string): string {
