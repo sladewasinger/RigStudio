@@ -11,7 +11,7 @@
  */
 
 import {
-  RigPath, state, notify, selectedPart, freshId,
+  RigPath, RigPart, state, notify, selectedPart, freshId, dropSkinOverridesForPath,
 } from '../core/model';
 import {
   parsePath, serializePath, insertNodeAfter, PathCmd,
@@ -27,7 +27,19 @@ import { pointerInPathSpace, pathHolderMat } from './coords';
 import { nodeSnapCandidates } from './snapping';
 import { renderPose } from './render';
 import { syncPartPathDom } from './partDom';
+import { invalidateSkinCache } from './skinRender';
 import { renderOverlay } from './overlay';
+
+/**
+ * Structural node edits (insert/delete/join/split) shift a path's command indexes, so a
+ * skinned part's per-node weight overrides on that path no longer point at the intended
+ * nodes — drop them (and invalidate the cached weights). No-op for unskinned parts.
+ */
+function dropOverridesForStructuralEdit(part: RigPart, pathId: string): void {
+  if (!part.skin) return;
+  dropSkinOverridesForPath(part, pathId);
+  invalidateSkinCache(part.id);
+}
 
 /** Index of a command among the drawing commands (Z excluded) — nodeTypes position. */
 export function nodeIndexOf(cmds: PathCmd[], cmdIndex: number): number {
@@ -469,6 +481,7 @@ export function deleteSelectedNodes(): boolean {
     if (changed) {
       path.d = serializePath(cmds);
       path.nodeTypes = list;
+      dropOverridesForStructuralEdit(part, path.id);
       ctx.svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
     }
   }
@@ -561,6 +574,7 @@ export function deleteSelectedSegment(): boolean {
   if (!pieces || pieces.length === 0) return false;
   checkpoint();
   const idx = part.paths.indexOf(path);
+  dropOverridesForStructuralEdit(part, path.id);
   path.d = serializePath(pieces[0].cmds);
   path.nodeTypes = pieces[0].nodeTypes;
   const extra: RigPath[] = [];
@@ -599,6 +613,7 @@ export function joinSelectedNodes(mode: 'weld' | 'segment'): boolean {
     const piece = closePath(parsePath(path.d), path.nodeTypes ?? null, mode);
     if (!piece) return false;
     checkpoint();
+    dropOverridesForStructuralEdit(part, path.id);
     path.d = serializePath(piece.cmds);
     path.nodeTypes = piece.nodeTypes;
     ctx.selectedNodes.clear();
@@ -622,6 +637,8 @@ export function joinSelectedNodes(mode: 'weld' | 'segment'): boolean {
   if (!piece) return false;
   checkpoint();
   const removedId = second.path.id;
+  dropOverridesForStructuralEdit(part, first.path.id);
+  dropOverridesForStructuralEdit(part, removedId);
   first.path.d = serializePath(piece.cmds);
   first.path.nodeTypes = piece.nodeTypes;
   part.paths = part.paths.filter((p) => p.id !== removedId);
@@ -656,6 +673,7 @@ export function editNodeStructure(d: Extract<DragState, { kind: 'node' }>, op: '
   // Command indexes shifted: a stale node selection would point at the wrong nodes.
   ctx.selectedNodes.clear();
   ctx.selectedNode = null;
+  dropOverridesForStructuralEdit(d.part, path.id);
   path.d = serializePath(cmds);
   const el = ctx.svg!.querySelector(`[data-path-id="${path.id}"]`);
   el?.setAttribute('d', path.d);

@@ -31,6 +31,9 @@ export {
 export type { NodeOp } from './nodeEditing';
 export {
   flipSelected, nudgeSelectedParts, applyRootDeltas, bindSelectedToBones,
-  unbindSelectedSkin, startBonePlacement, cancelBonePlacement,
+  bindPartsToBones, autoBindPlacedBone, unbindSelectedSkin,
+  startBonePlacement, cancelBonePlacement,
+  primaryNodeBinding, setNodeBinding, clearNodeBinding, resetNodeBindings,
 } from './rigOps';
+export type { NodeBindingInfo } from './rigOps';
 export { resetView, zoomBy } from './camera';

@@ -9,9 +9,17 @@
 
 import { state, RigPart } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
-import { skinWeights, Seg } from '../geometry/skin';
+import { skinWeights, overrideWeightRow, Seg } from '../geometry/skin';
 import { Mat, matrixOfTransform, multiply } from '../geometry/transforms';
 import { fullPoseTransform } from './pose';
+
+/**
+ * Auto-weight falloff exponent for the render path (see skinWeights). A long thin limb
+ * with a 3-bone chain bends mushily at inverse-square (2) — the joint folds don't
+ * localize; 4 concentrates each point on its nearest bone so an elbow actually creases,
+ * while distant bones still contribute enough to avoid tearing.
+ */
+const SKIN_WEIGHT_POWER = 4;
 
 // Runtime cache: parsed rest geometry + per-point weights, invalidated when the
 // rest path data changes (node edits) or the binding changes.
@@ -26,12 +34,15 @@ export function invalidateSkinCache(partId: string): void {
 }
 
 function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get>> {
+  const overrides = part.skin?.overrides ?? {};
   const sig =
     part.paths.map((p) => `${p.id}:${p.d.length}`).join('|') +
-    '#' + (part.skin?.bones.map((b) => b.id).join(',') ?? '');
+    '#' + (part.skin?.bones.map((b) => b.id).join(',') ?? '') +
+    '#' + JSON.stringify(overrides);
   const hit = skinCache.get(part.id);
   if (hit && hit.sig === sig) return hit;
 
+  const boneIds = (part.skin?.bones ?? []).map((b) => b.id);
   const segs: Seg[] = (part.skin?.bones ?? []).map((b) => b.bindSeg);
   const paths = part.paths.map((p) => {
     const cmds = pathToCubics(parsePath(p.d));
@@ -44,7 +55,26 @@ function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get
       return [{ x: (c as { x: number }).x, y: (c as { y: number }).y }];
     });
     const flat = pts.flat();
-    const weights = skinWeights(flat, segs);
+    const auto = skinWeights(flat, segs, SKIN_WEIGHT_POWER);
+
+    // Which node's override governs each flattened point (parallel to `flat`). A C
+    // command's outgoing handle (x1) belongs to the PREVIOUS node it leaves; its
+    // incoming handle (x2) and endpoint belong to this node — so overriding node i
+    // makes its whole corner (endpoint + both handles) ride the pinned bone rigidly.
+    const nodeKeyFlat: number[] = [];
+    cmds.forEach((c, i) => {
+      if (c.cmd === 'C') nodeKeyFlat.push(Math.max(0, i - 1), i, i);
+      else if (c.cmd !== 'Z') nodeKeyFlat.push(i);
+    });
+
+    const pathOverrides = overrides[p.id] ?? {};
+    const hasOverrides = Object.keys(pathOverrides).length > 0;
+    const weights = hasOverrides
+      ? auto.map((row, k) => {
+        const ov = pathOverrides[String(nodeKeyFlat[k])];
+        return (ov && overrideWeightRow(boneIds, ov)) || row;
+      })
+      : auto;
     return { id: p.id, cmds, pts, weights };
   });
   const entry = { sig, paths };

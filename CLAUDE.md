@@ -217,6 +217,60 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   used for demos and live verification. It is just an asset — nothing in the code may
   depend on its specific structure.
 
+## Bone system
+
+Bones 2.0 makes a limb bend from a hand-drawn shape with zero manual binding. The
+design goal (verbatim): draw one arm, drop 3 bones (shoulder→elbow, elbow→wrist,
+wrist→hand), and the art bends at the joints — no node editing, no bind step.
+
+- **Placement.** Bones are `kind:'bone'` null parts placed press-drag-release
+  (origin→tip). The femur button (`icons.ts` `bone`) arms `startBonePlacement`; the
+  press sets the origin, the drag the tip. **Child bones spawn at the parent tip:**
+  when a bone is *selected* as placement starts, the new bone's origin is anchored at
+  that bone's `effectiveTip` (the press only arms it — see `interactions.ts` placeBone
+  branch) and it is parented to the selected bone, so a chain grows joint-to-joint.
+  With no bone selected, placement is free-form at the press point.
+- **Chain resolution.** `model.ts`'s pure `boneChain(parts, boneId)` walks up
+  bone-only parent links to the ROOT bone, then collects the root plus every
+  descendant bone — the unit the auto-binder treats as one skeleton. It is cycle-safe
+  and independent of what non-bone part a chain root happens to hang under.
+- **Auto-bind on placement (locked decision).** After a placement completes,
+  `rigOps.autoBindPlacedBone` resolves the chain and binds every ART part whose
+  rendered bbox a chain segment overlaps (`geometry/skin.ts` `segIntersectsBox`,
+  Liang–Barsky). Binding runs under the SAME history checkpoint as the placement (in
+  the `interactions.ts` placeBone `end()`), so one undo reverts placement + binding
+  together. Placing over empty canvas binds nothing (silent). Re-binding an
+  already-skinned part as the chain grows does NOT re-bake geometry (it is already in
+  its bind pose — re-baking would only drift floats); it refreshes the bone set in
+  place and keeps any surviving overrides.
+- **Weight model.** Auto weights are normalized inverse-distance-power to each bone's
+  bind-time segment (`skinWeights`). The RENDER path passes a sharpened exponent
+  (`skinRender.ts` `SKIN_WEIGHT_POWER = 4`, vs the unit-tested default 2) because
+  inverse-square bends a long thin limb mushily — 4 localizes the joint folds. On top
+  of auto weights sit **manual per-node overrides**: `skin.overrides[pathId][cmdIndex]`
+  = `{a, b, t}` pins a node's weight to bone `a` at (1−t) blended with bone `b` at t
+  (`b:null` = 100% a) — the origin↔tip lerp across the joint where a's tip meets b's
+  origin. Overrides are keyed by the path COMMAND index (post-bind geometry is all
+  M/L/C/Z, so a command index IS its node); overriding node i governs its endpoint,
+  its incoming handle, and the next segment's outgoing handle so the corner stays
+  rigid. `skinRender` bakes overrides into the cached weight rows (cache sig includes
+  the overrides). The inspector's node-binding editor (node-editing mode, skinned
+  part, nodes selected) drives `setNodeBinding`/`clearNodeBinding`; "recompute auto
+  weights" is `resetNodeBindings`.
+- **What drops overrides.** Structural node edits (insert/delete/join/split) shift
+  command indexes, so `nodeEditing.ts` drops the affected path's overrides via
+  `dropSkinOverridesForPath` + `invalidateSkinCache`. `normalizeDoc` prunes overrides
+  with dangling bone refs or non-finite t and clamps t to [0,1]. Plain node drags and
+  one-shot node ops (smooth/symmetric/corner) keep the index, so they keep overrides.
+- **IK.** The IK tool solves the two nearest ANCESTOR joints of the grabbed part
+  (`ik.ts` `solveTwoBone`, bend-direction preserving, reach-clamped). Grabbing the END
+  bone of a chain rotates both ancestor joints; because the art is skinned to those
+  bones, it deforms live (skin weights are cached, bone deltas recompute every
+  `renderPose` — no cache invalidation needed during the drag). Per-bone rotation
+  limits are out of scope.
+- **Export limitation (unchanged).** Skinned parts export RIGIDLY — LBS is not
+  representable in Lottie/Rive transform replay. `io/` is untouched by Bones 2.0.
+
 ## Testing interactions (do not regress this)
 
 Synthetic-event verification MUST simulate real input or it will pass while the app

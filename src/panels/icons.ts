@@ -14,7 +14,10 @@ export const ICON_PATHS: Record<string, string> = {
   flipV: '<path d="M1.5 8h13" stroke-dasharray="2 1.6"/><path d="M4.5 6L8 2l3.5 4zM4.5 10L8 14l-3.5-4z" fill="currentColor" stroke="none"/>',
   group: '<rect x="2" y="2" width="8" height="8" rx="1"/><rect x="6" y="6" width="8" height="8" rx="1"/>',
   ungroup: '<rect x="2" y="2" width="7" height="7" rx="1"/><rect x="7" y="7" width="7" height="7" rx="1" stroke-dasharray="2 1.6"/><path d="M12 2l2 2M14 2l-2 2"/>',
-  bone: '<path d="M3.4 3.4 L11 6.6 L12.6 12.6 L6.6 11 Z M3.4 3.4a1.6 1.6 0 1 0 .1.1" fill="currentColor" stroke="none" fill-opacity="0.85"/>',
+  // Classic femur: a diagonal shaft with two rounded lobes (knobs) at each end.
+  bone: '<path d="M6.2 9.8 L9.8 6.2"/>' +
+    '<circle cx="11" cy="4.2" r="1.9"/><circle cx="12.8" cy="6" r="1.9"/>' +
+    '<circle cx="5" cy="11.8" r="1.9"/><circle cx="3.2" cy="10" r="1.9"/>',
   bind: '<path d="M3 13c2-5 3-8 5-11M8 13c1.5-3.5 2.5-6 4-9" /><path d="M2.5 6h11M4 10h9" stroke-dasharray="1.6 1.4"/>',
   alignL: '<path d="M2 2v12"/><rect x="4" y="3.5" width="8" height="3" fill="currentColor" stroke="none"/><rect x="4" y="9.5" width="5" height="3" fill="currentColor" stroke="none"/>',
   alignCH: '<path d="M8 2v12"/><rect x="3" y="3.5" width="10" height="3" fill="currentColor" stroke="none"/><rect x="5" y="9.5" width="6" height="3" fill="currentColor" stroke="none"/>',

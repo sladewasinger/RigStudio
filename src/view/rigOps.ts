@@ -6,13 +6,16 @@
  */
 
 import {
-  state, selectedParts, setKeyframe, channelValue,
+  state, selectedParts, selectedPart, setKeyframe, channelValue, boneChain,
+  RigPart, SkinBone, SkinOverride,
 } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
+import { segIntersectsBox } from '../geometry/skin';
 import { applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
-import { ctx, linearOnly, round1, round3 } from './context';
+import { ctx, linearOnly, parseNodeKey, round1, round3 } from './context';
 import {
   poseTime, groupTransformOf, chainMatOf, effectivePivot, effectiveTip, fullPoseTransform,
+  partRootBoxes,
 } from './pose';
 import { applyPathAttrs } from './partDom';
 import { invalidateSkinCache } from './skinRender';
@@ -94,33 +97,41 @@ export function applyRootDeltas(deltas: Map<string, { dx: number; dy: number }>)
   renderPose();
 }
 
-/**
- * Bind the selected art parts to the selected bones (linear-blend skinning).
- * Bakes every static transform — parent chain, rest pose, baked SVG transform, rest
- * scale, per-path transforms — into the path data (the current Setup look becomes
- * the bind pose), zeroes the part's own pose so its motion comes purely from the
- * bones, and records each bone's rest world + segment for weights/deltas.
- * Returns an error message, or null on success. Caller checkpoints first.
- */
-export function bindSelectedToBones(): string | null {
-  if (state.editorMode !== 'setup') return 'Bind in Setup mode.';
-  const arts = selectedParts().filter((p) => p.paths.length > 0);
-  const bones = selectedParts().filter((p) => p.kind === 'bone');
-  if (arts.length === 0 || bones.length === 0) {
-    return 'Select at least one art part and one bone (Shift+click), then bind.';
-  }
+/** One bone's bind-time record (rest world + segment) for weights and per-frame deltas. */
+function skinBoneOf(bone: RigPart): SkinBone {
+  const p = effectivePivot(bone, null);
+  const q = effectiveTip(bone, null) ?? { x: p.x + 5, y: p.y };
+  return {
+    id: bone.id,
+    restWorldInv: invertMat(matrixOfTransform(fullPoseTransform(bone, null))),
+    bindSeg: { p: { ...p }, q: { ...q } },
+  };
+}
 
-  const skinBones = bones.map((bone) => {
-    const p = effectivePivot(bone, null);
-    const q = effectiveTip(bone, null) ?? { x: p.x + 5, y: p.y };
-    return {
-      id: bone.id,
-      restWorldInv: invertMat(matrixOfTransform(fullPoseTransform(bone, null))),
-      bindSeg: { p, q },
-    };
-  });
+/**
+ * Bind art parts to bones (linear-blend skinning) — the shared core behind the Bind
+ * button and Bones 2.0 auto-bind. For an UNSKINNED part it bakes every static transform
+ * (parent chain, rest pose, baked SVG transform, rest scale, per-path transforms) into
+ * the path data — the current Edit look becomes the bind pose — zeroes the part's own
+ * pose, and captures each bone's rest world + segment. For an ALREADY-skinned part
+ * (auto-bind re-derives an existing arm's weights as the chain grows), the geometry is
+ * already in its bind pose, so re-baking would be a float-drifting no-op: instead the
+ * bone set is refreshed in place and any surviving per-node overrides are kept.
+ * Mutates the DOM `d` attributes; does NOT checkpoint or renderPose — the caller does.
+ */
+export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
+  if (arts.length === 0 || bones.length === 0) return;
+  const skinBones = bones.map(skinBoneOf);
+  const freshBones = (): SkinBone[] =>
+    skinBones.map((b) => ({ ...b, bindSeg: { p: { ...b.bindSeg.p }, q: { ...b.bindSeg.q } } }));
 
   for (const part of arts) {
+    if (part.skin) {
+      const overrides = part.skin.overrides;
+      part.skin = { bones: freshBones(), ...(overrides ? { overrides } : {}) };
+      invalidateSkinCache(part.id);
+      continue;
+    }
     const full = matrixOfTransform(groupTransformOf(part, null));
     for (const path of part.paths) {
       const m = multiply(full, matrixOfTransform(path.transform));
@@ -145,11 +156,126 @@ export function bindSelectedToBones(): string | null {
     part.transform = '';
     part.rest = { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 };
     part.parentId = null;
-    part.skin = { bones: skinBones.map((b) => ({ ...b, bindSeg: { p: { ...b.bindSeg.p }, q: { ...b.bindSeg.q } } })) };
+    part.skin = { bones: freshBones() };
     invalidateSkinCache(part.id);
   }
+}
+
+/**
+ * Bind the selected art parts to the selected bones. Returns an error message, or null
+ * on success. Caller checkpoints first.
+ */
+export function bindSelectedToBones(): string | null {
+  if (state.editorMode !== 'setup') return 'Bind in Setup mode.';
+  const arts = selectedParts().filter((p) => p.paths.length > 0);
+  const bones = selectedParts().filter((p) => p.kind === 'bone');
+  if (arts.length === 0 || bones.length === 0) {
+    return 'Select at least one art part and one bone (Shift+click), then bind.';
+  }
+  bindPartsToBones(arts, bones);
   renderPose();
   return null;
+}
+
+/**
+ * Bones 2.0 AUTO-BIND (locked decision): after a bone is placed, resolve its full chain
+ * (root bone + every descendant bone) and bind every ART part the chain's segments
+ * overlap — the arm bends with zero manual binding steps. Overlap is a cheap
+ * segment↔rendered-bbox test. Re-binds already-skinned arts as the chain grows. Binds
+ * nothing when no art sits under the chain (silent). Does NOT checkpoint/render — the
+ * placement gesture owns the single checkpoint and final repaint.
+ */
+export function autoBindPlacedBone(boneId: string): void {
+  const doc = state.doc;
+  if (!doc) return;
+  const chain = boneChain(doc.parts, boneId);
+  if (chain.length === 0) return;
+  const segs = chain.map((b) => {
+    const p = effectivePivot(b, null);
+    const q = effectiveTip(b, null) ?? { x: p.x + 5, y: p.y };
+    return { p, q };
+  });
+  const artIds = doc.parts.filter((p) => p.kind === 'art' && p.paths.length > 0).map((p) => p.id);
+  const boxes = partRootBoxes(artIds);
+  const targets: RigPart[] = [];
+  for (const id of artIds) {
+    const box = boxes.get(id);
+    const part = doc.parts.find((p) => p.id === id);
+    if (box && part && segs.some((s) => segIntersectsBox(s, box))) targets.push(part);
+  }
+  if (targets.length === 0) return; // no art under the chain — bind nothing
+  bindPartsToBones(targets, chain);
+}
+
+// ---- Per-node weight overrides (Bones 2.0 manual refinement) ----
+
+export interface NodeBindingInfo {
+  pathId: string;
+  cmdIndex: number;
+  override: SkinOverride | null;
+}
+
+/** The primary selected node's current binding (auto vs override), for the inspector. */
+export function primaryNodeBinding(): NodeBindingInfo | null {
+  const part = selectedPart();
+  if (!part?.skin || !ctx.selectedNode) return null;
+  const { pathId, cmdIndex } = ctx.selectedNode;
+  const ov = part.skin.overrides?.[pathId]?.[String(cmdIndex)];
+  return { pathId, cmdIndex, override: ov ? { ...ov } : null };
+}
+
+/**
+ * Pin every selected node's weight to bone `a` at (1−t) blended with bone `b` at t
+ * (b null = 100% a). Both ids must reference the part's bound bones. Caller checkpoints.
+ */
+export function setNodeBinding(a: string, b: string | null, t: number): boolean {
+  const part = selectedPart();
+  if (!part?.skin || ctx.selectedNodes.size === 0) return false;
+  const boneIds = new Set(part.skin.bones.map((bb) => bb.id));
+  if (!boneIds.has(a)) return false;
+  const bb = b && b !== a && boneIds.has(b) ? b : null;
+  const overrides = part.skin.overrides ?? (part.skin.overrides = {});
+  const value: SkinOverride = { a, b: bb, t: Math.min(1, Math.max(0, t)) };
+  for (const key of ctx.selectedNodes) {
+    const { pathId, cmdIndex } = parseNodeKey(key);
+    (overrides[pathId] ?? (overrides[pathId] = {}))[String(cmdIndex)] = { ...value };
+  }
+  invalidateSkinCache(part.id);
+  renderPose();
+  return true;
+}
+
+/** Clear per-node overrides on every selected node (caller checkpoints). */
+export function clearNodeBinding(): boolean {
+  const part = selectedPart();
+  const overrides = part?.skin?.overrides;
+  if (!part || !overrides || ctx.selectedNodes.size === 0) return false;
+  let changed = false;
+  for (const key of ctx.selectedNodes) {
+    const { pathId, cmdIndex } = parseNodeKey(key);
+    const rec = overrides[pathId];
+    if (rec && String(cmdIndex) in rec) {
+      delete rec[String(cmdIndex)];
+      changed = true;
+      if (Object.keys(rec).length === 0) delete overrides[pathId];
+    }
+  }
+  if (Object.keys(overrides).length === 0) delete part.skin!.overrides;
+  if (changed) {
+    invalidateSkinCache(part.id);
+    renderPose();
+  }
+  return changed;
+}
+
+/** Drop ALL per-node overrides on the selected part ("recompute auto weights"). */
+export function resetNodeBindings(): boolean {
+  const part = selectedPart();
+  if (!part?.skin?.overrides) return false;
+  delete part.skin.overrides;
+  invalidateSkinCache(part.id);
+  renderPose();
+  return true;
 }
 
 /** Remove the skin binding (geometry keeps its baked rest look, part turns rigid). */

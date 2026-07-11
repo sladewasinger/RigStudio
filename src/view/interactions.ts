@@ -31,7 +31,7 @@ import {
 } from './coords';
 import {
   poseTime, innerLocalTransform, fullPoseTransform, groupTransformOf,
-  chainMatOf, ownTranslateOf, effectivePivot,
+  chainMatOf, ownTranslateOf, effectivePivot, effectiveTip,
 } from './pose';
 import {
   clearGroupEntry, artworkUnderPointer, stepOutFocus,
@@ -46,7 +46,7 @@ import {
   nodeIndexOf, ensureNodeTypes, segmentStart, pointOnSegment, segmentHit, subpathStart,
   applyMirrorConstraint, editNodeStructure, moveNode,
 } from './nodeEditing';
-import { cancelBonePlacement } from './rigOps';
+import { cancelBonePlacement, autoBindPlacedBone } from './rigOps';
 import { applyViewRect, zoomAround } from './camera';
 
 /** First real movement of a drag: fire the deferred checkpoint exactly once. */
@@ -134,10 +134,16 @@ export function wireInteractions(): void {
     if (!doc) return;
 
     // Bone placement: press to set the origin (the joint), drag to aim, release to
-    // set the tip — like drawing a bone in Rive/Blender.
+    // set the tip — like drawing a bone in Rive/Blender. CHILD BONES (Bones 2.0): when
+    // a bone is selected the new bone's origin is anchored at that bone's effective TIP
+    // (the press only arms it), so a chain grows joint-to-joint without hunting for the
+    // exact tip pixel. With no bone selected, placement stays free-form at the press.
     if (ctx.placingBone && ev.button === 0) {
+      const sel = selectedPart();
+      const parentTip = sel && sel.kind === 'bone' ? effectiveTip(sel, poseTime()) : null;
       const p = pointerInRoot(ev);
-      ctx.drag = { kind: 'placeBone', originRoot: { x: p.x, y: p.y }, current: null };
+      const origin = parentTip ?? { x: p.x, y: p.y };
+      ctx.drag = { kind: 'placeBone', originRoot: origin, current: null };
       try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
@@ -902,6 +908,10 @@ export function wireInteractions(): void {
         );
         bone.boneTip = { x: round1(tipL.x), y: round1(tipL.y) };
         registerPart(bone);
+        // AUTO-BIND ON PLACEMENT (Bones 2.0): resolve the whole chain this bone belongs
+        // to and skin every overlapping art part — under the SAME checkpoint, so undo
+        // reverts placement + binding as one gesture.
+        autoBindPlacedBone(bone.id);
         cancelBonePlacement();
         selectPart(bone.id);
       }

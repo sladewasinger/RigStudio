@@ -74,6 +74,19 @@ export interface SkinBone {
   bindSeg: { p: Vec2; q: Vec2 };
 }
 
+/**
+ * A manual per-node weight override (Bones 2.0 refinement mode). A node keyed by this
+ * blends bone `a` at weight (1−t) with bone `b` at weight `t` — i.e. an origin↔tip
+ * lerp when `a` and `b` share a joint (a's tip == b's origin). `b === null` means 100%
+ * bone `a`. Both ids reference the part's own `skin.bones`; dangling refs are pruned by
+ * normalizeDoc. Overrides win over auto weights per node in the LBS render.
+ */
+export interface SkinOverride {
+  a: string;
+  b: string | null;
+  t: number;
+}
+
 export interface RigPart {
   id: string;
   label: string;
@@ -94,8 +107,13 @@ export interface RigPart {
    * instead of riding a parent chain. Bind bakes static transforms into path data,
    * zeroes rest, and clears parentId; weights derive from bindSeg distances at
    * runtime. Exporters render skinned parts rigidly (documented limitation).
+   *
+   * `overrides` are manual per-node refinements: `overrides[pathId][cmdIndex]` pins
+   * that node's weight (see SkinOverride). Keyed by the path COMMAND index (post-bind
+   * geometry is all M/L/C/Z, so a command index === its node); structural node edits
+   * shift those indexes, so they drop the affected path's overrides.
    */
-  skin?: { bones: SkinBone[] } | null;
+  skin?: { bones: SkinBone[]; overrides?: Record<string, Record<string, SkinOverride>> } | null;
   paths: RigPath[];
 }
 
@@ -589,6 +607,45 @@ export function ungroupPart(id: string): boolean {
   return true;
 }
 
+/**
+ * The full bone chain a bone belongs to (Bones 2.0 auto-bind): its ROOT bone (walking
+ * up parent links while they stay bones) plus every bone descended from that root
+ * through bone-only links. Returned in doc-parts order (placement order == root first
+ * for a normally-built chain). Pure over the parts array, so it is unit-testable.
+ */
+export function boneChain(parts: RigPart[], boneId: string): RigPart[] {
+  const byId = new Map(parts.map((p) => [p.id, p]));
+  const start = byId.get(boneId);
+  if (!start || start.kind !== 'bone') return [];
+  const rootOf = (b: RigPart): RigPart => {
+    let r = b;
+    const seen = new Set([r.id]);
+    while (r.parentId) {
+      const par = byId.get(r.parentId);
+      if (!par || par.kind !== 'bone' || seen.has(par.id)) break;
+      r = par;
+      seen.add(par.id);
+    }
+    return r;
+  };
+  const root = rootOf(start);
+  return parts.filter((p) => p.kind === 'bone' && rootOf(p).id === root.id);
+}
+
+/**
+ * Drop a skinned part's per-node weight overrides for one path. Structural node edits
+ * (insert/delete/join/split) shift command indexes, so the keyed overrides no longer
+ * point at the intended nodes — the honest fix is to drop them. No-op when the part is
+ * unskinned or has no overrides on that path.
+ */
+export function dropSkinOverridesForPath(part: RigPart, pathId: string): void {
+  const overrides = part.skin?.overrides;
+  if (overrides && pathId in overrides) {
+    delete overrides[pathId];
+    if (Object.keys(overrides).length === 0) delete part.skin!.overrides;
+  }
+}
+
 /** Structural edits the AI assistant may request (opt-in). */
 export interface RigChanges {
   addBones: { label: string; pivot: Vec2; parent: string | null }[];
@@ -1017,6 +1074,23 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     if (part.skin) {
       part.skin.bones = part.skin.bones.filter((b) => ids.has(b.id));
       if (part.skin.bones.length === 0) part.skin = null;
+    }
+    // Prune per-node weight overrides: drop entries whose bone refs no longer resolve
+    // to a bound bone, or whose blend factor is non-finite; clamp t into [0,1].
+    if (part.skin && part.skin.overrides) {
+      const boneIds = new Set(part.skin.bones.map((b) => b.id));
+      for (const pathId of Object.keys(part.skin.overrides)) {
+        const rec = part.skin.overrides[pathId];
+        for (const key of Object.keys(rec)) {
+          const ov = rec[key];
+          const bad = !ov || typeof ov.a !== 'string' || !boneIds.has(ov.a)
+            || (ov.b != null && !boneIds.has(ov.b)) || !Number.isFinite(ov.t);
+          if (bad) delete rec[key];
+          else ov.t = Math.min(1, Math.max(0, ov.t));
+        }
+        if (Object.keys(rec).length === 0) delete part.skin.overrides[pathId];
+      }
+      if (Object.keys(part.skin.overrides).length === 0) delete part.skin.overrides;
     }
   }
   doc.clips = doc.clips?.length ? doc.clips : [{ name: 'idle', duration: 2000, tracks: [] }];
