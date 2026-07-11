@@ -289,6 +289,37 @@ Implementation phases (P1 first — it moves files — then maximum parallelism)
   tooltip stating it sends the CURRENT PLAYHEAD pose; structural-edit schema
   extended to the new bone system (AI can split a limb into bound bones).
 
+## v2.13 — bones-as-hierarchy, freeze mode, table stakes (planned 2026-07-11, in flight)
+
+Decisions locked with Austin: a chain deforms ONLY the object it's parented under
+(hierarchy IS the assignment — no hidden bindings; multi-object cases group first);
+the ≋ "skinned" badge becomes a subtle renamed indicator (bone glyph + "deformed by
+its bones" tooltip); bezier-handle-level manual weights are deferred (control points
+inherit from their neighboring vertex).
+
+- [ ] **Bones/skinning bug overhaul** (in flight): reproduce-then-fix the six
+  live-use bugs — bbox auto-bind grabbing the wrong parts (→ real point-in-fill
+  targeting + selected-part preference), bind not render-neutral, stale overlay
+  after placement, dead-end clicks on deformed parts, independently draggable
+  child origins (→ shared joints), inert IK tool.
+- [ ] **Freeze mode (Rive parity)**: `Y` key + toolbar toggle with an UNMISSABLE
+  in-freeze indicator (banner + canvas tint). Pivots/origins/joints are visible
+  but immovable (and don't change the cursor) outside freeze; freeze unlocks
+  exactly that editing. Prevents the constant accidental origin-drags.
+- [ ] **Bone position model**: only a chain's ROOT bone has a position; child
+  bones are rotation + length from the parent tip (inspector shows exactly
+  that; tips/origins derive). Editing length/rotation is how you fit a chain to
+  artwork.
+- [ ] **Assignment via hierarchy**: placing a chain under an object is the whole
+  assignment story; weights stay auto-derived data (per-vertex, manual override
+  editor remains for refinement); the layers indicator gets the subtle rename.
+- [ ] **File → New**: a New button (in-app confirm when unsaved work exists)
+  starting a fresh blank document with a default artboard.
+- [ ] **Table-stakes gap audit**: sweep for other missing everyday-editor basics
+  (the "what else are we missing" pass — e.g. Save As naming, recent files,
+  part copy/paste across the clipboard, Esc consistency) and file the findings
+  here as checkboxes.
+
 ## Testing conventions (hard-learned)
 
 - **Dispatch to the true hit target**: interaction tests must target
