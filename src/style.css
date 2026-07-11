@@ -511,13 +511,40 @@ input[type='number'] { width: 90px; }
   fill: none;
   stroke: #1a1a1a;
   stroke-width: 3px;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  paint-order: stroke;
   font-family: system-ui, sans-serif;
   font-weight: 600;
 }
 
-.node-handle { fill: rgba(122, 162, 247, 0.7); stroke: #fff; stroke-width: 0.5; cursor: move; }
+/* P2b bug fix: these strokes were doc-unit and grew unbounded with zoom (the fill
+   geometry is already screen-constant via handleSize()), eventually swelling the
+   stroke past the shape itself and swallowing the type-glyph color/shape distinction
+   at high zoom. vector-effect: non-scaling-stroke keeps strokes at their literal
+   small width in screen px, matching every other overlay handle in this file. */
+.node-handle {
+  fill: rgba(122, 162, 247, 0.7);
+  stroke: #fff;
+  stroke-width: 0.5;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+}
 .node-handle.selected { fill: #ffd166; stroke: #fff; }
-.ctrl-handle { fill: rgba(255, 209, 102, 0.7); stroke: #6b5b1e; stroke-width: 0.5; cursor: move; }
+.ctrl-handle {
+  fill: rgba(255, 209, 102, 0.7);
+  stroke: #6b5b1e;
+  stroke-width: 0.5;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+}
+.node-handle-ring {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
 .handle-line {
   stroke: rgba(255, 209, 102, 0.5);
   stroke-width: 1;

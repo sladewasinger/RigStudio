@@ -11,6 +11,9 @@ import {
 } from '../core/model';
 import { renderPose, reorderCanvas, enterGroupsFor } from '../view';
 import { checkpoint } from '../core/history';
+import { dialog } from '../ui/dialogs';
+import { showContextMenu } from '../ui/contextMenu';
+import { buildPartContextMenu } from '../ui/actions';
 
 // ---- Layers tree ----
 
@@ -105,14 +108,22 @@ function partNode(part: RigPart): HTMLElement {
     notify();
     renderPose();
   };
-  row.ondblclick = () => {
-    const newName = prompt('Rename layer', part.label);
-    if (newName) {
-      checkpoint();
-      part.label = newName.trim().replace(/\s+/g, '_');
-      notify();
-    }
+  row.ondblclick = (ev) => {
+    ev.stopPropagation();
+    beginInlineRename(row, name, part);
   };
+  row.addEventListener('contextmenu', (ev) => {
+    ev.preventDefault();
+    if (!state.selectedPartIds.includes(part.id)) {
+      selectPart(part.id);
+      enterGroupsFor(part.id);
+      notify();
+      renderPose();
+    } else {
+      state.selectedPartId = part.id;
+    }
+    showContextMenu(buildPartContextMenu(part), ev.clientX, ev.clientY);
+  });
 
   // Drag to reorder (top/bottom edge = above/below) or to parent (middle).
   row.draggable = true;
@@ -146,13 +157,9 @@ function partNode(part: RigPart): HTMLElement {
         notify();
         renderPose();
       };
-      pathRow.ondblclick = () => {
-        const newName = prompt('Rename object', path.label);
-        if (newName) {
-          checkpoint();
-          path.label = newName.trim().replace(/\s+/g, '_');
-          notify();
-        }
+      pathRow.ondblclick = (ev) => {
+        ev.stopPropagation();
+        beginInlineRename(pathRow, pathName, path);
       };
       pathLi.appendChild(pathRow);
       kids.appendChild(pathLi);
@@ -160,6 +167,48 @@ function partNode(part: RigPart): HTMLElement {
     li.appendChild(kids);
   }
   return li;
+}
+
+/**
+ * Swap `labelEl` for a text input in place (VS Code-style inline rename): select-all on
+ * open, Enter commits with a checkpoint, Escape cancels, blur commits. A no-op rename
+ * (empty or unchanged) just reverts the DOM without touching history.
+ */
+function beginInlineRename(row: HTMLElement, labelEl: HTMLElement, target: { label: string }): void {
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'layer-rename-input';
+  input.value = target.label;
+  row.replaceChild(input, labelEl);
+  input.focus();
+  input.select();
+
+  let done = false;
+  const commit = () => {
+    if (done) return;
+    done = true;
+    input.removeEventListener('blur', commit);
+    const val = input.value.trim().replace(/\s+/g, '_');
+    if (val && val !== target.label) {
+      checkpoint();
+      target.label = val;
+      notify(); // full rebuild replaces `row`; no need to restore labelEl ourselves
+    } else if (input.isConnected) {
+      row.replaceChild(labelEl, input);
+    }
+  };
+  const cancel = () => {
+    if (done) return;
+    done = true;
+    input.removeEventListener('blur', commit);
+    row.replaceChild(labelEl, input);
+  };
+  input.addEventListener('keydown', (ev) => {
+    ev.stopPropagation(); // don't let '%'/tool-key/etc. shortcuts fire while typing
+    if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+  });
+  input.addEventListener('blur', commit);
 }
 
 /** Accept part drags; newParentId null = detach. */
@@ -177,7 +226,7 @@ function wireDropTarget(el: HTMLElement, newParentId: string | null): void {
     if (!childId || childId === newParentId) return;
     checkpoint();
     if (!setParent(childId, newParentId)) {
-      alert('Cannot parent a part to its own descendant.');
+      void dialog.alert('Cannot parent a part to its own descendant.');
       return;
     }
     if (newParentId) expanded.add(newParentId);
@@ -223,7 +272,7 @@ function wirePartRowDrop(row: HTMLElement, part: RigPart): void {
       ? setParent(draggedId, part.id)
       : movePartRelativeTo(draggedId, part.id, zone);
     if (!ok) {
-      alert('That drop would create a parenting cycle.');
+      void dialog.alert('That drop would create a parenting cycle.');
       return;
     }
     if (zone === 'into') expanded.add(part.id);

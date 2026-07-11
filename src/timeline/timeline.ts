@@ -18,6 +18,7 @@ import { renderPose } from '../view';
 import { checkpoint } from '../core/history';
 import { buildGraphPanel, onGraphChange } from './graph';
 import { buildSMPanel, stopPreview, setLogicVisible } from '../panels/smPanel';
+import { dialog } from '../ui/dialogs';
 
 let container: HTMLElement;
 let rafId = 0;
@@ -146,7 +147,7 @@ export function render(): void {
   if (state.editorMode !== 'animate') {
     const note = div('tl-setup-note');
     note.innerHTML =
-      'Setup mode — you are editing the character\'s rest pose, pivots, and paths. ' +
+      'Edit mode — you are editing the character\'s rest pose, pivots, and paths. ' +
       'Switch to <b>Animate</b> (top right) to record keyframes.';
     container.appendChild(note);
     return;
@@ -189,8 +190,8 @@ export function render(): void {
   };
   bar.appendChild(clipSelect);
 
-  bar.appendChild(button('+ animation', () => {
-    const name = prompt('Animation name?', `clip_${doc.clips.length + 1}`);
+  bar.appendChild(button('+ animation', async () => {
+    const name = await dialog.prompt('Animation name?', `clip_${doc.clips.length + 1}`);
     if (!name) return;
     checkpoint();
     doc.clips.push({ name, duration: 2000, tracks: [] });
@@ -209,9 +210,9 @@ export function render(): void {
     notify();
   }));
 
-  bar.appendChild(button('rename', () => {
+  bar.appendChild(button('rename', async () => {
     if (!clip) return;
-    const name = prompt('New clip name?', clip.name);
+    const name = await dialog.prompt('New clip name?', clip.name);
     if (name) {
       checkpoint();
       clip.name = name;
@@ -219,9 +220,9 @@ export function render(): void {
     }
   }));
 
-  bar.appendChild(button('delete', () => {
+  bar.appendChild(button('delete', async () => {
     if (!clip || doc.clips.length <= 1) return;
-    if (!confirm(`Delete animation "${clip.name}"?`)) return;
+    if (!await dialog.confirm(`Delete animation "${clip.name}"?`)) return;
     checkpoint();
     doc.clips.splice(state.activeClipIndex, 1);
     state.activeClipIndex = 0;

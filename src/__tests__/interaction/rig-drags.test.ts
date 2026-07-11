@@ -171,3 +171,36 @@ describe('scenario 5 — animate auto-key drag', () => {
     expect(clipTrack(id, 'rotate'), 'no rotate track from a Shift+move').toBeFalsy();
   });
 });
+
+describe('scenario 8 — rotate drag crossing the ±180° ray (P2b bug fix)', () => {
+  it('records the short-way delta, not a ~360° jump', () => {
+    selectByLabel('right_arm');
+    state.tool = 'rotate';
+    repaint();
+
+    const ring = overlayEl().querySelector('[data-role="gizmo-ring"]') as SVGCircleElement | null;
+    if (!ring) throw new Error('no gizmo-ring rendered');
+    // Read the ring's geometry straight from its SVG attributes (root/document space,
+    // same frame as effectivePivot) rather than getBoundingClientRect, which would
+    // include the (screen-constant, 12px) hit-stroke and throw off the exact radius.
+    const cx = Number(ring.getAttribute('cx'));
+    const cy = Number(ring.getAttribute('cy'));
+    const r = Number(ring.getAttribute('r'));
+    const ptAt = (deg: number) => {
+      const a = (deg * Math.PI) / 180;
+      return docToClient({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+    };
+
+    const rot0 = partByLabel('right_arm').rest.rotate;
+    // Both endpoints sit at the SAME client x (mirrored across the pivot's negative-x
+    // ray), so the straight-line chord gestureDrag interpolates sweeps smoothly
+    // THROUGH angle=180° — the atan2 branch cut — a real multi-step gesture going the
+    // SHORT way (20°) across the ray. The old raw-diff implementation instead reads
+    // the down→up angle difference as (-170 - 170) = -340°.
+    gestureDrag(ptAt(170), ptAt(-170), { steps: 12 });
+
+    const rotDelta = partByLabel('right_arm').rest.rotate - rot0;
+    expectClose(rotDelta, 20, 8, 'rotate crossing ±180° records the short-way delta');
+    expect(Math.abs(rotDelta)).toBeLessThan(60); // nowhere near the ~340°/360° bug magnitude
+  });
+});

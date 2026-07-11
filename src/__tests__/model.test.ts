@@ -684,6 +684,32 @@ describe('normalizeDoc', () => {
     const out = normalizeDoc(doc);
     expect(out.stateMachines![0].states.map((s) => s.kind)).toEqual(['entry', 'any', 'exit']);
   });
+
+  it('seeds an absent artboard as disabled, matching the current viewBox (back-compat: pre-P2c docs and fresh SVG imports)', () => {
+    const doc = makeDoc([makePart('p1')]);
+    delete (doc as { artboard?: unknown }).artboard;
+    const out = normalizeDoc(doc);
+    expect(out.artboard).toEqual({ enabled: false, x: 0, y: 0, w: 100, h: 100 });
+  });
+
+  it('leaves a well-formed enabled artboard untouched', () => {
+    const doc = makeDoc([makePart('p1')]);
+    doc.artboard = { enabled: true, x: -10, y: 5, w: 200, h: 150 };
+    const out = normalizeDoc(doc);
+    expect(out.artboard).toEqual({ enabled: true, x: -10, y: 5, w: 200, h: 150 });
+  });
+
+  it('falls back to the viewBox per axis for a non-finite x/y or a non-positive w/h (hand-edited file)', () => {
+    const doc = makeDoc([makePart('p1')]);
+    doc.artboard = {
+      enabled: true,
+      x: Number.NaN, y: 12,
+      w: -5, h: 0,
+    } as unknown as RigDoc['artboard'];
+    const out = normalizeDoc(doc);
+    // x/w/h were invalid -> viewBox (0,_,100,100); y (12) was valid -> kept.
+    expect(out.artboard).toEqual({ enabled: true, x: 0, y: 12, w: 100, h: 100 });
+  });
 });
 
 describe('draw order (z-order)', () => {
@@ -873,8 +899,9 @@ describe('bones, groups, structural edits', () => {
 // some code path attaches a value the type doesn't declare. The tests below build one
 // document that sets EVERY field on every type at once — including the ones easy to
 // forget (boneTip, skin, pivotHint, nodeTypes, rest skew, a negative rest scale flip,
-// a custom bezier alongside a preset easing) — with no field left `undefined`, so a
-// second serialize of the round-tripped doc must be byte-identical to the first.
+// a custom bezier alongside a preset easing, an enabled artboard distinct from the
+// viewBox) — with no field left `undefined`, so a second serialize of the
+// round-tripped doc must be byte-identical to the first.
 
 const TORSO = 'torso';
 const SHOULDER = 'shoulder_bone';
@@ -887,6 +914,9 @@ function maximalDoc(): RigDoc {
   return {
     name: 'maximal_test_rig',
     viewBox: { x: 0, y: 0, w: 120, h: 120 },
+    // Enabled and deliberately offset/sized differently from the viewBox, so the round
+    // trip proves the two rects are independent (not one derived from the other).
+    artboard: { enabled: true, x: -10, y: -5, w: 140, h: 130 },
     rootPivot: { x: 50, y: 90 },
     // Draw order deliberately does NOT match the parent hierarchy or creation order —
     // doc.parts array order IS paint order and must round-trip independently of it.

@@ -12,7 +12,19 @@ import { renderPose } from './render';
 export function resetView(): void {
   ctx.viewRect = null;
   if (ctx.svg && state.doc) {
-    ctx.viewRect = { ...state.doc.viewBox };
+    const vb = state.doc.viewBox;
+    const ab = state.doc.artboard;
+    if (ab?.enabled) {
+      // Fit the union of the document viewBox and the enabled artboard so the page
+      // rectangle always frames fully on F / load.
+      const x = Math.min(vb.x, ab.x);
+      const y = Math.min(vb.y, ab.y);
+      const r = Math.max(vb.x + vb.w, ab.x + ab.w);
+      const b = Math.max(vb.y + vb.h, ab.y + ab.h);
+      ctx.viewRect = { x, y, w: r - x, h: b - y };
+    } else {
+      ctx.viewRect = { ...vb };
+    }
     applyViewRect();
   }
 }

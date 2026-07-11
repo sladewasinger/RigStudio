@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { parsePath, PathCmd } from '../../geometry/paths';
+import { parsePath, serializePath, PathCmd } from '../../geometry/paths';
 import {
   bootRig, resetRig, partByLabel, gestureDrag, expectClose, overlayEl,
-  clientCenterOf, enterNodeMode, rawToClient, wheelAt, viewBox,
+  clientCenterOf, enterNodeMode, rawToClient, wheelAt, viewBox, repaint,
 } from './harness';
 
 beforeAll(bootRig);
@@ -114,5 +114,78 @@ describe('scenario 7 — segment bend including the closing Z', () => {
       best = Math.min(best, Math.hypot(cl.x - target.x, cl.y - target.y));
     }
     expectClose(best, 0, 0.5, 'curve passes through the pointer');
+  });
+});
+
+describe('scenario 8 — segment bend preserves symmetric-node mirroring (P2b bug fix)', () => {
+  it("bending a segment adjacent to a 'z' node keeps both its handles mirrored", () => {
+    const id = mouthId();
+    enterNodeMode('face', id);
+
+    const cmds0 = mouthCmds();
+    const node1 = cmds0[1] as { x: number; y: number };
+    const seg = cmds0[2] as { x1: number; y1: number; x2: number; y2: number; x: number; y: number };
+    // Curve point at t=0.5 (raw path coordinates) — press there to grab the segment
+    // running from node1 to node2, both persistently typed 'z' (mouthId's 'zzzzz').
+    const mid = {
+      x: 0.125 * node1.x + 0.375 * seg.x1 + 0.375 * seg.x2 + 0.125 * seg.x,
+      y: 0.125 * node1.y + 0.375 * seg.y1 + 0.375 * seg.y2 + 0.125 * seg.y,
+    };
+    const press = rawToClient(id, mid.x, mid.y);
+    const target = { x: press.x + 18, y: press.y + 14 };
+    gestureDrag(press, target);
+
+    const cmds1 = mouthCmds();
+    const n1 = cmds1[1] as { x: number; y: number };
+    const bent = cmds1[2] as { x1: number; y1: number; x2: number; y2: number; x: number; y: number };
+    const n2 = { x: bent.x, y: bent.y };
+    const prevArrive = cmds1[1] as { x2: number; y2: number };
+    const next = cmds1[3] as { x1: number; y1: number };
+
+    // Node1 leaves via the bent segment's x1, arrives via the PREVIOUS segment's x2 —
+    // writing the bent control points directly (bypassing moveNode's mirroring) used
+    // to leave this stale, degrading the 'z' node to a corner.
+    const own1 = { x: bent.x1 - n1.x, y: bent.y1 - n1.y };
+    const partner1 = { x: prevArrive.x2 - n1.x, y: prevArrive.y2 - n1.y };
+    const la1 = Math.hypot(own1.x, own1.y), lb1 = Math.hypot(partner1.x, partner1.y);
+    const cos1 = (own1.x * partner1.x + own1.y * partner1.y) / (la1 * lb1);
+    expectClose(cos1, -1, 1e-2, "node1 ('z') handles stay opposed after the bend");
+    expectClose(la1, lb1, 0.1, "node1 ('z') handles stay equal length after the bend");
+
+    // Node2 arrives via the bent segment's x2, leaves via the NEXT segment's x1.
+    const own2 = { x: bent.x2 - n2.x, y: bent.y2 - n2.y };
+    const partner2 = { x: next.x1 - n2.x, y: next.y1 - n2.y };
+    const la2 = Math.hypot(own2.x, own2.y), lb2 = Math.hypot(partner2.x, partner2.y);
+    const cos2 = (own2.x * partner2.x + own2.y * partner2.y) / (la2 * lb2);
+    expectClose(cos2, -1, 1e-2, "node2 ('z') handles stay opposed after the bend");
+    expectClose(la2, lb2, 0.1, "node2 ('z') handles stay equal length after the bend");
+  });
+});
+
+describe('scenario 9 — zero-length bezier handle hiding', () => {
+  it('a control point retracted onto its node renders no ctrl-handle dot', () => {
+    const id = mouthId();
+    enterNodeMode('face', id);
+
+    const sel = `[data-role="node"][data-path-id="${id}"][data-cmd-index="2"][data-field="x1"]`;
+    expect(overlayEl().querySelector(sel), 'ctrl handle renders before retraction').toBeTruthy();
+
+    const part = partByLabel('face');
+    const path = part.paths.find((p) => p.id === id)!;
+    const cmds = parsePath(path.d);
+    const node1 = cmds[1] as { x: number; y: number };
+    const seg = cmds[2] as { x1: number; y1: number };
+    // Retract the x1 handle exactly onto its node (node1) and re-render.
+    seg.x1 = node1.x;
+    seg.y1 = node1.y;
+    path.d = serializePath(cmds);
+    repaint();
+
+    expect(overlayEl().querySelector(sel), 'ctrl handle hidden once retracted').toBeFalsy();
+    // The node endpoint itself, and the OTHER (non-retracted) handle, still render.
+    const nodeSel = `[data-role="node"][data-path-id="${id}"][data-cmd-index="1"][data-field="x"]`;
+    expect(overlayEl().querySelector(nodeSel), 'node endpoint still renders').toBeTruthy();
+    const otherSel = `[data-role="node"][data-path-id="${id}"][data-cmd-index="2"][data-field="x2"]`;
+    expect(overlayEl().querySelector(otherSel), 'the untouched x2 handle still renders').toBeTruthy();
   });
 });

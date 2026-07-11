@@ -1,13 +1,13 @@
 import {
   state, notify, subscribe, activeClip, serializeDoc, deserializeDoc, EditorMode,
-  selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder, deleteParts,
-  setSnapEnabled, selectAllParts, duplicateParts, partById,
+  selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder,
+  setSnapEnabled, selectAllParts, partById,
 } from './core/model';
 import { importSvg } from './io/importSvg';
 import {
   buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, clearGroupEntry,
-  hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, nudgeSelectedParts, unregisterPart,
-  zoomBy, selectAllNodes,
+  hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, nudgeSelectedParts,
+  zoomBy, selectAllNodes, enterGroupsFor,
 } from './view';
 import { checkpoint } from './core/history';
 import {
@@ -23,6 +23,9 @@ import { exportRiv } from './io/exportRiv';
 import { smHandleEscape, smHandleDelete } from './panels/smPanel';
 import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './core/history';
 import { toggleHelp, closeHelp, isHelpOpen } from './ui/help';
+import { dialog, isDialogOpen, closeActiveDialog } from './ui/dialogs';
+import { showContextMenu, isMenuOpen, closeMenu } from './ui/contextMenu';
+import { canDuplicateSelection, duplicateSelectedParts, deleteSelectedParts, buildPartContextMenu } from './ui/actions';
 
 const layersEl = document.getElementById('layers')!;
 const canvasEl = document.getElementById('canvas')!;
@@ -52,7 +55,7 @@ function loadSvgText(text: string, name: string): void {
     state.editorMode = 'setup'; // fresh art starts in rig-setup
     afterDocReplaced();
   } catch (err) {
-    alert(`Could not import SVG: ${err instanceof Error ? err.message : err}`);
+    void dialog.alert(`Could not import SVG: ${err instanceof Error ? err.message : err}`);
   }
 }
 
@@ -62,7 +65,7 @@ function loadProjectText(text: string): boolean {
     afterDocReplaced();
     return true;
   } catch (err) {
-    alert(`Could not load project: ${err instanceof Error ? err.message : err}`);
+    void dialog.alert(`Could not load project: ${err instanceof Error ? err.message : err}`);
     return false;
   }
 }
@@ -80,7 +83,7 @@ fileInput.onchange = async () => {
 document.getElementById('btn-sample')!.onclick = async () => {
   const res = await fetch('/PIP_MASTER.svg');
   if (!res.ok) {
-    alert('Sample not found — copy PIP_MASTER.svg into public/');
+    void dialog.alert('Sample not found — copy PIP_MASTER.svg into public/');
     return;
   }
   loadSvgText(await res.text(), 'pip');
@@ -88,15 +91,18 @@ document.getElementById('btn-sample')!.onclick = async () => {
 
 // ---- Project save / autosave ----
 
-/** Download the project as .rig.json — the toolbar Save button and Ctrl+S share this. */
-function saveProject(): void {
+/** Download the project as .rig.json — the toolbar Save button and Ctrl+S share this.
+ *  Shows a filename dialog (default = the doc name) before downloading. */
+async function saveProject(): Promise<void> {
   if (!state.doc) {
-    alert('Nothing to save yet.');
+    await dialog.alert('Nothing to save yet — import an SVG first.');
     return;
   }
-  download(`${state.doc.name}.rig.json`, serializeDoc(state.doc), 'application/json');
+  const filename = await dialog.prompt('Save project as', `${state.doc.name}.rig.json`);
+  if (!filename) return;
+  download(filename, serializeDoc(state.doc), 'application/json');
 }
-document.getElementById('btn-save')!.onclick = saveProject;
+document.getElementById('btn-save')!.onclick = () => { void saveProject(); };
 
 function download(filename: string, content: string | Uint8Array, type: string): void {
   const blob = new Blob([content as BlobPart], { type });
@@ -120,32 +126,41 @@ window.addEventListener('beforeunload', () => {
 });
 
 // ---- Exports ----
+// Both share the save-project pattern: a filename dialog (default name pre-filled) before
+// the download fires.
 
-document.getElementById('btn-export-lottie')!.onclick = () => {
+document.getElementById('btn-export-lottie')!.onclick = () => { void exportLottieFlow(); };
+async function exportLottieFlow(): Promise<void> {
   if (!state.doc) {
-    alert('Import an SVG first.');
+    await dialog.alert('Import an SVG first.');
     return;
   }
+  const defaultName = `${state.doc.name}_${activeClip()?.name ?? 'clip'}.json`;
+  const filename = await dialog.prompt('Export Lottie as', defaultName);
+  if (!filename) return;
   try {
     const json = exportLottie(state.doc, state.activeClipIndex);
-    download(`${state.doc.name}_${activeClip()?.name ?? 'clip'}.json`, json, 'application/json');
+    download(filename, json, 'application/json');
   } catch (err) {
-    alert(`Lottie export failed: ${err instanceof Error ? err.message : err}`);
+    await dialog.alert(`Lottie export failed: ${err instanceof Error ? err.message : err}`);
   }
-};
+}
 
-document.getElementById('btn-export-riv')!.onclick = () => {
+document.getElementById('btn-export-riv')!.onclick = () => { void exportRivFlow(); };
+async function exportRivFlow(): Promise<void> {
   if (!state.doc) {
-    alert('Import an SVG first.');
+    await dialog.alert('Import an SVG first.');
     return;
   }
+  const filename = await dialog.prompt('Export Rive as', `${state.doc.name}.riv`);
+  if (!filename) return;
   try {
     const bytes = exportRiv(state.doc);
-    download(`${state.doc.name}.riv`, bytes, 'application/octet-stream');
+    download(filename, bytes, 'application/octet-stream');
   } catch (err) {
-    alert(`Rive export failed: ${err instanceof Error ? err.message : err}`);
+    await dialog.alert(`Rive export failed: ${err instanceof Error ? err.message : err}`);
   }
-};
+}
 
 // ---- Setup / Animate mode toggle ----
 
@@ -172,6 +187,41 @@ function syncModeToggle(): void {
   animateBtn.classList.toggle('active', state.editorMode === 'animate');
 }
 
+// ---- Canvas context menu ----
+
+/** True hit-target resolution (elementsFromPoint + closest('[data-part-id]'), not the
+ *  event's own target) — the same pattern smPanel.ts's preview click-to-listener
+ *  dispatch uses, so overlay elements drawn on top of the artwork don't swallow the hit.
+ *  Kept in main.ts (not view/) since it's read-only hit-testing against the DOM the
+ *  canvas already renders, not a view/ internal. */
+function hitPartIdAt(clientX: number, clientY: number): string | null {
+  for (const el of document.elementsFromPoint(clientX, clientY)) {
+    const partEl = (el as Element).closest?.('[data-part-id]') as HTMLElement | null;
+    if (partEl?.dataset.partId) return partEl.dataset.partId;
+  }
+  return null;
+}
+
+// Capture phase per the assignment's spec; contextmenu only fires on a real right-click,
+// so this can never interfere with the interaction-test suite's synthetic pointer
+// gestures (which only dispatch pointerdown/move/up and click/dblclick).
+canvasEl.addEventListener('contextmenu', (ev) => {
+  ev.preventDefault();
+  const partId = hitPartIdAt(ev.clientX, ev.clientY);
+  if (!partId) return; // blank canvas — suppress the browser menu, no app menu
+  const part = partById(partId);
+  if (!part) return;
+  if (!state.selectedPartIds.includes(partId)) {
+    selectPart(partId);
+    enterGroupsFor(partId);
+  } else {
+    state.selectedPartId = partId;
+  }
+  notify();
+  renderPose();
+  showContextMenu(buildPartContextMenu(part, { canvasExtras: true }), ev.clientX, ev.clientY);
+}, true);
+
 // ---- History wiring ----
 
 setRestoreHandler(() => buildCanvas(canvasEl));
@@ -189,6 +239,21 @@ document.addEventListener('rig-history-changed', () => {
 
 document.addEventListener('keydown', (ev) => {
   const target = ev.target as HTMLElement;
+
+  // A context menu or dialog owns Escape first — this must win over every other tier
+  // below, INCLUDING the input-focus guard right after it, so Escape closes a dialog
+  // even while its own text field has focus (mirrors the help-overlay precedence, one
+  // level higher since a dialog can itself contain an input).
+  if (ev.key === 'Escape' && (isMenuOpen() || isDialogOpen())) {
+    ev.preventDefault();
+    closeMenu();
+    closeActiveDialog();
+    return;
+  }
+  // While a menu or dialog is open, no other shortcut should leak through to the app
+  // underneath (e.g. Ctrl+S while the save-filename dialog itself is showing).
+  if (isMenuOpen() || isDialogOpen()) return;
+
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
 
   // Help overlay owns Escape while it's open — this must win over every other Escape
@@ -213,7 +278,7 @@ document.addEventListener('keydown', (ev) => {
   }
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') {
     ev.preventDefault(); // never let the browser's save-page dialog open
-    saveProject();
+    void saveProject();
     return;
   }
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'o') {
@@ -232,20 +297,9 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'd') {
-    if (state.editorMode === 'setup' && state.selectedPartIds.length > 0) {
-      const dupable = state.selectedPartIds.filter((id) => !partById(id)?.skin);
-      if (dupable.length > 0) {
-        ev.preventDefault();
-        checkpoint();
-        const newIds = duplicateParts(dupable);
-        // Same rebuild path undo/redo uses (setRestoreHandler below) so the canvas
-        // picks up the new part groups without hand-rolling a second code path.
-        buildCanvas(canvasEl);
-        state.selectedPartIds = newIds;
-        state.selectedPartId = newIds[newIds.length - 1] ?? null;
-        state.selectedPathId = null;
-        notify();
-      }
+    if (canDuplicateSelection()) {
+      ev.preventDefault();
+      duplicateSelectedParts();
     }
     return;
   }
@@ -290,17 +344,14 @@ document.addEventListener('keydown', (ev) => {
       return;
     }
     // Setup pose mode: delete the selected layers (children re-adopt grandparents;
-    // fully undoable).
+    // fully undoable). Node-editing mode with nothing selected falls through to here
+    // too, so the mode check stays explicit rather than folding into canDeleteSelection().
     if (
       state.editorMode === 'setup' && state.mode === 'rig' &&
       state.selectedPartIds.length > 0
     ) {
       ev.preventDefault();
-      checkpoint();
-      const removed = deleteParts([...state.selectedPartIds]);
-      removed.forEach(unregisterPart);
-      notify();
-      renderPose();
+      deleteSelectedParts();
     }
     return;
   }

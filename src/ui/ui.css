@@ -1,0 +1,114 @@
+/* ============================================================================
+   In-app dialogs (src/ui/dialogs.ts) — visually modeled on the keyboard-shortcut
+   help overlay (.help-overlay/.help-card in style.css): same backdrop treatment,
+   same panel surface/border/shadow tokens.
+   ============================================================================ */
+.ui-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 80;
+}
+.ui-dialog {
+  width: min(420px, calc(100vw - var(--sp-5) * 2));
+  max-height: calc(100vh - var(--sp-5) * 2);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+.ui-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--divider);
+  flex: none;
+}
+.ui-dialog-header h2 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text); }
+.ui-dialog-close {
+  height: var(--ctrl-h-sm);
+  width: var(--ctrl-h-sm);
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  flex: none;
+}
+.ui-dialog-body {
+  overflow-y: auto;
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+.ui-dialog-message { margin: 0; color: var(--text); line-height: 1.5; white-space: pre-wrap; }
+.ui-dialog-field-label {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  color: var(--muted);
+  font-size: 12px;
+}
+.ui-dialog-field-label input { margin-top: 2px; }
+.ui-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border-top: 1px solid var(--divider);
+  flex: none;
+}
+.ui-dialog-primary { background: var(--accent-2); color: #101018; border-color: var(--accent-2); font-weight: 600; }
+.ui-dialog-primary:hover:not(:disabled) { background: var(--accent-2); filter: brightness(1.1); }
+.ui-dialog-danger { background: var(--accent); color: #1a1a1a; border-color: var(--accent); font-weight: 600; }
+.ui-dialog-danger:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
+
+/* ============================================================================
+   Context menu (src/ui/contextMenu.ts) — layer-row and canvas right-click.
+   ============================================================================ */
+.ui-context-menu {
+  position: fixed;
+  z-index: 90;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-1);
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-2);
+}
+.ui-context-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  padding: 6px var(--sp-2);
+  height: auto;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.ui-context-menu-item:hover:not(:disabled) { background: var(--surface-hover); border-color: transparent; }
+.ui-context-menu-item:disabled { opacity: 0.4; cursor: not-allowed; }
+.ui-context-menu-sep { height: 1px; margin: var(--sp-1) 4px; background: var(--border); }
+
+/* ============================================================================
+   Inline layer rename (src/panels/layers.ts) — an <input> swapped in place of the
+   row's label span, so it inherits the row's flex layout exactly.
+   ============================================================================ */
+.layer-rename-input {
+  height: 20px;
+  padding: 0 4px;
+  font: inherit;
+  min-width: 0;
+  flex: 1 1 auto;
+}

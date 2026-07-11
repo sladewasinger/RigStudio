@@ -15,6 +15,7 @@ import {
 } from '../view';
 import { checkpoint } from '../core/history';
 import { icon, iconButton, ICON_PATHS } from './icons';
+import { dialog } from '../ui/dialogs';
 
 // ---- Canvas tools bar + shared editing actions ----
 
@@ -64,7 +65,7 @@ export function ungroupAction(): void {
   if (state.editorMode !== 'setup' || !part || part.paths.length > 0) return;
   checkpoint();
   if (!ungroupPart(part.id)) {
-    alert('This null is animated — delete its keyframes first, then ungroup.');
+    void dialog.alert('This null is animated — delete its keyframes first, then ungroup.');
     return;
   }
   unregisterPart(part.id);
@@ -77,7 +78,7 @@ export function bindAction(): void {
   checkpoint();
   const err = bindSelectedToBones();
   if (err) {
-    alert(err);
+    void dialog.alert(err);
     return;
   }
   notify();
@@ -98,7 +99,7 @@ export function buildCanvasTools(el: HTMLElement): void {
   const tools = document.createElement('div');
   tools.className = 'tool-switch';
   const toolDefs: [typeof state.tool, keyof typeof ICON_PATHS, string][] = [
-    ['select', 'select', 'Select (V) — Setup drags move, Animate drags rotate'],
+    ['select', 'select', 'Select (V) — Edit drags move, Animate drags rotate'],
     ['translate', 'translate', 'Translate (T) — drag the X/Y arrows or the part'],
     ['rotate', 'rotate', 'Rotate (R) — drag the ring or the part'],
     ['ik', 'ik', 'IK (I) — drag a limb end; its parent joints solve to follow'],

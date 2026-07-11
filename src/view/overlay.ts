@@ -469,6 +469,12 @@ function renderNodeHandles(part: RigPart): void {
       [rootTransform, groupTransform, path.transform].filter(Boolean).join(' '),
     );
     const size = handleSize();
+    // A control handle "coincides" with its node (retracted, effectively zero-length)
+    // when it's within a small on-screen distance through the zoom — hide the dot AND
+    // its handle-line rather than clutter the view with a handle sitting on top of the
+    // node it belongs to. Expressed via handleSize() like every other radius here, so
+    // it scales the same way through the zoom as the handles themselves.
+    const zeroLenThreshold = size * 0.4;
 
     // Handle lines first (underneath): control points connect to their nodes —
     // x1 to the segment's start node, x2 to its end node.
@@ -476,19 +482,28 @@ function renderNodeHandles(part: RigPart): void {
     cmds.forEach((c) => {
       if (c.cmd === 'Z') return;
       if (c.cmd === 'C' && prev) {
-        addHandleLine(holder, prev.x, prev.y, c.x1, c.y1);
-        addHandleLine(holder, c.x, c.y, c.x2, c.y2);
+        if (Math.hypot(c.x1 - prev.x, c.y1 - prev.y) >= zeroLenThreshold) {
+          addHandleLine(holder, prev.x, prev.y, c.x1, c.y1);
+        }
+        if (Math.hypot(c.x2 - c.x, c.y2 - c.y) >= zeroLenThreshold) {
+          addHandleLine(holder, c.x, c.y, c.x2, c.y2);
+        }
       }
       prev = { x: (c as { x: number }).x, y: (c as { y: number }).y };
     });
 
     let nodeIdx = -1;
+    prev = null;
     cmds.forEach((c, i) => {
       if (c.cmd === 'Z') return;
       nodeIdx++;
       if (c.cmd === 'C') {
-        addHandle(holder, path.id, i, 'x1', c.x1, c.y1, size * 0.6, 'ctrl');
-        addHandle(holder, path.id, i, 'x2', c.x2, c.y2, size * 0.6, 'ctrl');
+        if (prev && Math.hypot(c.x1 - prev.x, c.y1 - prev.y) >= zeroLenThreshold) {
+          addHandle(holder, path.id, i, 'x1', c.x1, c.y1, size * 0.6, 'ctrl');
+        }
+        if (Math.hypot(c.x2 - c.x, c.y2 - c.y) >= zeroLenThreshold) {
+          addHandle(holder, path.id, i, 'x2', c.x2, c.y2, size * 0.6, 'ctrl');
+        }
       }
       const isSelected = ctx.selectedNodes.has(nodeKey(path.id, i));
       addHandle(
@@ -497,6 +512,7 @@ function renderNodeHandles(part: RigPart): void {
         size * (isSelected ? 1.05 : 0.8), 'node', isSelected,
         types[nodeIdx], // persistent type tints the node
       );
+      prev = { x: (c as { x: number }).x, y: (c as { y: number }).y };
     });
     ctx.overlay!.appendChild(holder);
   }
@@ -554,6 +570,19 @@ function addHandle(
   c.dataset.cmdIndex = String(cmdIndex);
   c.dataset.field = field;
   holder.appendChild(c);
+
+  // Selected endpoints get a contrasting ring IN ADDITION to the size bump above —
+  // a plain fill/size change reads poorly once several nodes are multi-selected.
+  // Always a circle (regardless of the underlying type glyph) so it reads the same
+  // for every node shape; non-interactive, drawn on top.
+  if (selected && kind === 'node') {
+    const ring = document.createElementNS(SVG_NS, 'circle');
+    ring.setAttribute('cx', String(x));
+    ring.setAttribute('cy', String(y));
+    ring.setAttribute('r', String(r * 1.7));
+    ring.setAttribute('class', 'node-handle-ring');
+    holder.appendChild(ring);
+  }
 }
 
 /** Draw the snap-target marker (a small non-scaling ring + crosshair) if one is live. */

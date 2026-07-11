@@ -151,6 +151,7 @@
  */
 
 import {
+  artboardFrame,
   Channel,
   Easing,
   Keyframe,
@@ -473,22 +474,26 @@ class Scene {
  */
 export function exportRiv(doc: RigDoc): Uint8Array {
   const scene = new Scene();
-  const ox = doc.viewBox.x;
-  const oy = doc.viewBox.y;
+  // Reference frame for the whole export: the artboard rect when the doc has one
+  // enabled, else the viewBox (today's behavior, byte-identical when disabled/absent).
+  const frame = artboardFrame(doc);
+  const ox = frame.x;
+  const oy = frame.y;
 
   // Backboard: no properties; not part of the artboard index space.
   scene.begin(T_BACKBOARD, false);
   scene.end();
 
-  // Artboard = component index 0. Origin (0,0), size = viewBox, transparent (no bg).
+  // Artboard = component index 0. Origin (0,0), size = the reference frame above,
+  // transparent (no bg).
   const artboardIndex = scene.begin(T_ARTBOARD); // 0
   scene.propString(P_NAME, doc.name);
-  scene.propDouble(P_WIDTH, doc.viewBox.w);
-  scene.propDouble(P_HEIGHT, doc.viewBox.h);
+  scene.propDouble(P_WIDTH, frame.w);
+  scene.propDouble(P_HEIGHT, frame.h);
   scene.end();
 
   // Root Node: whole-figure translate + scale about rootPivot (never rotates). Its
-  // origin sits at rootPivot in artboard space (doc minus viewBox origin).
+  // origin sits at rootPivot in artboard space (doc minus the reference frame's origin).
   const rootBaseX = doc.rootPivot.x - ox;
   const rootBaseY = doc.rootPivot.y - oy;
   const rootIndex = scene.begin(T_NODE); // 1
@@ -513,8 +518,9 @@ export function exportRiv(doc: RigDoc): Uint8Array {
     inProgress.delete(part.id);
 
     const parentNodeIndex = parent ? partIndex.get(parent.id)! : rootIndex;
-    // Node origin is expressed in the parent's local frame; the viewBox origin cancels
-    // for part->part and part->root (both refs are pivots). base = pivot - parentRef.
+    // Node origin is expressed in the parent's local frame; the reference frame's
+    // origin cancels for part->part and part->root (both refs are pivots).
+    // base = pivot - parentRef.
     const parentRef = parent ? parent.pivot : doc.rootPivot;
     const baseX = part.pivot.x - parentRef.x;
     const baseY = part.pivot.y - parentRef.y;

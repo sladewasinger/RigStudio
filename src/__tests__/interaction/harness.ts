@@ -50,8 +50,8 @@ export const INDEX_BODY = `
       <button id="btn-export-lottie" title="Export the rig + clips as Lottie JSON">Export Lottie</button>
       <button id="btn-export-riv" title="Export the rig + all clips as a Rive .riv binary">Export Rive (.riv)</button>
     </div>
-    <div id="mode-toggle" title="Tab toggles. Setup edits the character; Animate records keyframes.">
-      <button id="btn-mode-setup">Setup</button>
+    <div id="mode-toggle" title="Tab toggles. Edit mode edits the character; Animate records keyframes.">
+      <button id="btn-mode-setup">Edit</button>
       <button id="btn-mode-animate">Animate</button>
     </div>
     <button id="btn-help" class="icon-btn" title="Keyboard shortcuts (?)">?</button>

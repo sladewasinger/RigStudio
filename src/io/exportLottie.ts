@@ -10,10 +10,11 @@
  * flattened into the geometry, with arcs rewritten as cubics. Easings stored on the
  * ARRIVING keyframe become the cubic-bezier handles of the segment leaving the
  * previous key. Lottie shares SVG's conventions (+y down, clockwise rotation), so no
- * axis flipping is needed; the viewBox origin is baked into geometry and pivots.
+ * axis flipping is needed; the reference frame's origin (the artboard rect when the
+ * doc has one enabled, else the viewBox) is baked into geometry and pivots.
  */
 
-import { Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from '../core/model';
+import { artboardFrame, Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from '../core/model';
 import { parsePath, pathToCubics } from '../geometry/paths';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
 
@@ -41,8 +42,11 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
     );
   }
 
-  const ox = doc.viewBox.x;
-  const oy = doc.viewBox.y;
+  // Reference frame for the whole export: the artboard rect when the doc has one
+  // enabled, else the viewBox (today's behavior, byte-identical when disabled/absent).
+  const frame = artboardFrame(doc);
+  const ox = frame.x;
+  const oy = frame.y;
   const op = Math.max(1, Math.round((clip.duration / 1000) * FR));
   const trackOf = (target: string, channel: Channel): Track | undefined =>
     clip.tracks.find((t) => t.target === target && t.channel === channel);
@@ -109,8 +113,8 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
     fr: FR,
     ip: 0,
     op,
-    w: Math.round(doc.viewBox.w),
-    h: Math.round(doc.viewBox.h),
+    w: Math.round(frame.w),
+    h: Math.round(frame.h),
     nm: `${doc.name} - ${clip.name}`,
     ddd: 0,
     assets: [],

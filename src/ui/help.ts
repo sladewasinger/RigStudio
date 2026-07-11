@@ -33,13 +33,13 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: 'Ctrl+V', description: 'Paste keyframes at the playhead (Animate)', context: 'Edit' },
   {
     keys: 'Ctrl+A',
-    description: 'Select all — every part in Setup/Animate, or every node of the ' +
+    description: 'Select all — every part in Edit/Animate, or every node of the ' +
       'edited path in node-editing mode',
     context: 'Edit',
   },
   {
     keys: 'Ctrl+D',
-    description: 'Duplicate the selected part(s), offset +12,+12 (Setup only, skips skinned parts)',
+    description: 'Duplicate the selected part(s), offset +12,+12 (Edit only, skips skinned parts)',
     context: 'Edit',
   },
   {
@@ -52,7 +52,7 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: 'Ctrl+Shift+G', description: 'Ungroup/dissolve the selected group or bone', context: 'Edit' },
   {
     keys: 'Arrow keys',
-    description: 'Nudge the selected parts 2 screen px (Setup pose mode, Shift = 20)',
+    description: 'Nudge the selected parts 2 screen px (Edit pose mode, Shift = 20)',
     context: 'Edit',
   },
   {
@@ -66,9 +66,9 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: 'T', description: 'Translate tool', context: 'Tools' },
   { keys: 'R', description: 'Rotate tool', context: 'Tools' },
   { keys: 'I', description: 'IK tool — drag a limb end, its parent joints solve to follow', context: 'Tools' },
-  { keys: '%', description: 'Toggle Setup-mode snapping', context: 'Tools' },
-  { keys: 'Shift+H', description: 'Flip the selection horizontally, in place (Setup)', context: 'Tools' },
-  { keys: 'Shift+V', description: 'Flip the selection vertically, in place (Setup)', context: 'Tools' },
+  { keys: '%', description: 'Toggle Edit-mode snapping', context: 'Tools' },
+  { keys: 'Shift+H', description: 'Flip the selection horizontally, in place (Edit)', context: 'Tools' },
+  { keys: 'Shift+V', description: 'Flip the selection vertically, in place (Edit)', context: 'Tools' },
 
   // ---- View ----
   { keys: 'F', description: 'Fit the view to the document', context: 'View' },
@@ -76,7 +76,7 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: '-', description: 'Zoom out, centered on the canvas', context: 'View' },
   { keys: 'Mouse wheel', description: 'Zoom, centered on the cursor', context: 'View' },
   { keys: 'Middle-drag', description: 'Pan the canvas', context: 'View' },
-  { keys: 'Tab', description: 'Toggle Setup / Animate mode', context: 'View' },
+  { keys: 'Tab', description: 'Toggle Edit / Animate mode', context: 'View' },
   { keys: '? / F1', description: 'Toggle this shortcut overlay', context: 'View' },
   {
     keys: 'Escape',

@@ -210,6 +210,20 @@ export interface StateMachine {
   listeners: SMListener[];
 }
 
+/**
+ * Optional page frame ("canvas size"), independent of the imported SVG's viewBox.
+ * When enabled it is drawn as a page rectangle behind the artwork and both exporters
+ * use it as their reference frame (Artboard/composition width+height, and origin
+ * offset) instead of viewBox. Disabled or absent = today's viewBox-only behavior.
+ */
+export interface Artboard {
+  enabled: boolean;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 export interface RigDoc {
   name: string;
   viewBox: { x: number; y: number; w: number; h: number };
@@ -219,6 +233,8 @@ export interface RigDoc {
   clips: Clip[];
   /** Rive-style interactive graphs over the clips. Optional (absent on older docs). */
   stateMachines?: StateMachine[];
+  /** Optional page frame; absent on older docs and on freshly-imported SVGs. */
+  artboard?: Artboard;
 }
 
 /**
@@ -920,6 +936,32 @@ export function copyPoseAt(time: number): number {
   return keyClipboard.length;
 }
 
+// ---- Artboard ----
+
+/**
+ * Guarantee doc.artboard exists, seeding it (disabled) from the current viewBox on
+ * first access. Idempotent; used by editing code (inspector) that needs a mutable
+ * rect to read/write regardless of whether normalizeDoc has run yet (fresh SVG
+ * imports never go through it — same defensive-seed pattern as doc.stateMachines).
+ */
+export function ensureArtboard(doc: RigDoc): Artboard {
+  if (!doc.artboard) {
+    doc.artboard = { enabled: false, x: doc.viewBox.x, y: doc.viewBox.y, w: doc.viewBox.w, h: doc.viewBox.h };
+  }
+  return doc.artboard;
+}
+
+/**
+ * The effective page frame for rendering/export: the artboard rect when enabled,
+ * else the viewBox (today's behavior). Pure — never mutates doc, so exporters and
+ * render code can call it without an ensureArtboard() side effect.
+ */
+export function artboardFrame(doc: RigDoc): { x: number; y: number; w: number; h: number } {
+  const ab = doc.artboard;
+  if (ab && ab.enabled) return { x: ab.x, y: ab.y, w: ab.w, h: ab.h };
+  return { x: doc.viewBox.x, y: doc.viewBox.y, w: doc.viewBox.w, h: doc.viewBox.h };
+}
+
 // ---- Serialization (project save/load) ----
 
 const DOC_FORMAT = 'rig-studio';
@@ -995,6 +1037,17 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
       }
     }
   }
+  // Artboard: absent on older docs (and on fresh SVG imports, which never ran through
+  // normalizeDoc) — seed disabled from the current viewBox so it's a pure no-op until
+  // opted into. A present-but-corrupt rect (hand-edited file, non-positive w/h) falls
+  // back to the viewBox per axis rather than getting dropped wholesale.
+  ensureArtboard(doc);
+  doc.artboard!.enabled = !!doc.artboard!.enabled;
+  if (!Number.isFinite(doc.artboard!.x)) doc.artboard!.x = doc.viewBox.x;
+  if (!Number.isFinite(doc.artboard!.y)) doc.artboard!.y = doc.viewBox.y;
+  if (!(Number.isFinite(doc.artboard!.w) && doc.artboard!.w > 0)) doc.artboard!.w = doc.viewBox.w;
+  if (!(Number.isFinite(doc.artboard!.h) && doc.artboard!.h > 0)) doc.artboard!.h = doc.viewBox.h;
+
   // State machines: default to none on old files; per machine re-establish the
   // entry/any/exit invariant and prune dangling references, but KEEP a state whose
   // clipName no longer resolves — the evaluator treats it as rest pose, so deleting a

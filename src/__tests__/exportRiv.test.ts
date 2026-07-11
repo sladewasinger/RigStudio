@@ -535,6 +535,50 @@ describe('exportRiv structure', () => {
   });
 });
 
+// ---- Artboard (P2c: optional page frame) ----
+
+describe('exportRiv artboard', () => {
+  it('a disabled artboard (garbage rect included) exports byte-identical to a doc with no artboard field at all', () => {
+    const withoutField = exportRiv(pipDoc());
+    const disabledDoc = pipDoc();
+    // Nonsense values that would be very visible if they leaked in anywhere.
+    disabledDoc.artboard = { enabled: false, x: 999, y: -999, w: 12345, h: 6789 };
+    const withDisabled = exportRiv(disabledDoc);
+    expect(Array.from(withDisabled)).toEqual(Array.from(withoutField));
+  });
+
+  it('an enabled artboard drives the Artboard width/height and shifts the root node origin by -x/-y', () => {
+    const baseline = decodeRiv(exportRiv(pipDoc())); // viewBox-derived: origin (0,0)
+    const doc = pipDoc();
+    doc.artboard = { enabled: true, x: 10, y: -5, w: 300, h: 250 };
+    const d = decodeRiv(exportRiv(doc));
+
+    // Artboard sized to the artboard rect, not the (100x100) viewBox.
+    expect(d.objects[1].typeKey).toBe(TYPE.ARTBOARD);
+    expect(d.objects[1].props[PROP.WIDTH]).toBeCloseTo(300, 3);
+    expect(d.objects[1].props[PROP.HEIGHT]).toBeCloseTo(250, 3);
+
+    // Root node position = rootPivot - reference-frame origin. Baseline (viewBox
+    // origin 0,0): rootPivot (50,80) unchanged. Artboard origin (10,-5): shifted.
+    const baseRoot = baseline.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'pip root')!;
+    expect(Number(baseRoot.props[PROP.X])).toBeCloseTo(50, 3);
+    expect(Number(baseRoot.props[PROP.Y])).toBeCloseTo(80, 3);
+    const root = d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'pip root')!;
+    expect(Number(root.props[PROP.X])).toBeCloseTo(50 - 10, 3);
+    expect(Number(root.props[PROP.Y])).toBeCloseTo(80 - -5, 3);
+
+    // Part-to-part node origins (pivot minus parent pivot/rootPivot, both in raw doc
+    // space) are independent of the reference frame — the origin cancels — so they
+    // must be untouched by the artboard shift.
+    for (const name of ['body', 'arm']) {
+      const base = baseline.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === name)!;
+      const shifted = d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === name)!;
+      expect(Number(shifted.props[PROP.X])).toBeCloseTo(Number(base.props[PROP.X]), 3);
+      expect(Number(shifted.props[PROP.Y])).toBeCloseTo(Number(base.props[PROP.Y]), 3);
+    }
+  });
+});
+
 // ---- Draw order ----
 //
 // Rule pinned from rive-runtime/src/artboard.cpp: m_Drawables fills in file order,

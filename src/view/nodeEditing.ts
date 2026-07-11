@@ -191,6 +191,42 @@ export function mirrorInfoFor(
   return { cmdIndex: partner.cmdIndex, field: partner.field, len: lb, matchLen: false };
 }
 
+/**
+ * Apply the smooth/symmetric mirror constraint to the OPPOSITE handle of the node
+ * that `cmds[cmdIndex]`'s `field` control point attaches to: 's' mirrors direction
+ * keeping the partner's own length, 'z' mirrors direction AND matches length, 'c'
+ * (or an untyped/non-opposed pair) does nothing — exactly `mirrorInfoFor`'s policy.
+ * Guards against a retracted moved handle (len < 1e-6: nothing to aim the partner at).
+ *
+ * Shared by moveNode (direct handle drags) and the bendSegment pointermove branch in
+ * interactions.ts, which used to write bent control points directly and bypass this
+ * entirely — an 's'/'z' node's opposite handle silently stopped opposing when its
+ * segment was bent instead of dragged (P2b bug fix).
+ */
+export function applyMirrorConstraint(
+  cmds: PathCmd[], cmdIndex: number, field: 'x1' | 'x2', nodeTypes: string | null,
+): void {
+  const mirror = mirrorInfoFor(cmds, cmdIndex, field, nodeTypes);
+  if (!mirror) return;
+  const c = cmds[cmdIndex] as PathCmd & Record<string, number>;
+  if (!c || c.cmd !== 'C') return;
+  const node = field === 'x1'
+    ? (cmds[cmdIndex - 1] as { x: number; y: number })
+    : { x: c.x, y: c.y };
+  const own = field === 'x1' ? { x: c.x1, y: c.y1 } : { x: c.x2, y: c.y2 };
+  const dx = own.x - node.x;
+  const dy = own.y - node.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-6) return; // retracted onto the node: nothing to aim the partner at
+  const partner = cmds[mirror.cmdIndex] as PathCmd & Record<string, number>;
+  if (!partner || partner.cmd !== 'C') return;
+  const plen = mirror.matchLen ? len : mirror.len;
+  const px = node.x - (dx / len) * plen;
+  const py = node.y - (dy / len) * plen;
+  if (mirror.field === 'x1') { partner.x1 = px; partner.y1 = py; }
+  else { partner.x2 = px; partner.y2 = py; }
+}
+
 /** Move one endpoint (and its attached handles rigidly) within a parsed command list. */
 function shiftEndpoint(cmds: PathCmd[], cmdIndex: number, dx: number, dy: number): void {
   const c = cmds[cmdIndex] as PathCmd & Record<string, number>;
@@ -268,23 +304,8 @@ export function moveNode(d: Extract<DragState, { kind: 'node' }>, ev: PointerEve
 
   // Smooth-node behavior: the opposite handle stays opposed; symmetric ('z') nodes
   // also match the dragged handle's length. Alt breaks the pairing for this drag.
-  if (d.mirror && !ev.altKey && d.field !== 'x') {
-    const node = d.field === 'x1'
-      ? (cmds[d.cmdIndex - 1] as { x: number; y: number })
-      : { x: (c as { x: number }).x, y: (c as { y: number }).y };
-    const dx = local.x - node.x;
-    const dy = local.y - node.y;
-    const len = Math.hypot(dx, dy);
-    if (len > 1e-6) {
-      const partner = cmds[d.mirror.cmdIndex] as PathCmd & Record<string, number>;
-      if (partner && partner.cmd === 'C') {
-        const plen = d.mirror.matchLen ? len : d.mirror.len;
-        const px = node.x - (dx / len) * plen;
-        const py = node.y - (dy / len) * plen;
-        if (d.mirror.field === 'x1') { partner.x1 = px; partner.y1 = py; }
-        else { partner.x2 = px; partner.y2 = py; }
-      }
-    }
+  if (!ev.altKey && (d.field === 'x1' || d.field === 'x2')) {
+    applyMirrorConstraint(cmds, d.cmdIndex, d.field, path.nodeTypes ?? null);
   }
 
   path.d = serializePath(cmds);

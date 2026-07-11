@@ -27,6 +27,13 @@ export type DragState =
       targets: { part: RigPart; start: number }[];
       pivotX: number; pivotY: number; // primary part's live pivot, root coords
       startAngle: number;
+      /** Accumulation state (P2b bug fix): raw atan2 snapshots jump ±360° when the
+       * drag crosses the ±180° ray, and sampleKeyList interpolates absolute values
+       * linearly, so a naive (angle - startAngle) diff sent recorded rotations the
+       * "wrong direction" on multi-turn winds. lastAngle/accumDeg instead sum each
+       * move's WRAPPED step (wrapToPi), which never jumps by more than one step. */
+      lastAngle: number;
+      accumDeg: number;
       current: { x: number; y: number } | null;
       currentDelta: number;
       snapped: boolean;
@@ -110,8 +117,6 @@ export type DragState =
   | {
       kind: 'node'; part: RigPart; pathId: string; cmdIndex: number;
       field: 'x' | 'x1' | 'x2';
-      /** Opposite handle to mirror while dragging a control point (smooth nodes). */
-      mirror: { cmdIndex: number; field: 'x1' | 'x2'; len: number; matchLen: boolean } | null;
       startClient: { x: number; y: number }; active: boolean;
     }
   | {
@@ -211,6 +216,12 @@ export function parseNodeKey(key: string): { pathId: string; cmdIndex: number } 
 /** Strip translation from a matrix (for converting deltas rather than points). */
 export function linearOnly(m: Mat): Mat {
   return { ...m, e: 0, f: 0 };
+}
+
+/** Signed angle wrapped into (-π, π] — the per-step building block for accumulating
+ * a rotate drag's total angle without a ±360° jump when it crosses the ±180° ray. */
+export function wrapToPi(a: number): number {
+  return Math.atan2(Math.sin(a), Math.cos(a));
 }
 
 export function round1(n: number): number {

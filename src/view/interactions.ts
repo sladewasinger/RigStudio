@@ -23,7 +23,7 @@ import { snapPoint, snapDelta, SnapAxis } from '../geometry/snap';
 import { checkpoint } from '../core/history';
 import {
   ctx, DragState, ROTATE_SNAP_DEGREES, DRAG_THRESHOLD_PX, MIN_SCALE, MAX_SCALE,
-  round1, round2, round3, linearOnly, nodeKey, parseNodeKey, snappingActive,
+  round1, round2, round3, linearOnly, nodeKey, parseNodeKey, snappingActive, wrapToPi,
 } from './context';
 import {
   svgPoint, pointerInRoot, snapThreshold, rootToUser,
@@ -44,7 +44,7 @@ import {
 } from './snapping';
 import {
   nodeIndexOf, ensureNodeTypes, segmentStart, pointOnSegment, segmentHit, subpathStart,
-  mirrorInfoFor, editNodeStructure, moveNode,
+  applyMirrorConstraint, editNodeStructure, moveNode,
 } from './nodeEditing';
 import { cancelBonePlacement } from './rigOps';
 import { applyViewRect, zoomAround } from './camera';
@@ -171,6 +171,7 @@ export function wireInteractions(): void {
       const p = pointerInRoot(ev);
       const setup = state.editorMode === 'setup';
       const pivot = effectivePivot(part, poseTime());
+      const startAngle0 = Math.atan2(p.y - pivot.y, p.x - pivot.x);
       ctx.drag = {
         kind: 'rotate',
         targets: selectedParts().map((sp) => ({
@@ -178,7 +179,9 @@ export function wireInteractions(): void {
           start: setup ? sp.rest.rotate : channelValue(sp, 'rotate', state.currentTime),
         })),
         pivotX: pivot.x, pivotY: pivot.y,
-        startAngle: Math.atan2(p.y - pivot.y, p.x - pivot.x),
+        startAngle: startAngle0,
+        lastAngle: startAngle0,
+        accumDeg: 0,
         current: { x: p.x, y: p.y },
         currentDelta: 0,
         snapped: false,
@@ -300,11 +303,14 @@ export function wireInteractions(): void {
       if (!part) return;
       const p = pointerInRoot(ev);
       const pivot = effectivePivot(part, poseTime());
+      const startAngle0 = Math.atan2(p.y - pivot.y, p.x - pivot.x);
       ctx.drag = {
         kind: 'rotate',
         targets: selectedParts().map((sp) => ({ part: sp, start: sp.rest.rotate })),
         pivotX: pivot.x, pivotY: pivot.y,
-        startAngle: Math.atan2(p.y - pivot.y, p.x - pivot.x),
+        startAngle: startAngle0,
+        lastAngle: startAngle0,
+        accumDeg: 0,
         current: { x: p.x, y: p.y },
         currentDelta: 0,
         snapped: false,
@@ -334,17 +340,12 @@ export function wireInteractions(): void {
         }
         ctx.selectedNode = ctx.selectedNodes.has(key) ? { pathId, cmdIndex } : null;
       }
-      const path = part.paths.find((p) => p.id === pathId);
       const nodeDrag: DragState = {
         kind: 'node',
         part,
         pathId,
         cmdIndex,
         field,
-        mirror:
-          field === 'x' || !path
-            ? null
-            : mirrorInfoFor(parsePath(path.d), cmdIndex, field, path.nodeTypes ?? null),
         startClient: { x: ev.clientX, y: ev.clientY },
         active: false,
       };
@@ -495,6 +496,7 @@ export function wireInteractions(): void {
           };
         } else {
           const pivot = effectivePivot(part, t);
+          const startAngle0 = Math.atan2(p.y - pivot.y, p.x - pivot.x);
           ctx.drag = {
             kind: 'rotate',
             targets: selectedParts().map((sp) => ({
@@ -504,7 +506,9 @@ export function wireInteractions(): void {
                 : channelValue(sp, 'rotate', state.currentTime),
             })),
             pivotX: pivot.x, pivotY: pivot.y,
-            startAngle: Math.atan2(p.y - pivot.y, p.x - pivot.x),
+            startAngle: startAngle0,
+            lastAngle: startAngle0,
+            accumDeg: 0,
             current: { x: p.x, y: p.y },
             currentDelta: 0,
             snapped: false,
@@ -564,7 +568,17 @@ export function wireInteractions(): void {
     if (ctx.drag.kind === 'rotate') {
       const p = pointerInRoot(ev);
       const angle = Math.atan2(p.y - ctx.drag.pivotY, p.x - ctx.drag.pivotX);
-      const deltaDeg = ((angle - ctx.drag.startAngle) * 180) / Math.PI;
+      // Accumulate the WRAPPED per-step angle rather than diffing against the drag's
+      // start snapshot: a raw (angle - startAngle) jumps by ±360° the instant the drag
+      // crosses the atan2 ±180° branch cut, and since keyed values are absolute and
+      // sampled linearly, that jump got recorded (and played back) verbatim — a
+      // multi-turn wind-up rotated the "wrong direction". Each step is bounded to
+      // (-180°, 180°], so accumDeg tracks the honest total no matter how many times
+      // the pointer crosses the ray.
+      const step = wrapToPi(angle - ctx.drag.lastAngle);
+      ctx.drag.accumDeg += (step * 180) / Math.PI;
+      ctx.drag.lastAngle = angle;
+      const deltaDeg = ctx.drag.accumDeg;
       ctx.drag.snapped = ev.ctrlKey;
       ctx.drag.current = { x: p.x, y: p.y };
       for (const { part, start } of ctx.drag.targets) {
@@ -838,6 +852,12 @@ export function wireInteractions(): void {
       c.y1 += (dy * b1) / denom;
       c.x2 += (dx * b2) / denom;
       c.y2 += (dy * b2) / denom;
+      // Re-apply the smooth/symmetric mirror constraint at BOTH endpoint nodes of the
+      // bent segment — writing x1/x2 directly above bypassed the mirroring moveNode
+      // gives ordinary handle drags, so an 's'/'z' node silently degraded to a corner
+      // when its segment was bent instead of dragged (P2b bug fix).
+      applyMirrorConstraint(cmds, d.cmdIndex, 'x1', path.nodeTypes ?? null);
+      applyMirrorConstraint(cmds, d.cmdIndex, 'x2', path.nodeTypes ?? null);
       path.d = serializePath(cmds);
       ctx.svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
       renderOverlay();

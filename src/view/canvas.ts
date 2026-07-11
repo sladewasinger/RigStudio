@@ -27,6 +27,23 @@ export function buildCanvas(container: HTMLElement): void {
   applyViewRect();
   ctx.svg.id = 'rig-svg';
 
+  // Artboard (page) rect: a passive backdrop, first child so it paints behind onion
+  // ghosts and every part. Non-interactive so it never steals hit-testing or selection;
+  // a direct child of the svg (not rootGroup/partGroups) so it never shows up in
+  // getBBox-based logic (align, "from artwork", pivot seeding). Geometry/visibility are
+  // kept correct by renderPose (updateArtboardRect); this just creates the element with
+  // its static styling.
+  const artboardRect = document.createElementNS(SVG_NS, 'rect');
+  artboardRect.id = 'rig-artboard-rect';
+  artboardRect.setAttribute('pointer-events', 'none');
+  artboardRect.setAttribute('vector-effect', 'non-scaling-stroke');
+  artboardRect.style.fill = 'var(--accent-2)';
+  artboardRect.style.fillOpacity = '0.05';
+  artboardRect.style.stroke = 'var(--accent-2)';
+  artboardRect.style.strokeOpacity = '0.4';
+  artboardRect.style.strokeWidth = '1';
+  ctx.svg.appendChild(artboardRect);
+
   ctx.onionGroup = document.createElementNS(SVG_NS, 'g');
   ctx.onionGroup.id = 'onion';
   ctx.svg.appendChild(ctx.onionGroup);

@@ -7,7 +7,7 @@
 
 import {
   state, notify, selectedPart, selectedPath, sampleChannel, channelValue,
-  setKeyframe, isAncestorOf, setParent, RigPart,
+  setKeyframe, isAncestorOf, setParent, RigPart, ensureArtboard,
 } from '../core/model';
 import {
   renderPose, updatePathAttrs, partRootBoxes, applyRootDeltas, hasSelectedNode,
@@ -160,7 +160,7 @@ export function buildInspector(el: HTMLElement): void {
     help.className = 'hint';
     help.textContent = setup
       ? state.mode === 'rig'
-        ? 'Setup: drags reshape the character (never keyed). Drag crosshair = set joint. Shift+drag = move.'
+        ? 'Edit: drags reshape the character (never keyed). Drag crosshair = set joint. Shift+drag = move.'
         : 'Drag nodes to reshape. Alt+click a node = insert one after it. Ctrl+click = delete.'
       : 'Animate: drags record keyframes at the playhead. Ctrl = 15° snap. Shift+drag = move.';
     el.appendChild(help);
@@ -169,6 +169,9 @@ export function buildInspector(el: HTMLElement): void {
     p.className = 'hint';
     p.textContent = 'Select a part on the canvas or in Layers. Shift+click selects several.';
     el.appendChild(p);
+
+    // Document properties spot: nothing selected, Edit mode.
+    if (setup) buildArtboardSection(el);
   }
 
   // Root (whole figure) — animated channels in Animate mode, its pivot in Setup mode.
@@ -206,6 +209,111 @@ export function buildInspector(el: HTMLElement): void {
   }
 
   buildAiPanel(el);
+}
+
+// ---- Artboard (page frame) ----
+
+/** Document-properties spot: shown in Edit mode with nothing selected. */
+function buildArtboardSection(el: HTMLElement): void {
+  const doc = state.doc!;
+  // ensureArtboard seeds a disabled default from viewBox for docs that never went
+  // through normalizeDoc (a fresh SVG import); it's a structural default, not a user
+  // edit, so no checkpoint here.
+  const ab = ensureArtboard(doc);
+
+  const title = document.createElement('h3');
+  title.textContent = 'Artboard';
+  el.appendChild(title);
+
+  const enabledRow = document.createElement('label');
+  enabledRow.className = 'field';
+  const enabledSpan = document.createElement('span');
+  enabledSpan.textContent = 'enabled';
+  const enabledInput = document.createElement('input');
+  enabledInput.type = 'checkbox';
+  // The global `input, select, textarea { width: 100% }` rule (style.css) otherwise
+  // stretches a bare checkbox into a full-width box; other checkboxes in this panel
+  // sidestep it via a wrapping class (.color-wrap, .ai-panel) — inline style here
+  // since this one isn't in either wrapper.
+  enabledInput.style.width = 'auto';
+  enabledInput.checked = ab.enabled;
+  enabledInput.onchange = () => {
+    checkpoint();
+    ab.enabled = enabledInput.checked;
+    renderPose();
+  };
+  enabledRow.appendChild(enabledSpan);
+  enabledRow.appendChild(enabledInput);
+  el.appendChild(enabledRow);
+
+  el.appendChild(numberField('x', ab.x, (v) => {
+    checkpoint();
+    ab.x = v;
+    renderPose();
+  }));
+  el.appendChild(numberField('y', ab.y, (v) => {
+    checkpoint();
+    ab.y = v;
+    renderPose();
+  }));
+  el.appendChild(numberField('width', ab.w, (v) => {
+    checkpoint();
+    ab.w = Math.max(1, v);
+    renderPose();
+  }));
+  el.appendChild(numberField('height', ab.h, (v) => {
+    checkpoint();
+    ab.h = Math.max(1, v);
+    renderPose();
+  }));
+
+  const grid = document.createElement('div');
+  grid.className = 'align-grid';
+
+  const fromArtwork = document.createElement('button');
+  fromArtwork.textContent = 'from artwork';
+  fromArtwork.title = 'Fit the artboard to the union bounding box of all artwork';
+  fromArtwork.onclick = () => {
+    const ids = doc.parts.map((p) => p.id);
+    const boxes = partRootBoxes(ids);
+    if (boxes.size === 0) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const b of boxes.values()) {
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.w);
+      maxY = Math.max(maxY, b.y + b.h);
+    }
+    checkpoint();
+    ab.x = minX;
+    ab.y = minY;
+    ab.w = Math.max(1, maxX - minX);
+    ab.h = Math.max(1, maxY - minY);
+    renderPose();
+    notify();
+  };
+  grid.appendChild(fromArtwork);
+
+  const fromViewBox = document.createElement('button');
+  fromViewBox.textContent = 'from viewBox';
+  fromViewBox.title = 'Reset the artboard to the imported SVG viewBox';
+  fromViewBox.onclick = () => {
+    checkpoint();
+    ab.x = doc.viewBox.x;
+    ab.y = doc.viewBox.y;
+    ab.w = doc.viewBox.w;
+    ab.h = doc.viewBox.h;
+    renderPose();
+    notify();
+  };
+  grid.appendChild(fromViewBox);
+  el.appendChild(grid);
+
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = 'Optional page frame, drawn behind the artwork. When enabled, ' +
+    'exports (Rive/Lottie) use it as their reference frame instead of the viewBox.';
+  el.appendChild(hint);
 }
 
 // ---- Skinning ----

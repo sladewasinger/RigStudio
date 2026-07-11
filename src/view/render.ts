@@ -8,7 +8,7 @@
  * SMInstance (smPanel's only hook) and repaints.
  */
 
-import { state, activeClip, Channel } from '../core/model';
+import { state, activeClip, Channel, RigDoc } from '../core/model';
 import { ctx, SVG_NS } from './context';
 import { poseTime, rootPoseTransform, groupTransformOf } from './pose';
 import { focusContext } from './focus';
@@ -21,6 +21,7 @@ export function renderPose(): void {
   if (!doc || !ctx.rootGroup) return;
   const t = poseTime();
 
+  updateArtboardRect(doc);
   ctx.rootGroup.setAttribute('transform', rootPoseTransform(t));
   const focus = focusContext();
   for (const part of doc.parts) {
@@ -39,6 +40,28 @@ export function renderPose(): void {
   }
   renderOnion();
   renderOverlay();
+}
+
+// ---- Artboard (page) rect ----
+
+/**
+ * Keep the artboard backdrop rect's geometry/visibility in sync with doc.artboard.
+ * The element itself (styling, pointer-events:none) is created once by buildCanvas;
+ * this only touches x/y/width/height/display, cheaply, every render.
+ */
+function updateArtboardRect(doc: RigDoc): void {
+  const rect = ctx.svg?.querySelector<SVGRectElement>('#rig-artboard-rect');
+  if (!rect) return;
+  const ab = doc.artboard;
+  if (!ab || !ab.enabled) {
+    rect.style.display = 'none';
+    return;
+  }
+  rect.style.display = '';
+  rect.setAttribute('x', String(ab.x));
+  rect.setAttribute('y', String(ab.y));
+  rect.setAttribute('width', String(Math.max(0, ab.w)));
+  rect.setAttribute('height', String(Math.max(0, ab.h)));
 }
 
 // ---- Onion skinning ----
