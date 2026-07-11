@@ -6,12 +6,58 @@
  * class). Clicking through a faded part falls to blank canvas, which exits focus.
  */
 
-import { state, RigPart, selectedPart, ancestorChain, partById } from '../core/model';
+import { state, RigPart, selectedPart, selectPart, ancestorChain, partById } from '../core/model';
 import { ctx } from './context';
 
 /** Escape/blank-click hook: close all entered groups. */
 export function clearGroupEntry(): void {
   ctx.enteredGroups.clear();
+}
+
+/**
+ * The deepest currently-entered group (the one with the longest ancestor chain).
+ * Dives are strictly nested — dimming + click-through prevents entering a group whose
+ * parent isn't entered — so "deepest" is the innermost dive level. `enterGroupsFor`
+ * can add several at once, so depth (not insertion order) is the reliable key.
+ */
+export function innermostEnteredGroup(): RigPart | null {
+  const doc = state.doc;
+  if (!doc) return null;
+  let best: RigPart | null = null;
+  let bestDepth = -1;
+  for (const id of ctx.enteredGroups) {
+    const g = doc.parts.find((p) => p.id === id);
+    if (!g) continue;
+    const depth = ancestorChain(g).length;
+    if (depth > bestDepth) { bestDepth = depth; best = g; }
+  }
+  return best;
+}
+
+/** Leave the innermost entered group (one dive level). Returns false if none entered. */
+export function popEnteredGroup(): boolean {
+  const g = innermostEnteredGroup();
+  if (!g) return false;
+  ctx.enteredGroups.delete(g.id);
+  return true;
+}
+
+/**
+ * One-level "step out", shared by Escape and blank-canvas clicks (Inkscape parity):
+ * leave an entered path → deselect the current object → pop the innermost entered
+ * group. Each call unwinds exactly one level of drill-down so a nested dive is
+ * reversed the same number of steps it was entered.
+ */
+export function stepOutFocus(): void {
+  if (state.selectedPathId) {
+    state.selectedPathId = null;
+    return;
+  }
+  if (state.selectedPartId) {
+    selectPart(null);
+    return;
+  }
+  popEnteredGroup();
 }
 
 /**

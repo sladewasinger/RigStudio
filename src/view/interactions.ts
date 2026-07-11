@@ -34,7 +34,7 @@ import {
   chainMatOf, ownTranslateOf, effectivePivot,
 } from './pose';
 import {
-  clearGroupEntry, artworkUnderPointer,
+  clearGroupEntry, artworkUnderPointer, stepOutFocus,
 } from './focus';
 import { renderOverlay } from './overlay';
 import { renderPose } from './render';
@@ -101,21 +101,24 @@ export function wireInteractions(): void {
       return;
     }
     const { part, pathEl } = hit;
-    // First: open the outermost still-closed group and select the next level.
+    // DIVE into the outermost still-closed group as a CONTEXT, selecting NOTHING
+    // (Inkscape "enter group" / temporary ungrouping): its children become directly
+    // clickable, and the NEXT single click selects the child under the cursor — which
+    // may itself be a nested group (selected, not dived). A further double-click on a
+    // nested group dives one level deeper.
     const closed = ancestorChain(part).find(
       (a) => a.kind === 'group' && !ctx.enteredGroups.has(a.id),
     );
     if (closed) {
       ctx.enteredGroups.add(closed.id);
-      const next = ancestorChain(part).find(
-        (a) => a.kind === 'group' && !ctx.enteredGroups.has(a.id),
-      );
-      selectPart(next?.id ?? part.id);
+      selectPart(null);
+      state.selectedPathId = null;
       notify();
       renderPose();
       return;
     }
-    // Then: enter the part and select the path under the cursor (Setup only).
+    // Deepest level (no un-entered group ancestor): enter the part and select the path
+    // under the cursor (Setup only) — path/node scope.
     if (state.editorMode !== 'setup') return;
     const pathId = pathEl?.dataset?.pathId;
     if (!pathId) return;
@@ -433,9 +436,12 @@ export function wireInteractions(): void {
       }
       const wasPrimary = part !== null && state.selectedPartId === part.id;
       if (part) {
-        // Shift adds to the selection; clicking an already-selected part keeps the
-        // group selected so multi-part drags work.
-        if (ev.shiftKey || state.selectedPartIds.includes(part.id)) {
+        // Shift OR Ctrl adds to the multi-selection (a plain Ctrl+click on artwork in
+        // pose mode joins, mirroring Shift — Ctrl-during-a-DRAG still axis-locks, since
+        // that is read live in pointermove and pressing an already-selected part is a
+        // selection no-op). Clicking an already-selected part keeps the group selected
+        // so multi-part drags work.
+        if (ev.shiftKey || ev.ctrlKey || state.selectedPartIds.includes(part.id)) {
           selectPart(part.id, true);
         } else {
           selectPart(part.id);
@@ -447,14 +453,18 @@ export function wireInteractions(): void {
         const p = pointerInRoot(ev);
         const t = poseTime();
         const setup = state.editorMode === 'setup';
-        // Which manipulation does a body drag perform?
-        //   select tool — Setup moves the part, Animate rotates (Shift moves);
-        //   translate/rotate tools force that manipulation in both modes;
-        //   ik tool solves the ancestor chain toward the pointer.
+        // Unified V "gizmo" tool: a body drag TRANSLATES in the translate/scale handle
+        // set (first click) and ROTATES in the rotate/skew set (second click), in BOTH
+        // Edit and Animate. Shift always translates (muscle memory). The T/R tools force
+        // their manipulation; the IK tool solves the ancestor chain toward the pointer.
         const action: 'translate' | 'rotate' | 'ik' =
           state.tool === 'select'
-            ? (setup || ev.shiftKey ? 'translate' : 'rotate')
+            ? (ev.shiftKey || ctx.handleMode === 'scale' ? 'translate' : 'rotate')
             : state.tool;
+        // A motionless body click on the already-primary part cycles the handle set
+        // (scale ↔ rotate), which is what flips the drag between translate and rotate.
+        const canToggle =
+          state.tool === 'select' && wasPrimary && !ev.shiftKey && !ev.ctrlKey;
 
         if (action === 'ik') {
           const ancestors = ancestorChain(part); // outermost first
@@ -491,8 +501,7 @@ export function wireInteractions(): void {
             startClient: { x: ev.clientX, y: ev.clientY },
             active: false,
             axis: null,
-            toggleOnClick:
-              state.tool === 'select' && setup && wasPrimary && !ev.shiftKey,
+            toggleOnClick: canToggle,
           };
         } else {
           const pivot = effectivePivot(part, t);
@@ -514,6 +523,7 @@ export function wireInteractions(): void {
             snapped: false,
             startClient: { x: ev.clientX, y: ev.clientY },
             active: false,
+            toggleOnClick: canToggle,
           };
         }
         try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
@@ -523,14 +533,14 @@ export function wireInteractions(): void {
     }
 
 
-    // Blank canvas: clear the selection, close entered groups, leave any "entered"
-    // path. No drag follows a blank click, so repaint the overlay here — notify()
-    // only rebuilds the side panels, and the stale selection box would linger.
-    state.selectedPathId = null;
-    ctx.enteredGroups.clear();
-    selectPart(null);
+    // Blank canvas (incl. a click-through fall from dimmed artwork): step out ONE
+    // drill-down level — leave an entered path → deselect → pop the innermost entered
+    // group — Inkscape parity. renderPose (not just renderOverlay) because popping a
+    // group changes the drill-down dimming, and no drag follows a blank click to
+    // otherwise repaint it.
+    stepOutFocus();
     notify();
-    renderOverlay();
+    renderPose();
   });
 
   ctx.svg.addEventListener('pointermove', (ev) => {
@@ -914,8 +924,13 @@ export function wireInteractions(): void {
         const last = [...ctx.selectedNodes].pop();
         ctx.selectedNode = last ? parseNodeKey(last) : null;
       }
-      // A motionless click on the already-selected part cycles scale ↔ rotate handles.
-      if (ctx.drag.kind === 'translate' && !ctx.drag.active && ctx.drag.toggleOnClick) {
+      // A motionless click on the already-selected part cycles scale ↔ rotate handles
+      // (from either a translate or a rotate body-drag press, so the set cycles both
+      // ways and the body drag flips translate↔rotate to match).
+      if (
+        (ctx.drag.kind === 'translate' || ctx.drag.kind === 'rotate') &&
+        !ctx.drag.active && ctx.drag.toggleOnClick
+      ) {
         ctx.handleMode = ctx.handleMode === 'scale' ? 'rotate' : 'scale';
       }
       ctx.drag = null;

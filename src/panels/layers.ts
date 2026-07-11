@@ -20,6 +20,28 @@ import { buildPartContextMenu } from '../ui/actions';
 /** Parts whose folders are open. Persists across re-renders within a session. */
 const expanded = new Set<string>();
 
+/**
+ * The part ids in the order their rows render in the tree (depth-first, top part first,
+ * children only under expanded folders) — the "visible row order" a Shift+range select
+ * spans. Mirrors buildLayersPanel / partNode's traversal exactly (reverse doc order,
+ * `!parentId` roots), so a range never includes a collapsed part.
+ */
+function visiblePartOrder(): string[] {
+  const doc = state.doc;
+  if (!doc) return [];
+  const out: string[] = [];
+  const walk = (parts: RigPart[]): void => {
+    for (const p of parts) {
+      out.push(p.id);
+      if (expanded.has(p.id)) {
+        walk([...doc.parts].reverse().filter((c) => c.parentId === p.id));
+      }
+    }
+  };
+  walk([...doc.parts].reverse().filter((p) => !p.parentId));
+  return out;
+}
+
 export function buildLayersPanel(el: HTMLElement): void {
   el.innerHTML = '<h2>Layers</h2>';
   const doc = state.doc;
@@ -94,8 +116,22 @@ function partNode(part: RigPart): HTMLElement {
   row.appendChild(count);
 
   row.onclick = (ev) => {
-    // Ctrl toggles membership in the multi-selection; Shift adds; plain replaces.
-    if (ev.ctrlKey && state.selectedPartIds.includes(part.id)) {
+    // Shift = RANGE select between the anchor (current primary) and this row, in visible
+    // (flattened, expanded-only) row order; Ctrl = toggle one row's membership; plain =
+    // replace. The anchor stays put so chained Shift+clicks re-range from the same row.
+    if (ev.shiftKey && state.selectedPartId) {
+      const order = visiblePartOrder();
+      const ai = order.indexOf(state.selectedPartId);
+      const bi = order.indexOf(part.id);
+      if (ai >= 0 && bi >= 0) {
+        const [lo, hi] = ai <= bi ? [ai, bi] : [bi, ai];
+        state.selectedPartIds = order.slice(lo, hi + 1);
+        state.selectedPathId = null;
+      } else {
+        selectPart(part.id);
+        enterGroupsFor(part.id);
+      }
+    } else if (ev.ctrlKey && state.selectedPartIds.includes(part.id)) {
       state.selectedPartIds = state.selectedPartIds.filter((id) => id !== part.id);
       if (state.selectedPartId === part.id) {
         state.selectedPartId = state.selectedPartIds[state.selectedPartIds.length - 1] ?? null;

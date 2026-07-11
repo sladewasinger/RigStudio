@@ -1,11 +1,18 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { canUndo, undo } from '../../core/history';
 import { applyMat } from '../../geometry/transforms';
+import { channelValue, Channel } from '../../core/model';
 import {
   bootRig, resetRig, state, partByLabel, clientPointOnPart, gestureDrag,
   screenScale, expectClose, docToClient, selectByLabel, overlayEl, overlayCount,
   clientCenterOf, partMatrix, partGroupEl, setEditorMode, clipTrack, repaint, click,
 } from './harness';
+
+/** Effective (sampled) channel value at the current time — rest when unkeyed. */
+function channelOf(id: string, ch: Channel): number {
+  const part = state.doc!.parts.find((p) => p.id === id)!;
+  return channelValue(part, ch, state.currentTime);
+}
 
 beforeAll(bootRig);
 beforeEach(resetRig);
@@ -143,23 +150,44 @@ describe('scenario 4 — pivot drag compensation', () => {
   });
 });
 
-describe('scenario 5 — animate auto-key drag', () => {
-  it('a plain body drag keys rotate at the playhead', () => {
+describe('scenario 5 — animate unified gizmo body drag (P3 rework)', () => {
+  it('a FIRST-click body drag keys tx/ty at the playhead (was rotate)', () => {
     setEditorMode('animate');
     state.currentTime = 0;
     const id = partByLabel('right_arm').id;
     const pt = clientPointOnPart('right_arm');
+    // First click on a part is the translate/scale handle set → body drag TRANSLATES.
     gestureDrag(pt, { x: pt.x + 35, y: pt.y - 20 });
+
+    expect(clipTrack(id, 'tx'), 'tx track created').toBeTruthy();
+    expect(clipTrack(id, 'ty'), 'ty track created').toBeTruthy();
+    expect(clipTrack(id, 'tx')!.keyframes[0].time).toBe(0);
+    // Translate-only: no rotate track from the first-click drag.
+    expect(clipTrack(id, 'rotate'), 'no rotate track from a first-click drag').toBeFalsy();
+  });
+
+  it('a SECOND-click body drag keys rotate at the playhead', () => {
+    setEditorMode('animate');
+    state.currentTime = 0;
+    const id = partByLabel('right_arm').id;
+    // Click to select (scale handle set), then a motionless click on the primary cycles
+    // to the rotate/skew handle set — recompute the artwork point each time so the added
+    // gizmo chrome never occludes it.
+    let pt = clientPointOnPart('right_arm');
+    click(pt.x, pt.y);
+    pt = clientPointOnPart('right_arm');
+    click(pt.x, pt.y);
+    // Now a body drag ROTATES.
+    pt = clientPointOnPart('right_arm');
+    gestureDrag(pt, { x: pt.x + 35, y: pt.y - 22 });
 
     const track = clipTrack(id, 'rotate');
     expect(track, 'rotate track created').toBeTruthy();
-    expect(track!.keyframes.length).toBeGreaterThanOrEqual(1);
     expect(track!.keyframes[0].time).toBe(0);
-    // Rotate-only: no translate tracks from this gesture.
-    expect(clipTrack(id, 'tx')).toBeFalsy();
+    expect(clipTrack(id, 'tx'), 'no tx track from the rotate drag').toBeFalsy();
   });
 
-  it('Shift+drag keys tx and ty at the playhead', () => {
+  it('Shift+drag keys tx and ty at the playhead (always translates)', () => {
     setEditorMode('animate');
     state.currentTime = 0;
     const id = partByLabel('left_leg').id;
@@ -169,6 +197,83 @@ describe('scenario 5 — animate auto-key drag', () => {
     expect(clipTrack(id, 'tx'), 'tx track').toBeTruthy();
     expect(clipTrack(id, 'ty'), 'ty track').toBeTruthy();
     expect(clipTrack(id, 'rotate'), 'no rotate track from a Shift+move').toBeFalsy();
+  });
+});
+
+describe('scenario 12 — unified select gizmo (circle rotates, cross translates)', () => {
+  function ringHit(): SVGCircleElement {
+    const el = overlayEl().querySelector('.select-gizmo .sg-rotate .sg-hit[data-role="gizmo-ring"]');
+    if (!el) throw new Error('no gizmo rotate ring rendered');
+    return el as SVGCircleElement;
+  }
+  function crossHit(): SVGRectElement {
+    const el = overlayEl().querySelector('.select-gizmo .sg-move .sg-hit[data-gizmo-axis="xy"]');
+    if (!el) throw new Error('no gizmo move cross rendered');
+    return el as SVGRectElement;
+  }
+  // The ring/cross carry the root transform on their <g>; cx/cy/r (and rect x/y/w/h) are
+  // in root/doc space, so docToClient maps them to client px. Returns the signed value
+  // change so the caller asserts exactly.
+  function ringDrag(readValue: () => number): number {
+    const ring = ringHit();
+    const cx = Number(ring.getAttribute('cx'));
+    const cy = Number(ring.getAttribute('cy'));
+    const r = Number(ring.getAttribute('r'));
+    const v0 = readValue();
+    const th = (30 * Math.PI) / 180;
+    const start = docToClient({ x: cx + r, y: cy });
+    const target = docToClient({ x: cx + r * Math.cos(th), y: cy + r * Math.sin(th) });
+    gestureDrag(start, target, { steps: 8 });
+    return readValue() - v0;
+  }
+  function crossDragTranslates(read: () => { tx: number; ty: number }): void {
+    const rect = crossHit();
+    const x = Number(rect.getAttribute('x'));
+    const y = Number(rect.getAttribute('y'));
+    const w = Number(rect.getAttribute('width'));
+    const h = Number(rect.getAttribute('height'));
+    const before = read();
+    const start = docToClient({ x: x + w / 2, y: y + h / 2 });
+    gestureDrag(start, { x: start.x + 34, y: start.y + 26 });
+    const after = read();
+    expect(Math.abs(after.tx - before.tx), 'cross moved tx').toBeGreaterThan(0.5);
+    expect(Math.abs(after.ty - before.ty), 'cross moved ty').toBeGreaterThan(0.5);
+  }
+
+  it('Edit mode: circle drag writes rest.rotate, cross drag writes rest.tx/ty', () => {
+    selectByLabel('right_arm');
+    repaint();
+    const dRot = ringDrag(() => partByLabel('right_arm').rest.rotate);
+    expectClose(Math.cos(((dRot - 30) * Math.PI) / 180), 1, 5e-3, 'circle rotates ~30°');
+    expect(state.doc!.clips[0].tracks.length).toBe(0); // Edit never keys
+
+    selectByLabel('right_arm');
+    repaint();
+    crossDragTranslates(() => ({ tx: partByLabel('right_arm').rest.tx, ty: partByLabel('right_arm').rest.ty }));
+    expect(state.doc!.clips[0].tracks.length).toBe(0);
+  });
+
+  it('Animate mode: circle drag keys rotate, cross drag keys tx/ty', () => {
+    setEditorMode('animate');
+    state.currentTime = 0;
+    const id = partByLabel('right_arm').id;
+    selectByLabel('right_arm');
+    repaint();
+    // Direction + magnitude only: an Animate rotate creates a keyframe, whose first
+    // appearance re-renders the timeline and resizes the canvas mid-drag (shifting the
+    // screen CTM) — a harness layout artifact, so the suite never asserts Animate-rotate
+    // geometry exactly (the old scenario 5 only checked track existence). The gizmo
+    // circle clearly keys a positive rotation.
+    const dRot = ringDrag(() => channelOf(id, 'rotate'));
+    expect(dRot, 'circle keys a positive rotation in Animate').toBeGreaterThan(3);
+    expect(dRot).toBeLessThan(90);
+    expect(clipTrack(id, 'rotate'), 'rotate keyed by the gizmo circle').toBeTruthy();
+
+    selectByLabel('right_arm');
+    repaint();
+    crossDragTranslates(() => ({ tx: channelOf(id, 'tx'), ty: channelOf(id, 'ty') }));
+    expect(clipTrack(id, 'tx'), 'tx keyed by the gizmo cross').toBeTruthy();
+    expect(clipTrack(id, 'ty'), 'ty keyed by the gizmo cross').toBeTruthy();
   });
 });
 

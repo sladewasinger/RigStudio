@@ -8,16 +8,19 @@
  * it into a submodule. The layers themselves never import this facade.
  *
  * Editing modes (state.editorMode): Setup edits the character itself, Inkscape-style
- * (drag MOVES a part, handles scale/rotate/skew the rest pose, pivots and node editing
- * are available, double-click drills group → part → path). Animate rotates parts around
- * their pivots (Shift translates) and records keyframes; keyed values are ABSOLUTE and
- * the rest pose fills only unkeyed channels. Scroll wheel zooms around the cursor,
- * middle-drag pans, resetView re-fits.
+ * (handles scale/rotate/skew the rest pose, pivots and node editing are available);
+ * Animate records keyframes (keyed values are ABSOLUTE, the rest pose fills only unkeyed
+ * channels). The V/select tool is mode-consistent in both: a body drag TRANSLATES in the
+ * translate/scale handle set (first click) and ROTATES around the pivot in the rotate/skew
+ * set (second click); Shift always translates. A double-click DIVES into a group (enters
+ * it without selecting); the next click selects a child, deeper double-clicks dive further,
+ * then into path/node scope; Escape / blank click steps out one level. Scroll wheel zooms
+ * around the cursor, middle-drag pans, resetView re-fits.
  */
 
 export { buildCanvas } from './canvas';
 export { partRootBoxes } from './pose';
-export { clearGroupEntry, enterGroupsFor } from './focus';
+export { clearGroupEntry, enterGroupsFor, stepOutFocus } from './focus';
 export { renderPose, setPoseSampler } from './render';
 export { updatePathAttrs, reorderCanvas, registerPart, unregisterPart } from './partDom';
 export {

@@ -170,6 +170,10 @@ export function renderOverlay(): void {
     holder.appendChild(rect); // root-coordinate passive holder
   }
 
+  // Unified select-tool gizmo (rotate circle + move cross). Drawn BEFORE the per-part
+  // boxes/handles so Edit's interactive scale/rotate handles stay on top and clickable.
+  renderSelectGizmo(size, t, rootTransform);
+
   // Dashed transform boxes around every selected part, rotating live with the pose.
   for (const part of selectedParts()) {
     const g = ctx.partGroups.get(part.id);
@@ -304,6 +308,48 @@ function boneKitePath(p: { x: number; y: number }, q: { x: number; y: number }, 
     `L ${bx + uy * w},${by - ux * w} Z" />` +
     `<circle cx="${p.x}" cy="${p.y}" r="${w * 0.5}" />`
   );
+}
+
+/**
+ * Unified select-tool gizmo, shown in BOTH Edit and Animate whenever the V/select tool
+ * has a (non-skinned) part selected: a rotate CIRCLE around the effective pivot and a
+ * move CROSS at the selection centre. Reuses the tool-gizmo hit semantics — the ring
+ * carries data-role="gizmo-ring" (a rotate drag around the pivot) and the cross
+ * data-gizmo-axis="xy" (a free translate) — so the existing pointerdown handlers drive
+ * them, writing rest in Edit and keys in Animate. Hover highlights each affordance.
+ */
+function renderSelectGizmo(size: number, t: number | null, rootTransform: string): void {
+  if (!ctx.overlay || state.mode !== 'rig' || state.tool !== 'select') return;
+  const part = selectedPart();
+  if (!part || part.skin) return;
+
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', 'select-gizmo');
+  if (rootTransform) g.setAttribute('transform', rootTransform);
+
+  // Rotate circle around the joint (annulus hit — the centre stays free for the pivot).
+  const piv = effectivePivot(part, t);
+  const r = size * 3.2;
+  const rotG = document.createElementNS(SVG_NS, 'g');
+  rotG.setAttribute('class', 'sg-rotate');
+  rotG.innerHTML =
+    `<circle class="sg-ring" cx="${piv.x}" cy="${piv.y}" r="${r}" />` +
+    `<circle class="sg-hit" data-role="gizmo-ring" cx="${piv.x}" cy="${piv.y}" r="${r}" />`;
+  g.appendChild(rotG);
+
+  // Move cross at the primary part's rendered centre (partless parts have no box).
+  const box = partRootBoxes([part.id]).get(part.id);
+  if (box) {
+    const cx = box.x + box.w / 2, cy = box.y + box.h / 2;
+    const a = size * 1.5;
+    const movG = document.createElementNS(SVG_NS, 'g');
+    movG.setAttribute('class', 'sg-move');
+    movG.innerHTML =
+      `<path class="sg-cross" d="M ${cx - a},${cy} H ${cx + a} M ${cx},${cy - a} V ${cy + a}" />` +
+      `<rect class="sg-hit" data-gizmo-axis="xy" x="${cx - a}" y="${cy - a}" width="${a * 2}" height="${a * 2}" />`;
+    g.appendChild(movG);
+  }
+  ctx.overlay.appendChild(g);
 }
 
 /** Rive/Blender-style axis gizmo for the translate/rotate tools, at the live pivot. */

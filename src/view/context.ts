@@ -39,6 +39,9 @@ export type DragState =
       snapped: boolean;
       startClient: { x: number; y: number };
       active: boolean;
+      /** A motionless body-drag rotate click cycles the handle set (scale↔rotate); the
+       * gizmo-ring / rotate-handle rotate drags leave this unset. */
+      toggleOnClick?: boolean;
     }
   | {
       kind: 'translate';

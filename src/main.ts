@@ -5,7 +5,7 @@ import {
 } from './core/model';
 import { importSvg } from './io/importSvg';
 import {
-  buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, clearGroupEntry,
+  buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, stepOutFocus,
   hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, nudgeSelectedParts,
   zoomBy, selectAllNodes, enterGroupsFor,
 } from './view';
@@ -378,18 +378,13 @@ document.addEventListener('keydown', (ev) => {
       ev.preventDefault();
       return;
     }
-    // Cancel bone placement first; then leave the "entered" path; then clear the
-    // selection (and step out of any entered groups).
+    // Cancel bone placement first, then step out one drill-down level at a time
+    // (entered path → deselect → pop the innermost entered group) — Inkscape parity.
     if (cancelBonePlacement()) {
       notify();
       return;
     }
-    if (state.selectedPathId) {
-      state.selectedPathId = null;
-    } else {
-      clearGroupEntry();
-      selectPart(null);
-    }
+    stepOutFocus();
     notify();
     renderPose();
     return;

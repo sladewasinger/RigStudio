@@ -96,7 +96,9 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: 'Ctrl+click a node', description: 'Delete that node', context: 'Node editing' },
   {
     keys: 'Double-click',
-    description: 'Drill into a group → part → path (Escape steps back out)',
+    description: 'Dive into a group (enters it, selects nothing); a single click then ' +
+      'selects a child, a further double-click dives deeper, then into path/node scope. ' +
+      'Escape / blank click steps out one level',
     context: 'Node editing',
   },
   {
@@ -119,14 +121,39 @@ export const SHORTCUTS: ShortcutEntry[] = [
 
   // ---- Mouse ----
   {
+    keys: 'Body drag',
+    description: 'Select tool: translate the selection; after a second click on it, ' +
+      'rotate around the pivot (both Edit and Animate)',
+    context: 'Mouse',
+  },
+  {
+    keys: 'Click a selected part',
+    description: 'Cycle the handle set: translate/scale ↔ rotate/skew (flips what a body drag does)',
+    context: 'Mouse',
+  },
+  {
+    keys: 'Gizmo circle / cross',
+    description: 'Drag the circle to rotate around the pivot, the cross to translate (both modes)',
+    context: 'Mouse',
+  },
+  {
     keys: 'Ctrl+drag (translate)',
     description: 'Constrain a free move to its dominant axis',
     context: 'Mouse',
   },
   { keys: 'Ctrl+drag (rotate)', description: 'Snap rotation to 15° increments', context: 'Mouse' },
   { keys: 'Ctrl+drag (corner scale)', description: 'Scale uniformly (equal x/y)', context: 'Mouse' },
-  { keys: 'Shift+drag', description: 'Translate instead of rotate (Animate body drag)', context: 'Mouse' },
-  { keys: 'Shift+click', description: 'Add to the multi-selection', context: 'Mouse' },
+  { keys: 'Shift+drag', description: 'Always translate the selection (either handle set)', context: 'Mouse' },
+  {
+    keys: 'Shift+click / Ctrl+click',
+    description: 'Add to the multi-selection (canvas parts, pose mode)',
+    context: 'Mouse',
+  },
+  {
+    keys: 'Layers: Shift+click',
+    description: 'Range-select from the anchor row to the clicked row (Ctrl+click toggles one)',
+    context: 'Mouse',
+  },
 ];
 
 /** SHORTCUTS grouped by context, in GROUP_ORDER order; empty groups are omitted. */

@@ -855,3 +855,16 @@ g.dimmed { opacity: 0.22; pointer-events: none; transition: opacity 0.12s ease; 
   .sm-body { flex-direction: column; }
   .sm-side { flex-basis: auto; max-width: none; max-height: none; }
 }
+
+/* ---- Unified select-tool gizmo (rotate circle + move cross), src/view/overlay.ts ---- */
+.select-gizmo .sg-ring,
+.select-gizmo .sg-cross,
+.select-gizmo .sg-hit { vector-effect: non-scaling-stroke; }
+.select-gizmo .sg-ring { fill: none; stroke: var(--accent-2); stroke-width: 1.3; opacity: 0.65; }
+.select-gizmo .sg-cross { fill: none; stroke: var(--accent-2); stroke-width: 1.6; opacity: 0.65; }
+/* Ring hit is an annulus (thick transparent stroke) so the centre stays free for the
+   pivot; the cross hit is a transparent square. */
+.select-gizmo .sg-rotate .sg-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: grab; }
+.select-gizmo .sg-move .sg-hit { fill: transparent; stroke: none; cursor: move; }
+.select-gizmo .sg-rotate:hover .sg-ring { opacity: 1; stroke-width: 2; }
+.select-gizmo .sg-move:hover .sg-cross { opacity: 1; stroke-width: 2.3; }
