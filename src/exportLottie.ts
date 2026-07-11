@@ -394,7 +394,7 @@ function shapeGroup(part: RigPart, path: RigPath, ox: number, oy: number): JsonO
       c: { a: 0, k: hexColor(path.stroke) },
       o: { a: 0, k: rnd(clamp01(path.strokeOpacity) * 100) },
       w: { a: 0, k: rnd(path.strokeWidth * widthScale) },
-      lc: 2, lj: 2, // round cap/join, matching the Compose exporter
+      lc: 2, lj: 2, // round cap/join
       nm: 'stroke',
     });
   }

@@ -153,6 +153,7 @@ function buildHeader(machines: StateMachine[], sm: StateMachine | null): HTMLEle
       const arr = state.doc!.stateMachines!;
       const i = arr.findIndex((m) => m.id === sm.id);
       if (i >= 0) arr.splice(i, 1);
+      graphViewRects.delete(sm.id); // drop the now-dangling view state
       selMachineId = arr[0]?.id ?? null;
       selStateId = null;
       selTransitionId = null;
@@ -209,13 +210,21 @@ function stateBox(st: SMState): { x: number; y: number; w: number; h: number } {
   return { x: st.x ?? 0, y: st.y ?? 0, w, h };
 }
 
-/** Seed positions for any state that lacks them (cosmetic; persisted silently via autosave). */
+/**
+ * Seed positions for any state that lacks them (cosmetic; persisted silently via
+ * autosave). Entry/any/exit are mandatory (model.ts's normalizeDoc guarantees them) but
+ * an exit synthesized onto an OLD project on load arrives with no x/y — this seeds it to
+ * the right of the animation column, mirroring the default `newStateMachine` gives a
+ * freshly-minted exit.
+ */
 function ensureLayout(sm: StateMachine): void {
   const entry = sm.states.find((s) => s.kind === 'entry');
   const any = sm.states.find((s) => s.kind === 'any');
+  const exit = sm.states.find((s) => s.kind === 'exit');
   if (entry && !hasPos(entry)) { entry.x = 40; entry.y = 44; }
   if (any && !hasPos(any)) { any.x = 40; any.y = 128; }
-  const others = sm.states.filter((s) => s.kind !== 'entry' && s.kind !== 'any');
+  if (exit && !hasPos(exit)) { exit.x = 520; exit.y = 44; }
+  const others = sm.states.filter((s) => s.kind !== 'entry' && s.kind !== 'any' && s.kind !== 'exit');
   let maxY = 20;
   for (const s of others) if (hasPos(s)) maxY = Math.max(maxY, s.y ?? 0);
   for (const s of others) {
@@ -229,8 +238,137 @@ function ensureLayout(sm: StateMachine): void {
 
 const hasPos = (s: SMState): boolean => typeof s.x === 'number' && typeof s.y === 'number';
 
+// ---- Graph pan & zoom (session view state — NOT persisted, NOT reset by rebuilds) ----
+//
+// Mirrors view.ts's canvas viewBox pattern (wheel = zoom at cursor, middle-drag = pan,
+// clamped multiplicative zoom, no undo checkpoints) but keyed per machine id in a
+// module-level map, since the panel rebuilds on every notify() and each machine should
+// remember its own scroll position across machine switches and logic-view toggles.
+
+interface GraphViewRect { x: number; y: number; w: number; h: number }
+
+const graphViewRects = new Map<string, GraphViewRect>();
+const GRAPH_FIT_PAD = 48;
+const GRAPH_ZOOM_MIN = 0.2; // matches CLAUDE.md's 0.2x-5x range, relative to the fit view
+const GRAPH_ZOOM_MAX = 5;
+
+/** Bounding box of every state's box, in graph space. */
+function graphContentBounds(sm: StateMachine): { minX: number; minY: number; maxX: number; maxY: number } {
+  if (!sm.states.length) return { minX: 0, minY: 0, maxX: 480, maxY: 260 };
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const s of sm.states) {
+    const b = stateBox(s);
+    minX = Math.min(minX, b.x);
+    minY = Math.min(minY, b.y);
+    maxX = Math.max(maxX, b.x + b.w);
+    maxY = Math.max(maxY, b.y + b.h);
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/** The viewBox rect that frames every state box with padding — what the ⌂ button
+ * restores and what a machine gets the first time it's ever shown. */
+function fitGraphRect(sm: StateMachine): GraphViewRect {
+  const b = graphContentBounds(sm);
+  return {
+    x: b.minX - GRAPH_FIT_PAD,
+    y: b.minY - GRAPH_FIT_PAD,
+    w: Math.max(1, b.maxX - b.minX) + GRAPH_FIT_PAD * 2,
+    h: Math.max(1, b.maxY - b.minY) + GRAPH_FIT_PAD * 2,
+  };
+}
+
+/** This machine's current view rect, fitting it once the first time it's shown. */
+function getGraphViewRect(sm: StateMachine): GraphViewRect {
+  let vr = graphViewRects.get(sm.id);
+  if (!vr) {
+    vr = fitGraphRect(sm);
+    graphViewRects.set(sm.id, vr);
+  }
+  return vr;
+}
+
+function applyGraphViewRect(svg: SVGSVGElement, vr: GraphViewRect): void {
+  svg.setAttribute('viewBox', `${vr.x} ${vr.y} ${vr.w} ${vr.h}`);
+}
+
+/** ⌂ button + first-show: recenter/refit on every current state box. */
+function fitGraph(svg: SVGSVGElement, sm: StateMachine): void {
+  const vr = fitGraphRect(sm);
+  graphViewRects.set(sm.id, vr);
+  applyGraphViewRect(svg, vr);
+}
+
+/**
+ * Core viewBox zoom: scale around the graph-space point (px,py) by `factor` (>1 zooms
+ * in), clamped to 0.2x-5x of the content-fit width — the same shape as view.ts's
+ * zoomAround, but relative to this graph's own content bbox instead of doc.viewBox.
+ */
+function zoomGraphAround(svg: SVGSVGElement, sm: StateMachine, px: number, py: number, factor: number): void {
+  const vr = getGraphViewRect(sm);
+  const fitW = fitGraphRect(sm).w;
+  const minW = fitW / GRAPH_ZOOM_MAX;
+  const maxW = fitW / GRAPH_ZOOM_MIN;
+  const newW = Math.min(maxW, Math.max(minW, vr.w / factor));
+  const applied = vr.w / newW;
+  vr.x = px - (px - vr.x) / applied;
+  vr.y = py - (py - vr.y) / applied;
+  vr.w = newW;
+  vr.h = vr.h / applied;
+  applyGraphViewRect(svg, vr);
+}
+
+/** Middle-button drag pan (navigation, not editing — no checkpoints). */
+function startGraphPan(svg: SVGSVGElement, sm: StateMachine, ev: PointerEvent): void {
+  const vr = getGraphViewRect(sm);
+  const startClient = { x: ev.clientX, y: ev.clientY };
+  const startRect = { ...vr };
+  svg.style.cursor = 'grabbing';
+  try { svg.setPointerCapture(ev.pointerId); } catch { /* synthetic/pen events */ }
+
+  const move = (e: PointerEvent) => {
+    const ctm = svg.getScreenCTM();
+    const scale = ctm ? Math.hypot(ctm.a, ctm.b) : 1;
+    vr.x = startRect.x - (e.clientX - startClient.x) / scale;
+    vr.y = startRect.y - (e.clientY - startClient.y) / scale;
+    applyGraphViewRect(svg, vr);
+  };
+  const up = () => {
+    svg.removeEventListener('pointermove', move);
+    svg.removeEventListener('pointerup', up);
+    svg.style.cursor = '';
+  };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerup', up);
+}
+
+/** Wired exactly once per svg element (buildGraph creates a fresh one on every rebuild). */
+function wireGraphInteractions(svg: SVGSVGElement, sm: StateMachine): void {
+  svg.addEventListener('wheel', (ev) => {
+    ev.preventDefault(); // never scroll the timeline panel the graph sits in
+    const p = svgPoint(svg, ev);
+    const factor = Math.pow(1.0015, -ev.deltaY);
+    zoomGraphAround(svg, sm, p.x, p.y, factor);
+  }, { passive: false });
+
+  svg.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 1) return;
+    ev.preventDefault(); // no middle-click autoscroll
+    startGraphPan(svg, sm, ev);
+  });
+
+  // Background pointerdown on empty canvas (left button only — middle is pan, handled
+  // above and must never arm/select/deselect): cancel arming, else clear selection.
+  svg.addEventListener('pointerdown', (ev) => {
+    if (ev.target !== svg || ev.button !== 0) return;
+    if (arming) { arming = false; armFrom = null; rerender(); return; }
+    if (selStateId || selTransitionId) { selStateId = null; selTransitionId = null; rerender(); }
+  });
+}
+
 function buildGraph(doc: { clips: { name: string }[] }, sm: StateMachine): HTMLElement {
   const wrap = div('sm-graph');
+  let svgEl: SVGSVGElement | null = null; // assigned below; captured by the ⌂ button's closure
 
   const bar = div('sm-graph-bar');
   const clipSel = document.createElement('select');
@@ -271,14 +409,21 @@ function buildGraph(doc: { clips: { name: string }[] }, sm: StateMachine): HTMLE
   armBtn.title = 'Connect two states: click the source box, then the target (Esc cancels)';
   bar.appendChild(armBtn);
   if (arming) bar.appendChild(span('sm-hint', 'Esc cancels'));
+
+  const fitBtn = button('⌂', () => { if (svgEl) fitGraph(svgEl, sm); });
+  fitBtn.title = 'Fit view to all states';
+  bar.appendChild(fitBtn);
   wrap.appendChild(bar);
 
   const svg = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
   svg.setAttribute('class', 'sm-svg');
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  svgEl = svg;
   wrap.appendChild(svg);
-  // Draw immediately (fallback width — the panel may not be laid out yet), refine on rAF.
+
+  applyGraphViewRect(svg, getGraphViewRect(sm)); // persisted rect, or a first-show fit
+  wireGraphInteractions(svg, sm);
   drawGraph(svg, sm);
-  requestAnimationFrame(() => drawGraph(svg, sm));
 
   if (!sm.states.some((s) => s.kind === 'animation')) {
     wrap.appendChild(hintBlock('Add an animation state (+ state) and connect it from Entry.'));
@@ -286,19 +431,9 @@ function buildGraph(doc: { clips: { name: string }[] }, sm: StateMachine): HTMLE
   return wrap;
 }
 
+/** Repaint graph CONTENT only — never touches the viewBox (pan/zoom survive redraws
+ * triggered by box drags, arming clicks, or any other state/transition edit). */
 function drawGraph(svg: SVGSVGElement, sm: StateMachine): void {
-  let maxX = 480;
-  let maxY = 260;
-  for (const s of sm.states) {
-    const b = stateBox(s);
-    maxX = Math.max(maxX, b.x + b.w);
-    maxY = Math.max(maxY, b.y + b.h);
-  }
-  const vbW = Math.max(svg.clientWidth || 720, maxX + 40);
-  const vbH = maxY + 40;
-  svg.setAttribute('viewBox', `0 0 ${vbW} ${vbH}`);
-  svg.setAttribute('preserveAspectRatio', 'xMinYMin meet');
-
   const redraw = () => {
     svg.replaceChildren();
     svg.appendChild(arrowDefs());
@@ -306,13 +441,6 @@ function drawGraph(svg: SVGSVGElement, sm: StateMachine): void {
     for (const st of sm.states) drawState(svg, sm, st, redraw);
   };
   redraw();
-
-  // Background pointerdown on empty canvas: cancel arming, else clear selection.
-  svg.addEventListener('pointerdown', (ev) => {
-    if (ev.target !== svg) return;
-    if (arming) { arming = false; armFrom = null; rerender(); return; }
-    if (selStateId || selTransitionId) { selStateId = null; selTransitionId = null; rerender(); }
-  });
 }
 
 function arrowDefs(): SVGElement {
@@ -360,10 +488,12 @@ function drawState(svg: SVGSVGElement, sm: StateMachine, st: SMState, redraw: ()
     g.appendChild(svgText(cx, box.y + box.h / 2 + 13, st.name, 'sm-state-kindlabel'));
   }
 
-  // ✕ delete affordance for removable states (entry/any are mandatory).
-  if (st.kind === 'animation' || st.kind === 'exit') {
+  // ✕ delete affordance for removable states (entry/any/exit are mandatory — Rive
+  // rejects a layer missing any of the three as corrupt).
+  if (st.kind === 'animation') {
     const close = svgText(box.x + box.w - 10, box.y + 14, '✕', 'sm-node-close');
     close.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return; // middle click here must bubble to pan
       ev.stopPropagation();
       ev.preventDefault();
       deleteState(sm, st);
@@ -382,6 +512,7 @@ function glyphFor(kind: string): string {
 function onStatePointerDown(
   ev: PointerEvent, svg: SVGSVGElement, sm: StateMachine, st: SMState, redraw: () => void,
 ): void {
+  if (ev.button !== 0) return; // middle click bubbles up to the svg's pan handler
   ev.stopPropagation();
   ev.preventDefault();
 
@@ -456,6 +587,7 @@ function drawTransition(svg: SVGSVGElement, sm: StateMachine, tr: SMTransition):
   const hit = elNS('path', 'sm-arrow-hit');
   hit.setAttribute('d', d);
   hit.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return; // middle click bubbles up to pan
     ev.stopPropagation();
     selTransitionId = tr.id;
     selStateId = null;
@@ -489,7 +621,9 @@ function edgePoint(
 }
 
 function deleteState(sm: StateMachine, st: SMState): void {
-  if (st.kind === 'entry' || st.kind === 'any') return;
+  // Only animation states are deletable — entry/any/exit are mandatory (Rive rejects a
+  // layer missing any of the three as corrupt).
+  if (st.kind !== 'animation') return;
   checkpoint();
   sm.states = sm.states.filter((s) => s !== st);
   sm.transitions = sm.transitions.filter((t) => t.fromId !== st.id && t.toId !== st.id);
@@ -712,7 +846,7 @@ function buildStateProps(
 ): void {
   const head = div('sm-prop-head');
   head.appendChild(span('sm-prop-title', `${cap(st.kind)} state`));
-  if (st.kind === 'animation' || st.kind === 'exit') {
+  if (st.kind === 'animation') {
     head.appendChild(button('delete', () => deleteState(sm, st)));
   }
   sec.appendChild(head);
@@ -1058,7 +1192,7 @@ export function smHandleDelete(): boolean {
   }
   if (selStateId) {
     const st = sm.states.find((s) => s.id === selStateId);
-    if (st && (st.kind === 'animation' || st.kind === 'exit')) {
+    if (st && st.kind === 'animation') {
       deleteState(sm, st);
       return true;
     }
@@ -1158,7 +1292,8 @@ function svgText(x: number, y: number, content: string, className: string): SVGE
   return t;
 }
 
-function svgPoint(svg: SVGSVGElement, ev: PointerEvent): { x: number; y: number } {
+/** Accepts any event carrying client coordinates (pointer, wheel) — not just PointerEvent. */
+function svgPoint(svg: SVGSVGElement, ev: { clientX: number; clientY: number }): { x: number; y: number } {
   const ctm = svg.getScreenCTM();
   if (!ctm) {
     const r = svg.getBoundingClientRect();

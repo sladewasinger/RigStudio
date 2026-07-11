@@ -18,7 +18,6 @@ import {
   copySelectedKeys, pasteKeysAtPlayhead, deleteSelectedKeys, nudgeSelectedKeys,
   hasKeySelection, clearKeySelection,
 } from './timeline';
-import { exportCompose } from './exportCompose';
 import { exportLottie } from './exportLottie';
 import { exportRiv } from './exportRiv';
 import { smHandleEscape, smHandleDelete } from './smPanel';
@@ -121,26 +120,6 @@ window.addEventListener('beforeunload', () => {
 });
 
 // ---- Exports ----
-
-document.getElementById('btn-export')!.onclick = () => {
-  if (!state.doc) {
-    alert('Import an SVG first.');
-    return;
-  }
-  const pkg =
-    localStorage.getItem('rig-studio-package') ?? 'com.austinwasinger.dosey.ui.components';
-  const packageName = prompt('Kotlin package for the generated file?', pkg);
-  if (!packageName) return;
-  localStorage.setItem('rig-studio-package', packageName);
-
-  const kotlin = exportCompose(state.doc, packageName);
-  const rigName = state.doc.name.replace(/[^A-Za-z0-9]/g, '');
-  download(
-    `${rigName.charAt(0).toUpperCase()}${rigName.slice(1)}Rig.kt`,
-    kotlin,
-    'text/plain',
-  );
-};
 
 document.getElementById('btn-export-lottie')!.onclick = () => {
   if (!state.doc) {
@@ -502,12 +481,11 @@ if (autosaved) {
 }
 notify();
 
-// Console/debug hook: window.__rigStudio.exportCompose(window.__rigStudio.state.doc, "pkg")
+// Console/debug hook: window.__rigStudio.exportLottie(window.__rigStudio.state.doc, clipIndex)
 declare global {
   interface Window {
     __rigStudio: {
       state: typeof state;
-      exportCompose: typeof exportCompose;
       exportLottie: typeof exportLottie;
       exportRiv: typeof exportRiv;
       renderPose: typeof renderPose;
@@ -518,6 +496,6 @@ declare global {
   }
 }
 window.__rigStudio = {
-  state, exportCompose, exportLottie, exportRiv, renderPose, serializeDoc, loadProjectText,
+  state, exportLottie, exportRiv, renderPose, serializeDoc, loadProjectText,
   setEditorMode,
 };

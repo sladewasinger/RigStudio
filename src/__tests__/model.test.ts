@@ -596,7 +596,7 @@ describe('normalizeDoc', () => {
     expect(out.stateMachines).toEqual([]);
   });
 
-  it('re-establishes the entry/any invariant on a machine missing them', () => {
+  it('re-establishes the entry/any/exit invariant on a machine missing them', () => {
     const doc = makeDoc([makePart('p1')]);
     doc.stateMachines = [
       { id: 'sm_1', name: 'm', inputs: [], states: [], transitions: [], listeners: [] },
@@ -605,6 +605,7 @@ describe('normalizeDoc', () => {
     const kinds = out.stateMachines![0].states.map((s) => s.kind);
     expect(kinds).toContain('entry');
     expect(kinds).toContain('any');
+    expect(kinds).toContain('exit');
   });
 
   it('prunes dangling transitions, conditions, listeners, and actions, and clamps durationMs', () => {
@@ -673,14 +674,15 @@ describe('normalizeDoc', () => {
     expect(gone!.clipName).toBe('deleted_clip'); // dangling clipName preserved
   });
 
-  it('newStateMachine mints exactly one entry and one any node and survives normalize', () => {
+  it('newStateMachine mints exactly one entry, one any, and one exit node and survives normalize', () => {
     const sm = newStateMachine('walk');
     expect(sm.states.filter((s) => s.kind === 'entry')).toHaveLength(1);
     expect(sm.states.filter((s) => s.kind === 'any')).toHaveLength(1);
+    expect(sm.states.filter((s) => s.kind === 'exit')).toHaveLength(1);
     const doc = makeDoc([makePart('p1')]);
     doc.stateMachines = [sm];
     const out = normalizeDoc(doc);
-    expect(out.stateMachines![0].states.map((s) => s.kind)).toEqual(['entry', 'any']);
+    expect(out.stateMachines![0].states.map((s) => s.kind)).toEqual(['entry', 'any', 'exit']);
   });
 });
 

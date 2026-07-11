@@ -23,8 +23,7 @@ export const SHORTCUTS: ShortcutEntry[] = [
   // ---- File ----
   { keys: 'Ctrl+S', description: 'Save the project (downloads a .rig.json)', context: 'File' },
   { keys: 'Ctrl+O', description: 'Open an SVG or a saved .rig.json project', context: 'File' },
-  { keys: 'toolbar only', description: 'Load Pip sample', context: 'File' },
-  { keys: 'toolbar only', description: 'Export Compose rig (.kt)', context: 'File' },
+  { keys: 'toolbar only', description: 'Load sample', context: 'File' },
   { keys: 'toolbar only', description: 'Export Lottie (.json)', context: 'File' },
 
   // ---- Edit ----

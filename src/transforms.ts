@@ -1,7 +1,7 @@
 /**
  * SVG transform-list parsing. Used both to seed pivots on import (a group authored as
- * rotate(a, cx, cy) has its joint at (cx, cy)) and to emit equivalent Jetpack Compose
- * transform calls on export.
+ * rotate(a, cx, cy) has its joint at (cx, cy)) and to bake equivalent transforms into
+ * exported geometry.
  */
 
 export type SvgTransform =

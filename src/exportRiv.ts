@@ -1,8 +1,8 @@
 /**
  * RigDoc -> Rive (.riv) binary exporter. Exports the WHOLE document (every clip) as
  * one .riv that PLAYS in the official Rive runtimes (@rive-app/canvas / webgl). It is a
- * playback/distribution format alongside the Compose and Lottie exports; it is NOT
- * meant to reopen in the Rive editor (the editor cannot import .riv).
+ * playback/distribution format alongside the Lottie export; it is NOT meant to reopen
+ * in the Rive editor (the editor cannot import .riv).
  *
  * The scene mapping mirrors exportLottie.ts decisions exactly (they solved the same
  * problems):

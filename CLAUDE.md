@@ -1,9 +1,9 @@
 # Rig Studio
 
-A browser-based 2D rigging and animation editor for SVG characters that exports
-Jetpack Compose rig code. Built originally inside the Dosey Android project
-(`C:\Users\Austin\AndroidStudioProjects\Dosey`, branch `fable`) to animate its mascot
-**Pip** — a pill with arms and legs — and now developed standalone in this repo.
+A browser-based 2D rigging and animation editor for SVG artwork that exports Rive
+`.riv` files and Lottie JSON. A generic tool for any character/app (it began life
+animating an Android app's mascot; that coupling has been fully removed — keep it
+that way: no app-specific code, naming, or export assumptions).
 
 ## What it does
 
@@ -12,10 +12,10 @@ with a **pivot** (joint) and can be **parented** to another part (bone hierarchy
 switch between **Setup mode** (edit the character itself: rest pose, pivots, parenting,
 path nodes — never keyframed) and **Animate mode** (pose parts on a canvas and record
 **keyframes** on a timeline) → organize animations as **clips** (one clip = one "mood")
-→ export a Kotlin file that replays the whole rig with Compose `InfiniteTransition`
-keyframes and `DrawScope` transforms, a Lottie JSON file, or a Rive `.riv` binary
-(all clips as named animations; plays in official Rive runtimes everywhere — by
-design NOT openable in the Rive editor, which cannot import .riv). There is also an AI
+→ define **state machines** (inputs, transitions, listeners) in the `🔀 logic` view
+→ export a Rive `.riv` binary (all clips as named animations plus state machines;
+plays in official Rive runtimes everywhere — by design NOT openable in the Rive
+editor, which cannot import .riv) or a Lottie JSON file. There is also an AI
 assistant panel that sends the rig + active clip (optionally with a rendered snapshot
 of the current pose) to the Claude API and applies choreography from a natural-language
 prompt, or critiques the existing clip.
@@ -29,10 +29,10 @@ npm run build      # tsc --noEmit type-check, then vite build
 npm test           # vitest run — unit tests for the pure modules
 ```
 
-Verify UI changes by loading `public/PIP_MASTER.svg` via the "Load Pip sample" button.
-A debug hook exists on `window.__rigStudio` (`state`, `exportCompose`, `exportLottie`,
+Verify UI changes by loading `public/PIP_MASTER.svg` via the "Load sample" button.
+A debug hook exists on `window.__rigStudio` (`state`, `exportLottie`, `exportRiv`,
 `renderPose`, `serializeDoc`, `loadProjectText`, `setEditorMode`) for driving the app
-from the console.
+from the console; `window.__smPanel` drives the state-machine editor deterministically.
 
 ## Architecture (src/)
 
@@ -46,7 +46,6 @@ from the console.
 | `history.ts` | Snapshot-based undo/redo; call `checkpoint()` BEFORE any doc mutation, one per user gesture |
 | `paths.ts` | Path-data parser/serializer (normalizes to absolute M/L/C/A/Z), de Casteljau cubic split for node insertion, `arcToCubics`/`pathToCubics` (W3C endpoint→center parametrization) so arc segments can be split and exported as geometry |
 | `transforms.ts` | SVG transform-list parser plus a small affine `Mat` toolkit (`multiply`/`invertMat`/`applyMat`/`rotationMat`); `rotationPivotOf` finds a transform list's fixed point by testing the *composed matrix* for a rigid rotation, so it recovers pivots regardless of whether Inkscape wrote `rotate(...)` or an equivalent `matrix(...)` |
-| `exportCompose.ts` | `RigDoc` → Kotlin text (mood enum, keyframe choreography with all 4 easings mapped to Compose easings, rest-pose offsets folded into emitted channels, nested parent-chain `withTransform` calls, `DrawScope` replay of SVG transforms incl. `matrix(...)`) |
 | `exportLottie.ts` | `RigDoc` + one clip → Lottie JSON (v5.7.0, 60fps): a root null layer for whole-figure translate/scale, one shape layer per part with Lottie-native `parent` layer references mirroring the bone hierarchy, geometry flattened through baked SVG transforms with arcs converted to cubics, easings converted to bezier handles |
 | `exportRiv.ts` | `RigDoc` + ALL clips → Rive `.riv` binary (format major 7): varuint/ToC writer, typeKey/propertyKey table derived from rive-runtime `dev/defs` (cited in-file), Backboard→Artboard→Node-per-part-at-pivot (geometry baked to docPoint−pivot, rest scale/skew baked in, rotation in RADIANS), Shape/PointsPath/CubicDetachedVertex geometry, Fill/Stroke/SolidColor (opacity folded into alpha), one LinearAnimation per clip with KeyedObject/KeyedProperty/KeyFrameDouble + CubicEaseInterpolators (interpolators emitted BEFORE animations — animation objects consume no component index). Deterministic bytes; playback-only (the Rive editor cannot import .riv) |
 | `ik.ts` | Analytic IK: `solveTwoBone` (law-of-cosines two-joint solve, bend-direction preserving, reach-clamped) and `solveAim`, both in degrees/root space |
@@ -62,8 +61,8 @@ from the console.
 
 ## Roadmap
 
-Feature roadmap lives in `ROADMAP.md`: v1 through v2.9 are all implemented and
-verified as of 2026-07-10; "Committed next" holds the accepted-but-deferred
+Feature roadmap lives in `ROADMAP.md`: v1 through v2.10 are all implemented and
+verified as of 2026-07-11; "Committed next" holds the accepted-but-deferred
 view.ts split + interaction harness; "v3 — Future" is the out-of-scope / next-up
 list.
 
@@ -83,22 +82,21 @@ list.
 - **Keyframed values are ABSOLUTE; the rest pose only fills unkeyed channels**
   (`model.channelValue`). Editing the rest pose in Setup must never shift keyed
   animation — this was an explicit bug fix, do not regress it. Both exporters mirror
-  the rule: Compose emits the rest value as the `pose.at(key, default)` default, and
-  Lottie emits rest as the static value only when a channel has no keyframes.
+  the rule: Lottie and .riv emit rest as the static value only when a channel has no
+  keyframes.
 - **Rest scale (`rest.sx/sy`) applies innermost — after the baked transform — around
   the pivot mapped into pre-baked local space**, so artwork resizes along its own axes
   and the joint never moves. Like baked transforms, it does NOT propagate to children.
-  Compose emits it as a trailing `scale(sx, sy, pivot = localPivot)`; Lottie bakes it
-  into the flattened geometry (layer-scale axes would be wrong for rotated art).
+  Both exporters bake it into the flattened geometry (layer/node-scale axes would be
+  wrong for rotated art).
 - **Part parenting composes like a bone hierarchy.** A part's rendered transform is its
   ancestors' pose transforms (outermost first) followed by its own; `ancestorChain()` is
   cycle-safe and `setParent()` refuses to create one. Effective pivots for gizmos/bone
   lines account for the whole chain (`view.ts`'s `effectivePivot`/`chainMatOf`).
 - **Bones and groups are partless parts** (`part.kind: 'art'|'bone'|'group'`,
   `paths: []`). They pose/animate/parent like any part; the canvas draws them as
-  interactive glyphs (diamond/square) carrying `data-part-id`. Compose export skips
-  their draw functions but keeps them in child transform chains; Lottie exports them
-  as null layers (ty 3). `ungroupPart()` dissolves a REST-POSED null exactly (angles
+  interactive glyphs (diamond/square) carrying `data-part-id`. Lottie exports them
+  as null layers (ty 3); .riv exports them as plain Nodes in the hierarchy. `ungroupPart()` dissolves a REST-POSED null exactly (angles
   add; translations remap affinely, resampled on union key times when the group is
   rotated) and refuses if the null itself has keyframes.
 - **Group-aware selection**: clicking artwork inside a closed `group` selects the
@@ -117,7 +115,7 @@ list.
   "sanitize" negative sx/sy anywhere.
 - **Keyed easing precedence:** `Keyframe.bezier` (CSS cubic-bezier on the ARRIVING
   segment, set by the curve editor) overrides `Keyframe.easing` everywhere — model
-  sampling, Compose (`CubicBezierEasing`), Lottie (o/i handles). Presets stay the
+  sampling, Lottie (o/i handles), .riv (cubic interpolators). Presets stay the
   fallback; the AI schema only speaks presets.
 - **Skinned parts** (`part.skin`) render via per-frame linear-blend deformation of
   their REST path data (never mutate `path.d` at render time — only the DOM `d`
@@ -135,10 +133,9 @@ list.
   `editNodeStructure` / `ensureNodeTypes`). Untyped (null) paths use collinearity
   detection — do not fabricate flags on import.
 - **Rest skew (`rest.kx/ky`, degrees)** lives with rest scale in the innermost local
-  transform around the local pivot and composes tan-additively during drags. Compose
-  export folds scale+skew into one `svgMatrix` ONLY when skew ≠ 0 — the plain
-  `scale(..., pivot = ...)` emission is load-bearing for skew-free parts (tests pin
-  it).
+  transform around the local pivot and composes tan-additively during drags. Both
+  exporters bake skew into the flattened geometry (transform-level skew exists in
+  neither Lottie layers nor Rive nodes).
 - **Pivots are recovered from the composed transform matrix, not the transform-list
   syntax** — Inkscape freely rewrites `rotate(a,cx,cy)` as an equivalent `matrix(...)`,
   so `rotationPivotOf` in `transforms.ts` tests whether the *composed* matrix is a rigid
@@ -147,19 +144,10 @@ list.
   once the canvas can measure geometry.
 - **Easing lives on the ARRIVING keyframe** in the model (`linear`/`easeIn`/`easeOut`/
   `easeInOut`); both exporters look one keyframe ahead to emit the correct easing on the
-  segment leaving the previous key (Compose `using`, Lottie `o`/`i` bezier handles).
+  segment leaving the previous key (Lottie `o`/`i` bezier handles, .riv interpolators).
 - **`checkpoint()` before every mutation, once per gesture.** Drags defer the checkpoint
   to the first pointer movement (past a small pixel threshold) so plain clicks don't
   pollute history.
-- **Exported Kotlin must compile against the Dosey app** (Compose BOM there). Known
-  traps already handled: float `f` suffixes, `rememberInfiniteTransition` lives in
-  `androidx.compose.animation.core`, scientific notation in path data gets expanded,
-  `withTransform` brace balance. If the exporter changes, re-verify by dropping an
-  export into the Dosey app (`app/src/main/java/com/austinwasinger/dosey/ui/components/`)
-  and running `gradlew :app:compileDebugKotlin`. A previous export lives there as
-  `PipStudioRig.kt` and shows on Dosey's debug Test tab. **This has not been re-run**
-  since the parent-chain/rest-folding/new-easings changes below — do it before treating
-  the exporter as shippable.
 - **Snapping is an editor preference, not document data**: `state.snapEnabled`
   (persisted in localStorage, never serialized into projects), Setup-mode drags only
   (node/pivot/part translate — Animate posing stays free). Pure math lives in
@@ -176,18 +164,20 @@ list.
   binding change in `main.ts` must update it in the same change.
 - **State machines mirror Rive's semantics deliberately** (`model.ts` SM types →
   `exportRiv.ts` maps 1:1): inputs addressed by NAME at runtime, conditions AND,
-  easing crossfades, any-state priority. The app's `newStateMachine` creates only
-  entry+any; **the exporter synthesizes the Exit state Rive requires** (a layer
-  without entry+any+exit is rejected as "corrupt" by `state_machine_layer.cpp`) —
-  keep that synthesis if the model ever changes. Deleting a clip must NOT destroy a
-  graph: normalizeDoc keeps dangling-clipName states (evaluator samples rest), but
-  the .riv export DROPS them (the runtime rejects unresolved animationIds).
+  easing crossfades, any-state priority. **Every machine always has entry+any+EXIT**
+  (a layer missing any of the three is rejected as "corrupt" by Rive's
+  `state_machine_layer.cpp`): `newStateMachine` mints all three, normalizeDoc
+  re-establishes them on load, the editor refuses to delete them, and the exporter
+  keeps a defensive synthesis fallback. Deleting a clip must NOT destroy a graph:
+  normalizeDoc keeps dangling-clipName states (evaluator samples rest), but the
+  .riv export DROPS them (the runtime rejects unresolved animationIds).
 - **SM preview is app-state, never doc-state**: `smPanel.ts` owns the instance and
   the rAF loop; the ONLY view.ts hook is `setPoseSampler(fn|null)` (renderPose
   samples through it when set). Canvas pointer events during preview are consumed
   by capture-phase listeners on `#canvas` — selection/drag never fire.
-- **The canonical Pip artwork** is `Dosey/media/PIP_MASTER.svg`; `public/PIP_MASTER.svg`
-  here is a bundled sample copy — re-sync it when the master changes.
+- **`public/PIP_MASTER.svg` is the bundled sample artwork** ("Load sample" button),
+  used for demos and live verification. It is just an asset — nothing in the code may
+  depend on its specific structure.
 
 ## Testing interactions (do not regress this)
 
@@ -200,6 +190,33 @@ assert numerically (px drift, cos angles) and on the DOM. Full checklist lives i
 ROADMAP.md "Testing conventions".
 
 ## Status
+
+### Twelfth wave (v2.10: generic editor, Compose removal, SM editor pan/zoom) — implemented and verified
+
+Built 2026-07-11; `npm run build` clean; **269 tests / 10 files passing** (−15 from
+deleting the Compose exporter's suite).
+
+- **Compose (.kt) exporter REMOVED** (user decision — Rive covers Android via
+  rive-android; git history keeps the code): `exportCompose.ts` + its 15 tests, the
+  toolbar button, help-overlay row, and `window.__rigStudio.exportCompose` all gone,
+  along with the last Dosey-coupled logic (the hardcoded package-name default).
+- **De-Dosey sweep**: app reframed as a generic editor (README rewritten from the
+  flat-rig era; CLAUDE.md overview + conventions scrubbed of Dosey/Compose
+  intentions); sample button relabeled "Load sample" (asset path and `btn-sample`
+  id unchanged); AI prompts confirmed already-generic; stale Compose references in
+  comments cleaned. `public/PIP_MASTER.svg` stays as the neutral bundled sample.
+- **SM graph pan/zoom**: wheel-zoom-at-cursor (clamped 0.2×–5× of each machine's
+  content-fit width), middle-drag pan, ⌂ fit button, auto-fit on first show;
+  view state is per-machine session state that survives panel rebuilds and logic
+  toggles (byte-identical viewBox), and is NOT doc state (no checkpoints). Box
+  drags/armed transition clicks convert pointer→graph space through the viewBox
+  (verified 0.013 px drift at 2.8× zoom); middle-click is guarded out of every
+  left-click path. Fixed latent bugs found en route: a double-registered
+  background-click listener, and stale view-rect entries leaking on machine delete.
+- **Exit state now guaranteed in the editor** (Rive parity): `newStateMachine`
+  mints entry+any+exit, normalizeDoc re-establishes exit on old files, the editor
+  refuses to delete non-animation states (✕ hidden, Delete-key guarded, props
+  delete hidden). The .riv exporter's synthesis remains as a defensive fallback.
 
 ### Eleventh wave (v2.9: Rive-style state machines) — implemented and verified
 
@@ -609,9 +626,7 @@ reload to confirm autosave.
 ### Implemented but not independently verified
 
 Code is written and type-checks, but either couldn't be exercised live (needs a real
-Anthropic API key, or a real Lottie/Compose consumer) or was only checked structurally.
-The second wave's exporter changes (absolute semantics, rest-scale emission) were
-re-verified structurally but the two external-consumer checks below are still owed.
+Anthropic API key, or a real Lottie consumer) or was only checked structurally.
 
 - **Lottie exporter** (`exportLottie.ts`) — verified structurally in-browser (layer
   count, parent references, anchor points, animated-rotation keyframe times, shape
@@ -622,10 +637,6 @@ re-verified structurally but the two external-consumer checks below are still ow
   optional pose-snapshot (vision) attachment via canvas rasterization, and a new
   "Critique this animation" text-mode call. Reviewed but not run against the live API
   in this session (needs a real key).
-- **Compose export re-verification against Dosey** — per the convention above, the
-  exporter's output shape changed (rest folding, nested parent chains, new easing
-  imports) and has **not** been re-dropped into the Dosey app / compiled with
-  `gradlew :app:compileDebugKotlin`. Do this before shipping.
 - Playback speed selector, ping-pong looping, and the fps readout — implemented and
   present in the DOM, but not exercised through an actual multi-second playback run in
   this session (only inspected statically).
@@ -636,7 +647,7 @@ re-verified structurally but the two external-consumer checks below are still ow
 
 ### Unit tests — done
 
-`npm test`: **11 files, 284 tests, all passing** (2026-07-10). Covered:
+`npm test`: **10 files, 269 tests, all passing** (2026-07-11). Covered:
 `stateMachine` (entry/ops/trigger timing/any-priority/blend math/exit/reset),
 `paths` (parse/serialize/arc→cubic/node insertion, segment delete/join/reverse/close
 incl. explicit-closing-segment edge cases), `snap` (nearest/threshold/axis-lock/
@@ -649,8 +660,7 @@ rotation fixed points from both rotate() and matrix() spellings), `model`
 (channelValue absolute/rest-fallback semantics, sampling/easings, keyframe clipboard,
 parenting/cycles, group/ungroup absorption, structural AI changes, part
 duplication/select-all, `normalizeDoc` back-compat), `importSvg` (jsdom: layer unwrap, pivot seeding incl. transform-center
-y-flip, shape conversion, sodipodi:nodetypes), `exportCompose` (pose.at rest
-defaults, rest-scale emission, skew folding, parent-chain ordering, easing suffixes),
+y-flip, shape conversion, sodipodi:nodetypes),
 `align` (align/distribute math), `ik` (reach/clamp/bend-direction, plus `skin.ts`
 weight math), `graph` (curve-editor bezier sampling). One bug found by the original
 test pass was fixed in `model.ts`: `setKeyframeAt` now applies an explicitly passed

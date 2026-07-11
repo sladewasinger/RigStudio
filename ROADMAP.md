@@ -1,7 +1,7 @@
 # Rig Studio Roadmap
 
 Goal: a full-fledged 2D rigging/bones/animation tool with basic vector editing —
-modeled loosely after Rive, but simple. Everything through **v2.9 is implemented and
+modeled loosely after Rive, but simple. Everything through **v2.10 is implemented and
 verified** (checkboxes track status); **v3 — Future** at the bottom is the honest
 out-of-scope list that new work should be drawn from.
 
@@ -208,6 +208,17 @@ out-of-scope list that new work should be drawn from.
   driven by name/inputs in official Rive runtimes (verified: bool-driven blend with
   exact midpoint, trigger transitions). Android: `RiveAnimationView` +
   `stateMachineName` + `setBooleanState`/`fireState`.
+
+## v2.10 — generic editor & SM editor polish (done)
+
+- [x] **Compose (.kt) exporter removed** — Rive `.riv` (rive-android) replaces it on
+  Android; the editor is now export-target generic (Rive + Lottie).
+- [x] **De-Dosey/de-Pip sweep** — no app-specific code, naming, or intentions left;
+  README rewritten; the bundled sample is just a neutral demo asset.
+- [x] **State-machine graph pan/zoom** — wheel-zoom-at-cursor, middle-drag pan,
+  ⌂ fit, per-machine view memory; correct pointer math at any zoom.
+- [x] **Exit state always exists** — entry/any/exit minted together, re-established
+  on load, undeletable in the editor (matches what Rive runtimes require).
 
 ## Committed next (accepted features, implementation deferred — 2026-07-10)
 

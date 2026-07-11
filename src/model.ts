@@ -222,9 +222,12 @@ export interface RigDoc {
 }
 
 /**
- * A fresh state machine with exactly the mandatory 'entry' and 'any' nodes and no
- * clips wired yet. The one place machines are minted, so the entry/any invariant holds
- * from birth (normalizeDoc re-establishes it on load).
+ * A fresh state machine with exactly the mandatory 'entry', 'any', and 'exit' nodes
+ * (Rive rejects a layer missing any of the three as corrupt) and no clips wired yet.
+ * The one place machines are minted, so the invariant holds from birth (normalizeDoc
+ * re-establishes it on load). Exit gets a seeded position to the right of the default
+ * entry/any/animation layout (smPanel's `ensureLayout` mirrors this for machines that
+ * gain an exit later without a stored position, e.g. old projects via normalizeDoc).
  */
 export function newStateMachine(name: string): StateMachine {
   return {
@@ -234,6 +237,7 @@ export function newStateMachine(name: string): StateMachine {
     states: [
       { id: freshId('state'), name: 'Entry', kind: 'entry' },
       { id: freshId('state'), name: 'Any', kind: 'any' },
+      { id: freshId('state'), name: 'Exit', kind: 'exit', x: 520, y: 44 },
     ],
     transitions: [],
     listeners: [],
@@ -992,7 +996,7 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     }
   }
   // State machines: default to none on old files; per machine re-establish the
-  // entry/any invariant and prune dangling references, but KEEP a state whose
+  // entry/any/exit invariant and prune dangling references, but KEEP a state whose
   // clipName no longer resolves — the evaluator treats it as rest pose, so deleting a
   // clip must not silently destroy a graph.
   doc.stateMachines = Array.isArray(doc.stateMachines) ? doc.stateMachines : [];
@@ -1003,7 +1007,7 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     for (const tr of sm.transitions ?? []) trackId(tr.id);
     for (const ls of sm.listeners ?? []) trackId(ls.id);
   }
-  // Get idCounter past every loaded id before minting any fresh entry/any nodes.
+  // Get idCounter past every loaded id before minting any fresh entry/any/exit nodes.
   bumpIdCounter(maxId);
   const partIds = new Set(doc.parts.map((p) => p.id));
   for (const sm of doc.stateMachines) {
@@ -1016,6 +1020,9 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     }
     if (!sm.states.some((s) => s.kind === 'any')) {
       sm.states.push({ id: freshId('state'), name: 'Any', kind: 'any' });
+    }
+    if (!sm.states.some((s) => s.kind === 'exit')) {
+      sm.states.push({ id: freshId('state'), name: 'Exit', kind: 'exit' });
     }
     const stateIds = new Set(sm.states.map((s) => s.id));
     const inputIds = new Set(sm.inputs.map((i) => i.id));

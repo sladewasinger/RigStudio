@@ -4,7 +4,7 @@
  * Layers: a folder-style tree — parts nest under their parent part (bone hierarchy)
  * and each part folds open to show the SVG objects (paths) inside it. Drag a part onto
  * another to parent it; drop it on the "un-parent" strip to detach. Double-click
- * renames (names become Kotlin identifiers on export).
+ * renames (names carry through into exported files).
  *
  * Inspector: numeric fields for the selection. In Setup mode these edit the REST pose,
  * pivots, and parenting; in Animate mode they write keyframes at the playhead. Plus the
@@ -965,7 +965,7 @@ function buildAiPanel(el: HTMLElement): void {
   box.appendChild(keyInput);
 
   const promptBox = document.createElement('textarea');
-  promptBox.placeholder = 'e.g. "make him wave with the right arm", "bend at the knees then jump"';
+  promptBox.placeholder = 'e.g. "wave with the right arm", "bend at the knees then jump"';
   promptBox.rows = 3;
   box.appendChild(promptBox);
 
