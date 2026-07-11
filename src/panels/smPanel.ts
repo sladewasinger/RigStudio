@@ -105,6 +105,9 @@ export function setLogicVisible(v: boolean): void {
 function buildHeader(machines: StateMachine[], sm: StateMachine | null): HTMLElement {
   const header = div('sm-header');
 
+  // Cluster 1: machine selection + management (dropdown / +machine / rename / delete).
+  const machineCluster = div('sm-cluster');
+
   const sel = document.createElement('select');
   sel.title = 'Active state machine';
   if (!machines.length) {
@@ -128,9 +131,9 @@ function buildHeader(machines: StateMachine[], sm: StateMachine | null): HTMLEle
     armFrom = null;
     rerender();
   };
-  header.appendChild(sel);
+  machineCluster.appendChild(sel);
 
-  header.appendChild(button('+ machine', () => addMachine()));
+  machineCluster.appendChild(button('+ machine', () => addMachine()));
 
   if (sm) {
     const nameIn = document.createElement('input');
@@ -145,9 +148,9 @@ function buildHeader(machines: StateMachine[], sm: StateMachine | null): HTMLEle
       sm.name = v;
       notify();
     };
-    header.appendChild(nameIn);
+    machineCluster.appendChild(nameIn);
 
-    header.appendChild(button('delete machine', () => {
+    machineCluster.appendChild(button('delete machine', () => {
       stopPreview();
       checkpoint();
       const arr = state.doc!.stateMachines!;
@@ -159,7 +162,12 @@ function buildHeader(machines: StateMachine[], sm: StateMachine | null): HTMLEle
       selTransitionId = null;
       notify();
     }));
+  }
+  header.appendChild(machineCluster);
 
+  // Cluster 2: live preview + status readout (pushed to the row's end).
+  if (sm) {
+    const previewCluster = div('sm-cluster sm-cluster-end');
     const active = isPreviewing(sm);
     const pv = button(active ? '■ stop' : '▶ preview', () => {
       if (isPreviewing(sm)) stopPreview();
@@ -169,13 +177,14 @@ function buildHeader(machines: StateMachine[], sm: StateMachine | null): HTMLEle
     pv.className = 'sm-preview-btn';
     if (active) pv.classList.add('active');
     pv.title = 'Run the machine live and drive the canvas pose';
-    header.appendChild(pv);
+    previewCluster.appendChild(pv);
 
     if (active) {
       const status = div('sm-status');
       status.textContent = previewStatusText(sm);
-      header.appendChild(status);
+      previewCluster.appendChild(status);
     }
+    header.appendChild(previewCluster);
   }
 
   return header;
@@ -203,6 +212,9 @@ const ANIM_W = 128;
 const ANIM_H = 52;
 const NODE_W = 76;
 const NODE_H = 44;
+// Graph-space band around a box's RIGHT edge (its connection port) where a pointerdown
+// starts a drag-to-connect instead of a box move. Center drags still move the box.
+const CONNECT_BAND = 10;
 
 function stateBox(st: SMState): { x: number; y: number; w: number; h: number } {
   const w = st.kind === 'animation' ? ANIM_W : NODE_W;
@@ -371,6 +383,9 @@ function buildGraph(doc: { clips: { name: string }[] }, sm: StateMachine): HTMLE
   let svgEl: SVGSVGElement | null = null; // assigned below; captured by the ⌂ button's closure
 
   const bar = div('sm-graph-bar');
+
+  // Cluster: new-state creation — the clip dropdown and [+ state] on one row.
+  const stateCluster = div('sm-cluster');
   const clipSel = document.createElement('select');
   clipSel.className = 'sm-clip-sel';
   clipSel.title = 'Clip for a new animation state';
@@ -393,9 +408,13 @@ function buildGraph(doc: { clips: { name: string }[] }, sm: StateMachine): HTMLE
     notify();
   });
   if (!doc.clips.length) { addState.disabled = true; addState.title = 'Create a clip first'; }
-  bar.appendChild(addState);
-  bar.appendChild(clipSel);
+  stateCluster.appendChild(clipSel);
+  stateCluster.appendChild(addState);
+  bar.appendChild(stateCluster);
 
+  // Cluster: transition creation. Two paths — drag from a state box's EDGE to another
+  // box (the primary, discoverable gesture), or this armed click-click fallback.
+  const transCluster = div('sm-cluster');
   const armBtn = button(
     arming ? (armFrom ? 'pick target…' : 'pick source…') : '+ transition',
     () => {
@@ -406,13 +425,17 @@ function buildGraph(doc: { clips: { name: string }[] }, sm: StateMachine): HTMLE
     },
   );
   if (arming) armBtn.classList.add('active');
-  armBtn.title = 'Connect two states: click the source box, then the target (Esc cancels)';
-  bar.appendChild(armBtn);
-  if (arming) bar.appendChild(span('sm-hint', 'Esc cancels'));
+  armBtn.title = 'Connect two states: drag from a box edge to another box, or click the source then the target (Esc cancels)';
+  transCluster.appendChild(armBtn);
+  if (arming) transCluster.appendChild(span('sm-hint', 'Esc cancels'));
+  bar.appendChild(transCluster);
 
+  // Fit control, pushed to the end of the bar.
+  const fitCluster = div('sm-cluster sm-cluster-end');
   const fitBtn = button('⌂', () => { if (svgEl) fitGraph(svgEl, sm); });
   fitBtn.title = 'Fit view to all states';
-  bar.appendChild(fitBtn);
+  fitCluster.appendChild(fitBtn);
+  bar.appendChild(fitCluster);
   wrap.appendChild(bar);
 
   const svg = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
@@ -488,6 +511,15 @@ function drawState(svg: SVGSVGElement, sm: StateMachine, st: SMState, redraw: ()
     g.appendChild(svgText(cx, box.y + box.h / 2 + 13, st.name, 'sm-state-kindlabel'));
   }
 
+  // Connection port on the right edge — a hover-revealed affordance hinting that you can
+  // drag from here to another box to create a transition. Purely cosmetic (pointer-events
+  // off); the real connect hit region is the right-edge band in onStatePointerDown.
+  const port = elNS('circle', 'sm-port');
+  port.setAttribute('cx', String(box.x + box.w));
+  port.setAttribute('cy', String(box.y + box.h / 2));
+  port.setAttribute('r', '5');
+  g.appendChild(port);
+
   // ✕ delete affordance for removable states (entry/any/exit are mandatory — Rive
   // rejects a layer missing any of the three as corrupt).
   if (st.kind === 'animation') {
@@ -523,6 +555,13 @@ function onStatePointerDown(
   }
 
   const start = svgPoint(svg, ev);
+  // A grab in the right-edge port band starts a drag-to-connect; anywhere else moves.
+  const box = stateBox(st);
+  const nearPort =
+    start.x >= box.x + box.w - CONNECT_BAND && start.x <= box.x + box.w + CONNECT_BAND &&
+    start.y >= box.y - CONNECT_BAND && start.y <= box.y + box.h + CONNECT_BAND;
+  if (nearPort) { startConnectDrag(ev, svg, sm, st, redraw); return; }
+
   const orig = { x: st.x ?? 0, y: st.y ?? 0 };
   let moved = false;
   let pendingCheckpoint = true;
@@ -552,6 +591,59 @@ function onStatePointerDown(
   svg.addEventListener('pointerup', up);
 }
 
+/**
+ * Drag-to-connect: from the source box's port, draw a live preview arrow to the pointer
+ * and, if released over ANOTHER box, create the transition (checkpointed via
+ * createTransition). Released over empty space or back on the source cancels. Runs on the
+ * svg (pointer-captured) so it survives the pointer leaving the source box.
+ */
+function startConnectDrag(
+  ev: PointerEvent, svg: SVGSVGElement, sm: StateMachine, st: SMState, redraw: () => void,
+): void {
+  const box = stateBox(st);
+  const from = { x: box.x + box.w, y: box.y + box.h / 2 }; // the source port
+  try { svg.setPointerCapture(ev.pointerId); } catch { /* synthetic/pen events */ }
+
+  const preview = elNS('path', 'sm-arrow sm-arrow-preview');
+  preview.setAttribute('marker-end', 'url(#sm-arrowhead)');
+  svg.appendChild(preview);
+
+  const highlight = (id: string | null) => {
+    for (const r of Array.from(svg.querySelectorAll<SVGRectElement>('.sm-state'))) {
+      const rid = r.getAttribute('data-state-id');
+      r.classList.toggle('sm-connect-target', !!id && rid === id && id !== st.id);
+    }
+  };
+
+  const move = (e: PointerEvent) => {
+    const p = svgPoint(svg, e);
+    preview.setAttribute('d', `M ${from.x} ${from.y} L ${p.x} ${p.y}`);
+    highlight(stateAtPoint(sm, p));
+  };
+  const up = (e: PointerEvent) => {
+    svg.removeEventListener('pointermove', move);
+    svg.removeEventListener('pointerup', up);
+    preview.remove();
+    const target = stateAtPoint(sm, svgPoint(svg, e));
+    if (target && target !== st.id) {
+      createTransition(sm, st.id, target); // checkpoints + full rerender (clears highlight)
+    } else {
+      redraw(); // no target — repaint to drop the highlight/preview
+    }
+  };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerup', up);
+}
+
+/** The id of the topmost state box under a graph-space point, or null. */
+function stateAtPoint(sm: StateMachine, p: { x: number; y: number }): string | null {
+  for (let i = sm.states.length - 1; i >= 0; i--) {
+    const b = stateBox(sm.states[i]);
+    if (p.x >= b.x && p.x <= b.x + b.w && p.y >= b.y && p.y <= b.y + b.h) return sm.states[i].id;
+  }
+  return null;
+}
+
 function createTransition(sm: StateMachine, fromId: string, toId: string): void {
   arming = false;
   armFrom = null;
@@ -574,10 +666,17 @@ function drawTransition(svg: SVGSVGElement, sm: StateMachine, tr: SMTransition):
   const dx = c2.x - c1.x;
   const dy = c2.y - c1.y;
   const len = Math.hypot(dx, dy) || 1;
-  // Perpendicular bow, sign keyed on id order so A→B and B→A arc to opposite sides.
-  const side = tr.fromId < tr.toId ? 1 : -1;
-  const nx = (-dy / len) * 26 * side;
-  const ny = (dx / len) * 26 * side;
+  // A lone transition is drawn STRAIGHT. When its reverse (toId→fromId) also exists, each is
+  // bowed perpendicular to ITS OWN from→to direction: the reverse arrow's direction is
+  // flipped, so its perpendicular flips too and the pair automatically bows to OPPOSITE sides
+  // (never overlapping). Crucially NO id-order sign is applied — that would re-flip the
+  // reverse arrow and drop both onto the same side. `mid` at the midpoint ⇒ a straight line.
+  const hasReverse = sm.transitions.some(
+    (o) => o !== tr && o.fromId === tr.toId && o.toId === tr.fromId,
+  );
+  const bow = hasReverse ? 24 : 0;
+  const nx = (-dy / len) * bow;
+  const ny = (dx / len) * bow;
   const mid = { x: (c1.x + c2.x) / 2 + nx, y: (c1.y + c2.y) / 2 + ny };
   const p1 = edgePoint(fb, mid);
   const p2 = edgePoint(tb, mid);
@@ -765,6 +864,50 @@ function buildTransitionProps(sec: HTMLElement, sm: StateMachine, tr: SMTransiti
   }));
   sec.appendChild(durRow);
 
+  // Exit time — only for transitions LEAVING an animation state (meaningless from
+  // entry/any/exit, so hidden there). A checkbox for the common "wait for the animation
+  // to finish" (exitFraction 1) plus an advanced 0–100% field for a partial exit point.
+  const fromState = sm.states.find((s) => s.id === tr.fromId);
+  if (fromState?.kind === 'animation') {
+    sec.appendChild(span('sm-subhead', 'Exit time'));
+
+    const waitRow = div('sm-row sm-exit-row');
+    const waitLbl = document.createElement('label');
+    waitLbl.className = 'sm-check';
+    const waitCb = document.createElement('input');
+    waitCb.type = 'checkbox';
+    waitCb.checked = tr.exitFraction != null;
+    waitCb.title = 'Only allow this transition once the from-clip has played to the exit point';
+    waitCb.onchange = () => {
+      checkpoint();
+      tr.exitFraction = waitCb.checked ? 1 : null;
+      notify();
+    };
+    waitLbl.appendChild(waitCb);
+    waitLbl.appendChild(document.createTextNode('wait for animation to finish'));
+    waitRow.appendChild(waitLbl);
+    sec.appendChild(waitRow);
+
+    const pctRow = labeledRow('at %');
+    const pct = document.createElement('input');
+    pct.type = 'number';
+    pct.min = '0';
+    pct.max = '100';
+    pct.step = '1';
+    pct.className = 'sm-num';
+    pct.value = String(Math.round((tr.exitFraction ?? 1) * 100));
+    pct.disabled = tr.exitFraction == null;
+    pct.title = 'Advanced: percent of the from-clip that must play before this transition can fire';
+    pct.onchange = () => {
+      checkpoint();
+      const v = Math.min(100, Math.max(0, Number(pct.value) || 0));
+      tr.exitFraction = v / 100;
+      notify();
+    };
+    pctRow.appendChild(pct);
+    sec.appendChild(pctRow);
+  }
+
   sec.appendChild(span('sm-subhead', 'Conditions (all must pass)'));
   if (!tr.conditions.length) sec.appendChild(hintBlock('Unconditional — fires as soon as it is reached.'));
   tr.conditions.forEach((c, i) => sec.appendChild(conditionRow(sm, tr, c, i)));
@@ -912,6 +1055,7 @@ function listenerRow(
   doc: { parts: { id: string; label: string }[] }, sm: StateMachine, ls: SMListener,
 ): HTMLElement {
   const wrap = div('sm-listener');
+  if (ls.actions.length === 0) wrap.classList.add('sm-listener-warn');
   const top = div('sm-row');
 
   const partSel = document.createElement('select');
@@ -932,6 +1076,7 @@ function listenerRow(
   evSel.onchange = () => { checkpoint(); ls.event = evSel.value as SMListener['event']; notify(); };
   top.appendChild(evSel);
 
+  if (ls.actions.length === 0) top.appendChild(span('sm-warn-badge', '⚠'));
   top.appendChild(iconBtn('✕', 'Remove listener', () => {
     checkpoint();
     sm.listeners = sm.listeners.filter((l) => l !== ls);
@@ -940,6 +1085,14 @@ function listenerRow(
   wrap.appendChild(top);
 
   ls.actions.forEach((a, i) => wrap.appendChild(actionRow(sm, ls, a, i)));
+  if (ls.actions.length === 0) {
+    wrap.appendChild(span(
+      'sm-warn',
+      sm.inputs.length
+        ? '⚠ no actions — this listener does nothing. Add one below.'
+        : '⚠ no actions — add an input first, then an action, or this listener does nothing.',
+    ));
+  }
   const addA = button('+ action', () => {
     if (!sm.inputs.length) return;
     checkpoint();
@@ -1000,7 +1153,11 @@ function addListener(
   const target = partId ?? doc.parts[0]?.id;
   if (!target) return;
   checkpoint();
-  sm.listeners.push({ id: freshId('listener'), targetPartId: target, event: 'down', actions: [] });
+  // Seed ONE action (first input, type-inferred) so a fresh listener actually does
+  // something — an actionless listener is exactly the silent-no-op that broke the user's
+  // saved file. When the machine has no inputs yet, it stays empty and the row warns.
+  const actions: SMListenerAction[] = sm.inputs.length ? [defaultAction(sm.inputs[0])] : [];
+  sm.listeners.push({ id: freshId('listener'), targetPartId: target, event: 'down', actions });
   notify();
 }
 

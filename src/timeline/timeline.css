@@ -155,3 +155,16 @@
    blocks (item 5): explicit elements inserted by render(), not a cascade-order-
    dependent override of style.css's existing box-model rules on those blocks. */
 .sm-panel-host { margin-top: var(--sp-1); }
+
+/* ---- Bug fix: spurious horizontal scrollbar when a key/playhead sits at t = duration ----
+   Keyframe diamonds (position:absolute, left:100%, translate(-50%)) and the playhead + its
+   rotated grab head (left:100%, width 2px, ::before 9px) poke a few px PAST the ruler/strip
+   right edge. That overhang stretched .tl-body's scrollable width — .tl-body has overflow-y:
+   auto, so its overflow-x computes to auto — and raised a horizontal scrollbar (see the
+   user's screenshot). A right GUTTER on the lanes block pulls the ruler/strip right edges
+   inside .tl-body's content box so the half-diamond / grab-head overhang lands in the gutter,
+   never past the scroll container: the last key + playhead stay fully visible and clickable
+   at t = end (no clipping). overflow-x: hidden on the body is the belt-and-suspenders guard —
+   the gutter already keeps everything on-screen, so nothing legitimate is ever clipped. */
+#timeline .tl-body { overflow-x: hidden; }
+#timeline .tl-lanes { box-sizing: border-box; padding-right: 14px; }

@@ -737,6 +737,37 @@ describe('normalizeDoc', () => {
     expect(out.stateMachines![0].states.map((s) => s.kind)).toEqual(['entry', 'any', 'exit']);
   });
 
+  it('clamps a present exitFraction into [0,1], strips it from non-animation fromIds, leaves absent alone', () => {
+    const doc = makeDoc([makePart('p1')]);
+    doc.stateMachines = [
+      {
+        id: 'sm_1', name: 'm', inputs: [],
+        states: [
+          { id: 'st_entry', name: 'Entry', kind: 'entry' },
+          { id: 'st_any', name: 'Any', kind: 'any' },
+          { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle', loop: false },
+          { id: 'st_exit', name: 'Exit', kind: 'exit' },
+        ],
+        transitions: [
+          { id: 't_over', fromId: 'st_a', toId: 'st_exit', durationMs: 0, conditions: [], exitFraction: 1.7 },
+          { id: 't_neg', fromId: 'st_a', toId: 'st_exit', durationMs: 0, conditions: [], exitFraction: -0.4 },
+          // exit time leaving a non-animation state (entry) must be stripped.
+          { id: 't_entry', fromId: 'st_entry', toId: 'st_a', durationMs: 0, conditions: [], exitFraction: 0.5 },
+          // a transition that never set exit time keeps no exitFraction field at all.
+          { id: 't_plain', fromId: 'st_a', toId: 'st_exit', durationMs: 0, conditions: [] },
+        ],
+        listeners: [],
+      },
+    ];
+    const out = normalizeDoc(doc);
+    const trs = out.stateMachines![0].transitions;
+    const byId = (id: string) => trs.find((t) => t.id === id)!;
+    expect(byId('t_over').exitFraction).toBe(1); // clamped down
+    expect(byId('t_neg').exitFraction).toBe(0); // clamped up
+    expect(byId('t_entry').exitFraction).toBeNull(); // stripped (from a non-animation state)
+    expect('exitFraction' in byId('t_plain')).toBe(false); // absent stays absent (no null added)
+  });
+
   it('seeds an absent artboard as disabled, matching the current viewBox (back-compat: pre-P2c docs and fresh SVG imports)', () => {
     const doc = makeDoc([makePart('p1')]);
     delete (doc as { artboard?: unknown }).artboard;

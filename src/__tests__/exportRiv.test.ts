@@ -34,6 +34,7 @@ const PROP = {
   // State machine family.
   SM_NAME: 138, SM_NUMBER_VALUE: 140, SM_BOOL_VALUE: 141, ANIMATION_ID: 149, STATE_TO_ID: 151,
   COND_INPUT_ID: 155, COND_OP: 156, COND_VALUE: 157, TRANS_DURATION: 158, TRANS_FLAGS: 152,
+  TRANS_EXIT_TIME: 160,
   LISTENER_TARGET_ID: 224, LISTENER_TYPE: 225, LISTENER_INPUT_ID: 227,
   LISTENER_BOOL_VALUE: 228, LISTENER_NUMBER_VALUE: 229,
 };
@@ -59,7 +60,7 @@ interface DecodedAnim { name: string; fps: number; duration: number; loop: numbe
 // attaches to the most-recently-seen parent of the required type).
 interface DecodedSMInput { typeKey: number; name: string; value: number | undefined }
 interface DecodedCond { typeKey: number; inputId: number; op: number | undefined; value: number | undefined }
-interface DecodedTransition { typeKey: number; stateToId: number; duration: number; flags: number | undefined; conditions: DecodedCond[] }
+interface DecodedTransition { typeKey: number; stateToId: number; duration: number; flags: number | undefined; exitTime: number | undefined; conditions: DecodedCond[] }
 interface DecodedState { typeKey: number; animationId: number | undefined; transitions: DecodedTransition[] }
 interface DecodedAction { typeKey: number; inputId: number; value: number | undefined }
 interface DecodedListener { targetId: number; listenerType: number; actions: DecodedAction[] }
@@ -205,6 +206,7 @@ function decodeRiv(bytes: Uint8Array): Decoded {
         stateToId: Number(props[PROP.STATE_TO_ID] ?? -1),
         duration: Number(props[PROP.TRANS_DURATION] ?? 0),
         flags: props[PROP.TRANS_FLAGS] === undefined ? undefined : Number(props[PROP.TRANS_FLAGS]),
+        exitTime: props[PROP.TRANS_EXIT_TIME] === undefined ? undefined : Number(props[PROP.TRANS_EXIT_TIME]),
         conditions: [],
       };
       curState!.transitions.push(curTransition);
@@ -927,5 +929,68 @@ describe('exportRiv state machines: edge cases', () => {
     base.stateMachines![0].listeners[0].targetPartId = 'p_missing';
     const d = decodeRiv(exportRiv(base));
     expect(d.stateMachines[0].listeners.length).toBe(0);
+  });
+});
+
+// ---- Exit time ----
+//
+// exitFraction (0..1 of the FROM clip) maps to Rive's percentage exit time: flags =
+// EnableExitTime(4) | ExitTimeIsPercentage(8) = 12, exitTime = round(fraction*100).
+// Pinned from rive-runtime dev/defs animation/state_transition.json (exitTime = key 160,
+// flags = key 152) + include/rive/animation/state_transition_flags.hpp (bit values).
+
+describe('exportRiv exit time', () => {
+  /** smDoc() but with an exitFraction on the A→B transition (which leaves animation state A). */
+  function exitDoc(frac: number | null): RigDoc {
+    const base = smDoc();
+    base.stateMachines![0].transitions.find((t) => t.id === 't2')!.exitFraction = frac;
+    return base;
+  }
+
+  it('emits flags 12 (EnableExitTime|ExitTimeIsPercentage) and a percentage exitTime', () => {
+    const d = decodeRiv(exportRiv(exitDoc(1)));
+    const aToB = d.stateMachines[0].states[2].transitions[0]; // A's outgoing transition
+    expect(aToB.flags).toBe(4 | 8); // 12
+    expect(aToB.exitTime).toBe(100); // fraction 1.0 → 100%
+    expect(aToB.duration).toBe(400); // the blend/mix ms is unaffected
+  });
+
+  it('rounds a partial exit fraction to a percentage', () => {
+    const d = decodeRiv(exportRiv(exitDoc(0.5)));
+    const aToB = d.stateMachines[0].states[2].transitions[0];
+    expect(aToB.flags).toBe(12);
+    expect(aToB.exitTime).toBe(50);
+  });
+
+  it('emits neither key without an exitFraction, and stays byte-identical to the pre-exit-time doc', () => {
+    const d = decodeRiv(exportRiv(smDoc()));
+    for (const o of d.objects) {
+      if (o.typeKey === TYPE.STATE_TRANSITION) {
+        expect(o.props[PROP.TRANS_FLAGS]).toBeUndefined();
+        expect(o.props[PROP.TRANS_EXIT_TIME]).toBeUndefined();
+      }
+    }
+    // An explicit null exitFraction emits nothing, so bytes match a doc that never set it.
+    expect(Array.from(exportRiv(exitDoc(null)))).toEqual(Array.from(exportRiv(smDoc())));
+  });
+
+  it('ignores an exitFraction on a non-animation from-state (entry/any never emit exit time)', () => {
+    const base = smDoc();
+    // Force exit time onto the entry→A transition; the exporter must skip it.
+    base.stateMachines![0].transitions.find((t) => t.id === 't1')!.exitFraction = 1;
+    const d = decodeRiv(exportRiv(base));
+    const entryTr = d.stateMachines[0].states[0].transitions[0];
+    expect(entryTr.flags).toBeUndefined();
+    expect(entryTr.exitTime).toBeUndefined();
+  });
+
+  it('is deterministic with exit time set', () => {
+    expect(Array.from(exportRiv(exitDoc(1)))).toEqual(Array.from(exportRiv(exitDoc(1))));
+  });
+
+  it('registers exitTime/flags in the ToC as uint backing types', () => {
+    const d = decodeRiv(exportRiv(exitDoc(1)));
+    expect(d.tocTypes.get(PROP.TRANS_FLAGS)).toBe(0); // uint
+    expect(d.tocTypes.get(PROP.TRANS_EXIT_TIME)).toBe(0); // uint
   });
 });

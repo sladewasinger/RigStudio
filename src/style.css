@@ -870,3 +870,50 @@ g.dimmed { opacity: 0.22; pointer-events: none; transition: opacity 0.12s ease; 
 .select-gizmo .sg-move .sg-hit { fill: transparent; stroke: none; cursor: move; }
 .select-gizmo .sg-rotate:hover .sg-ring { opacity: 1; stroke-width: 2; }
 .select-gizmo .sg-move:hover .sg-cross { opacity: 1; stroke-width: 2.3; }
+
+/* ============================================================================
+   State-machine editor: exit-time + drag-connect + listener-guard additions
+   (src/panels/smPanel.ts). Appended so the base .sm-* block above stays intact.
+   ============================================================================ */
+
+/* Header/graph-bar clusters — same grammar as the timeline's .tl-cluster: grouped
+   controls with a thin divider, and one cluster pushed to the row's end. */
+.sm-header, .sm-graph-bar { flex-wrap: wrap; }
+.sm-cluster {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding-right: var(--sp-2);
+  margin-right: var(--sp-1);
+  border-right: 1px solid var(--border);
+}
+.sm-cluster:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+.sm-cluster-end { margin-left: auto; border-right: none; padding-right: 0; margin-right: 0; }
+
+/* Connection port: a hover-revealed handle on a state box's right edge hinting the
+   drag-to-connect gesture. Cosmetic only (the hit region is a band in the pointer
+   handler), so it never eats pointer events. */
+.sm-port {
+  fill: var(--accent-2);
+  stroke: var(--panel-2);
+  stroke-width: 1.5;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.sm-node:hover .sm-port { opacity: 0.9; }
+
+/* Live drag-to-connect preview arrow + the target box it would connect to. */
+.sm-arrow-preview { stroke: var(--accent-2); stroke-width: 2; stroke-dasharray: 5 4; pointer-events: none; }
+.sm-state.sm-connect-target { stroke: var(--accent-2); stroke-width: 3; }
+
+/* Exit-time controls in the transition Properties panel. */
+.sm-check { display: flex; align-items: center; gap: var(--sp-1); color: var(--text); font-size: 12px; cursor: pointer; }
+.sm-check input { flex: 0 0 auto; }
+.sm-exit-row { flex-wrap: wrap; }
+
+/* Listener guard: a listener with zero actions is a silent no-op (how the user's file
+   broke). Outline the whole card, flag the row, and spell out the fix. */
+.sm-listener.sm-listener-warn { border-color: #e0a54f; box-shadow: inset 0 0 0 1px rgba(224, 165, 79, 0.35); }
+.sm-warn-badge { color: #e0a54f; font-size: 13px; flex: 0 0 auto; }
+.sm-warn { display: block; color: #e0a54f; font-size: 11px; padding: 2px 2px 0; }

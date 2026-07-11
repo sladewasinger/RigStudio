@@ -136,7 +136,10 @@
  *   condInputId      = 155 [U]    | transition_input_condition.json | index into machine inputs
  *   opValue          = 156 [U]    | transition_value_condition.json | TransitionConditionOp enum
  *   condValue        = 157 [D]    | transition_number_condition.json| number RHS
- *   duration         = 158 [U]    | state_transition.json           | MS (flags omits bit 2)
+ *   duration         = 158 [U]    | state_transition.json           | mix MS (flags omits bit 2)
+ *   flags            = 152 [U]    | state_transition.json           | StateTransitionFlags bits
+ *   exitTime         = 160 [U]    | state_transition.json           | exit-time (ms, or % if the
+ *                                 |                                 | ExitTimeIsPercentage flag set)
  *   targetId         = 224 [U]    | state_machine_listener.json      | artboard component index
  *   listenerTypeValue= 225 [U]    | state_machine_listener_single.json| ListenerType enum
  *   listenerInputId  = 227 [U]    | listener_input_change.json      | index into machine inputs
@@ -146,8 +149,17 @@
  *   TransitionConditionOp (transition_condition_op.hpp): equal 0, notEqual 1,
  *     lessThanOrEqual 2, greaterThanOrEqual 3, lessThan 4, greaterThan 5.
  *   ListenerType (listener_type.hpp): enter 0, exit 1, down 2, up 3.
- *   StateTransitionFlags (state_transition_flags.hpp): DurationIsPercentage = 2 (we
- *     leave it clear => ms); EnableExitTime = 4 (clear => immediate).
+ *   StateTransitionFlags (include/rive/animation/state_transition_flags.hpp, verified
+ *     against master): None 0, Disabled 1, DurationIsPercentage 2, EnableExitTime 4,
+ *     ExitTimeIsPercentage 8, PauseOnExit 16, EnableEarlyExit 32. The blend `duration`
+ *     stays MS (DurationIsPercentage clear). EXIT TIME: exitFraction (0..1 of the FROM
+ *     clip) maps to exitTime as a PERCENTAGE — flags = EnableExitTime|ExitTimeIsPercentage
+ *     (4|8 = 12) and exitTime = round(fraction*100) — so it is clip-duration-independent
+ *     and 1.0 == 100% == "wait for the animation to finish". EnableEarlyExit is left clear
+ *     so conditions are only honored at/after the exit time (matching our evaluator, whose
+ *     conditions AND with the exit-time gate). flags/exitTime are emitted ONLY when a
+ *     transition leaving an ANIMATION state carries an exitFraction; every other transition
+ *     omits both keys, so a doc without exit times exports byte-identically to before.
  */
 
 import {
@@ -204,7 +216,7 @@ const T_ENTRY_STATE = 63; // entry_state.json
 const T_ANY_STATE = 62; // any_state.json
 const T_EXIT_STATE = 64; // exit_state.json
 const T_ANIMATION_STATE = 61; // animation_state.json (animationId 149)
-const T_STATE_TRANSITION = 65; // state_transition.json (stateToId 151, duration 158, flags 152)
+const T_STATE_TRANSITION = 65; // state_transition.json (stateToId 151, duration 158, flags 152, exitTime 160)
 const T_TRANS_TRIGGER_COND = 68; // transition_trigger_condition.json (inputId 155)
 const T_TRANS_NUMBER_COND = 70; // transition_number_condition.json (inputId 155, opValue 156, value 157)
 const T_TRANS_BOOL_COND = 71; // transition_bool_condition.json (inputId 155, opValue 156)
@@ -256,8 +268,15 @@ const P_STATE_TO_ID = 151; // [U] StateTransition.stateToId (index into the laye
 const P_COND_INPUT_ID = 155; // [U] TransitionInputCondition.inputId (index into machine inputs)
 const P_COND_OP = 156; // [U] TransitionValueCondition.opValue (TransitionConditionOp enum)
 const P_COND_VALUE = 157; // [D] TransitionNumberCondition.value
-const P_TRANS_DURATION = 158; // [U] StateTransition.duration (ms; flags default 0 => ms, not percentage)
+const P_TRANS_DURATION = 158; // [U] StateTransition.duration (blend/mix ms; flags default 0 => ms)
+const P_TRANS_FLAGS = 152; // [U] StateTransition.flags (StateTransitionFlags bits)
+const P_TRANS_EXIT_TIME = 160; // [U] StateTransition.exitTime (ms, or % when ExitTimeIsPercentage set)
 const P_LISTENER_TARGET_ID = 224; // [U] StateMachineListener.targetId (artboard component index)
+
+// StateTransitionFlags bits (state_transition_flags.hpp). We set EnableExitTime|
+// ExitTimeIsPercentage for an exit-time transition; everything else stays clear.
+const F_ENABLE_EXIT_TIME = 4;
+const F_EXIT_TIME_IS_PERCENTAGE = 8;
 const P_LISTENER_TYPE = 225; // [U] StateMachineListenerSingle.listenerTypeValue (ListenerType enum)
 const P_LISTENER_INPUT_ID = 227; // [U] ListenerInputChange.inputId (index into machine inputs)
 const P_LISTENER_BOOL_VALUE = 228; // [U] ListenerBoolChange.value
@@ -312,6 +331,8 @@ const FIELD_TYPE: Record<number, number> = {
   [P_COND_OP]: F_UINT,
   [P_COND_VALUE]: F_DOUBLE,
   [P_TRANS_DURATION]: F_UINT,
+  [P_TRANS_FLAGS]: F_UINT,
+  [P_TRANS_EXIT_TIME]: F_UINT,
   [P_LISTENER_TARGET_ID]: F_UINT,
   [P_LISTENER_TYPE]: F_UINT,
   [P_LISTENER_INPUT_ID]: F_UINT,
@@ -713,8 +734,10 @@ export function exportRiv(doc: RigDoc): Uint8Array {
  *  - StateTransition.stateToId = index into the layer's emitted states.
  *  - Condition inputId / listener-action inputId = index into the machine's inputs.
  *  - StateTransition.duration is milliseconds because flags omits DurationIsPercentage
- *    (bit value 2, state_transition_flags.hpp); flags default 0 also leaves exit-time
- *    disabled so a satisfied transition fires immediately.
+ *    (bit value 2, state_transition_flags.hpp). With NO exitFraction, flags stays absent
+ *    (default 0) so the transition fires as soon as conditions pass. WITH an exitFraction
+ *    on an animation-state transition, flags = EnableExitTime|ExitTimeIsPercentage (12) and
+ *    exitTime (key 160) = round(fraction*100): a percentage exit time, clip-duration-free.
  *  - Bool conditions: Rive's TransitionBoolCondition::evaluate passes when
  *    (value && op==equal) || (!value && op==notEqual), so opValue ENCODES the expected
  *    boolean (equal=expect true, notEqual=expect false) rather than a comparison; the app
@@ -817,7 +840,17 @@ function emitStateMachines(scene: Scene, doc: RigDoc, partIndex: Map<string, num
         if (to === undefined) continue; // target state was dropped
         scene.begin(T_STATE_TRANSITION, false);
         scene.propUint(P_STATE_TO_ID, to);
-        // flags omitted (=> 0 => duration in ms, exit-time disabled).
+        // Exit time: only for a transition leaving an ANIMATION state (Rive ignores it on
+        // entry/any/exit; normalizeDoc already strips it there). Emitted as a PERCENTAGE
+        // (flags EnableExitTime|ExitTimeIsPercentage) so it is independent of the clip's
+        // frame duration — exitFraction 1.0 => exitTime 100 => "wait for the animation to
+        // finish". Absent exitFraction emits neither key, keeping non-exit docs byte-stable.
+        if (st.kind === 'animation' && tr.exitFraction !== null && tr.exitFraction !== undefined) {
+          const frac = Math.min(1, Math.max(0, tr.exitFraction));
+          scene.propUint(P_TRANS_FLAGS, F_ENABLE_EXIT_TIME | F_EXIT_TIME_IS_PERCENTAGE);
+          scene.propUint(P_TRANS_EXIT_TIME, Math.round(frac * 100));
+        }
+        // blend/mix duration (omitted when 0 => instant; DurationIsPercentage stays clear).
         if (tr.durationMs > 0) scene.propUint(P_TRANS_DURATION, Math.round(tr.durationMs));
         scene.end();
 

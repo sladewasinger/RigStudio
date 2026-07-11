@@ -421,6 +421,114 @@ describe('looping vs clamping states', () => {
   });
 });
 
+// ---- Exit time (SMTransition.exitFraction) ----
+//
+// S plays 'ramp' (dur 1000). A transition S→T is gated by exitFraction (0..1 of S's clip).
+// advance() evaluates BEFORE integrating, so a gate crossed by an advance fires on the NEXT
+// advance whose starting clock is past the threshold.
+
+describe('exit time', () => {
+  const ramp = () =>
+    makeClip({ name: 'ramp', duration: 1000, tracks: [makeTrack('p1', 'rotate', [[0, 0, 'linear'], [1000, 100, 'linear']])] });
+
+  function build(opts: {
+    loop: boolean;
+    exitFraction: number | null;
+    inputs?: SMInput[];
+    cond?: SMCondition[];
+    fromAny?: boolean;
+  }) {
+    const gated: SMTransition = {
+      id: 'sg', fromId: opts.fromAny ? 'any' : 'S', toId: 'T',
+      durationMs: 0, conditions: opts.cond ?? [], exitFraction: opts.exitFraction,
+    };
+    const sm = machine({
+      inputs: opts.inputs ?? [],
+      states: [entry(), anyState(), anim('S', 'ramp', opts.loop), anim('T', 't')],
+      transitions: [tr('te', 'entry', 'S'), gated],
+    });
+    return createSMInstance(docWith(sm, [ramp(), constClip('t', 200)]), sm);
+  }
+
+  it('a clamped (non-looping) state waits until localTime reaches fraction*duration', () => {
+    const inst = build({ loop: false, exitFraction: 0.5 }); // threshold 500ms
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(400); // eval t0=0 <500 → no; clock → 400
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(200); // eval t0=400 <500 → no; clock → 600
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(0); // eval t0=600 ≥500 → fires S→T
+    expect(inst.status().stateId).toBe('T');
+  });
+
+  it('fraction=1 on a non-looping state means "wait for the animation to finish"', () => {
+    const inst = build({ loop: false, exitFraction: 1 }); // threshold 1000ms
+    inst.advance(1000); // eval t0=0 → no; clock → 1000
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(1); // eval t0=1000 ≥1000 → fires
+    expect(inst.status().stateId).toBe('T');
+  });
+
+  it('a looping state re-arms exit time each iteration (phase within the current loop)', () => {
+    // threshold 500; gate also needs go==true so the FIRST eligible window is skipped.
+    const inst = build({
+      loop: true, exitFraction: 0.5,
+      inputs: [boolIn('go', false)], cond: [{ inputId: 'in_go', op: '==', value: true }],
+    });
+    inst.advance(600); // eval phase(0)<500 → no; clock → 600
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(500); // eval phase(600)≥500 but go=false → no; clock → 1100
+    expect(inst.status().stateId).toBe('S');
+    inst.setInput('go', true);
+    inst.advance(0); // eval phase(1100→100)<500 → exit time RE-ARMED, not reached → stay
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(400); // eval phase(100)<500 → no; clock → 1500
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(0); // eval phase(1500→500)≥500 AND go → fires
+    expect(inst.status().stateId).toBe('T');
+  });
+
+  it('fraction>=1 on a LOOPING state fires after the first completion (total elapsed), not phase', () => {
+    // Per-iteration phase never reaches the full duration, so without the special case a
+    // looping state could never exit. Fires at total elapsed ≥ duration instead.
+    const inst = build({ loop: true, exitFraction: 1 });
+    inst.advance(999); // eval t0=0 → no; clock → 999
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(1); // eval t0=999 <1000 → no; clock → 1000 (phase 0)
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(0); // eval t0=1000 ≥1000 (special case) → fires despite phase 0
+    expect(inst.status().stateId).toBe('T');
+  });
+
+  it('ANDs exit time with the transition conditions', () => {
+    const inst = build({
+      loop: false, exitFraction: 1,
+      inputs: [boolIn('go', false)], cond: [{ inputId: 'in_go', op: '==', value: true }],
+    });
+    inst.setInput('go', true);
+    inst.advance(500); // cond true but t0=0<1000 → no; clock → 500
+    expect(inst.status().stateId).toBe('S');
+    inst.setInput('go', false);
+    inst.advance(600); // t0=500<1000 (and cond false) → no; clock → 1100
+    expect(inst.status().stateId).toBe('S');
+    inst.advance(0); // t0=1100≥1000 but cond false → no
+    expect(inst.status().stateId).toBe('S');
+    inst.setInput('go', true);
+    inst.advance(0); // exit time reached AND cond true → fires
+    expect(inst.status().stateId).toBe('T');
+  });
+
+  it('ignores exitFraction on an any-state transition (the gate is current-state only)', () => {
+    const inst = build({
+      loop: false, exitFraction: 1, fromAny: true,
+      inputs: [boolIn('go', false)], cond: [{ inputId: 'in_go', op: '==', value: true }],
+    });
+    inst.setInput('go', true);
+    inst.advance(0); // any→T fires immediately; exit time is NOT applied to any transitions
+    expect(inst.status().stateId).toBe('T');
+  });
+});
+
 // ---- Dangling clip ----
 
 describe('dangling clipName', () => {

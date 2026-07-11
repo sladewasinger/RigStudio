@@ -23,6 +23,22 @@
  *    they are cleared whether or not they fired anything.
  *  - Entering 'exit' sets done and FREEZES the pre-exit pose (advance becomes a no-op).
  *  - Malformed conditions evaluate false; the evaluator never throws.
+ *  - EXIT TIME (SMTransition.exitFraction, 0..1 of the FROM clip's duration): a transition
+ *    leaving an ANIMATION state with exitFraction set is eligible only once the state's
+ *    clip clock has reached fraction*duration; conditions still AND on top. It gates only
+ *    CURRENT-state transitions — any/entry/exit transitions ignore it (meaningless there,
+ *    and normalizeDoc strips it from non-animation fromIds). The clock rule differs by mode:
+ *      · non-looping (clamped) state: eligible once localTime >= fraction*duration, and it
+ *        STAYS eligible afterward (the clock clamps at the clip end);
+ *      · looping state: eligible when the position WITHIN THE CURRENT ITERATION
+ *        ((t mod d)) >= fraction*duration — so it re-arms each loop;
+ *      · fraction >= 1 on a LOOPING state is special-cased to "after the first completion"
+ *        (total elapsed >= duration), because (t mod d) >= d is never true, so the naive
+ *        per-iteration test would never fire. (For a non-looping state fraction==1 is just
+ *        localTime >= duration — "wait for the animation to finish".)
+ *    Evaluation runs BEFORE time integration, so the gate reads the pre-advance clock; the
+ *    transition therefore fires on the first advance whose starting clock has crossed the
+ *    threshold (at most one frame late, invisible since the clip has clamped/looped there).
  * ---------------------------------------------------------------------------
  */
 
@@ -33,6 +49,7 @@ import {
   RigDoc,
   SMCondition,
   SMState,
+  SMTransition,
   StateMachine,
   sampleKeyList,
 } from './model';
@@ -219,11 +236,37 @@ class Instance implements SMInstance {
     if (curId === SM_REST_STATE_ID) return; // rest has no outgoing transitions of its own
     for (const t of this.sm.transitions) {
       if (t.fromId !== curId) continue;
+      if (!this.exitTimeReached(t)) continue; // exit-time gate (current-state only)
       if (this.conditionsPass(t.conditions)) {
         this.enter(t.toId, t.durationMs, true);
         return;
       }
     }
+  }
+
+  /**
+   * Whether a current-state transition's exit-time gate is satisfied. A transition with no
+   * exitFraction (or leaving a non-animation / dangling / zero-length state) is never
+   * gated. See the header for the looping vs clamped rule and the fraction>=1 loop special
+   * case. Reads this.current's PRE-integration clock (evaluation runs before integrate).
+   */
+  private exitTimeReached(t: SMTransition): boolean {
+    if (t.exitFraction === null || t.exitFraction === undefined) return true;
+    const st = this.statesById.get(this.current.stateId);
+    if (!st || st.kind !== 'animation' || !st.clipName) return true;
+    const clip = this.doc.clips.find((c) => c.name === st.clipName);
+    if (!clip || clip.duration <= 0) return true; // dangling/zero-length → do not block
+    const frac = clamp01(t.exitFraction);
+    const threshold = frac * clip.duration;
+    const t0 = this.current.timeMs;
+    const looping = st.loop !== false;
+    if (looping) {
+      // fraction>=1 can never be met by (t mod d)>=d, so mean "after the first completion".
+      if (frac >= 1) return t0 >= clip.duration;
+      const phase = ((t0 % clip.duration) + clip.duration) % clip.duration;
+      return phase >= threshold;
+    }
+    return t0 >= threshold; // non-looping clamps, so it stays eligible past the end
   }
 
   /**

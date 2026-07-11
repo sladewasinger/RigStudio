@@ -204,6 +204,15 @@ export interface SMTransition {
   durationMs: number;
   /** ANDed together; an empty list is an unconditional transition. */
   conditions: SMCondition[];
+  /**
+   * Exit time: a fraction 0..1 of the FROM clip's duration that must play before this
+   * transition becomes eligible (conditions still AND on top). Rive parity — the editor
+   * presents 1.0 as "wait for animation to finish". Only meaningful when the FROM state
+   * is an ANIMATION state; normalizeDoc clamps it to [0,1] and strips it (→ null) from
+   * transitions leaving entry/any/exit. null/absent = no exit-time gate (fires as soon as
+   * conditions pass, today's behavior).
+   */
+  exitFraction?: number | null;
 }
 
 export interface SMListenerAction {
@@ -1202,6 +1211,7 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
       sm.states.push({ id: freshId('state'), name: 'Exit', kind: 'exit' });
     }
     const stateIds = new Set(sm.states.map((s) => s.id));
+    const stateKind = new Map(sm.states.map((s) => [s.id, s.kind]));
     const inputIds = new Set(sm.inputs.map((i) => i.id));
     sm.transitions = sm.transitions.filter((t) => stateIds.has(t.fromId) && stateIds.has(t.toId));
     for (const t of sm.transitions) {
@@ -1209,6 +1219,16 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
       t.conditions = Array.isArray(t.conditions)
         ? t.conditions.filter((c) => inputIds.has(c.inputId))
         : [];
+      // Exit time is only meaningful leaving an ANIMATION state. Clamp a present value
+      // into [0,1]; strip it (→ null) from non-animation fromIds or a non-finite value.
+      // Absent stays absent (no serialization change for docs that never set it).
+      if (t.exitFraction !== null && t.exitFraction !== undefined) {
+        if (stateKind.get(t.fromId) !== 'animation' || !Number.isFinite(t.exitFraction)) {
+          t.exitFraction = null;
+        } else {
+          t.exitFraction = Math.min(1, Math.max(0, t.exitFraction));
+        }
+      }
     }
     sm.listeners = sm.listeners.filter((l) => partIds.has(l.targetPartId));
     for (const l of sm.listeners) {

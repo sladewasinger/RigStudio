@@ -191,7 +191,11 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   binding change in `main.ts` must update it in the same change.
 - **State machines mirror Rive's semantics deliberately** (`model.ts` SM types →
   `exportRiv.ts` maps 1:1): inputs addressed by NAME at runtime, conditions AND,
-  easing crossfades, any-state priority. **Every machine always has entry+any+EXIT**
+  easing crossfades, any-state priority, and **exit time**
+  (`SMTransition.exitFraction`, 0..1 of the FROM clip — gates current-state
+  transitions only; looping states re-arm each iteration, fraction ≥ 1 on a loop
+  means first completion; exports as percentage exit time with
+  EnableExitTime|ExitTimeIsPercentage flags). **Every machine always has entry+any+EXIT**
   (a layer missing any of the three is rejected as "corrupt" by Rive's
   `state_machine_layer.cpp`): `newStateMachine` mints all three, normalizeDoc
   re-establishes them on load, the editor refuses to delete them, and the exporter
