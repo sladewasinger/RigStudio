@@ -230,6 +230,65 @@ out-of-scope list that new work should be drawn from.
   change (all gates green after every mechanical step; export surface
   diff-identical; live manual pass at the end).
 
+## v2.12 — UX overhaul program (planned 2026-07-11, in flight)
+
+Decisions locked with Austin: Setup mode renames to **Edit** (UI/docs only; internal
+enum stays `setup`); bones **auto-bind on placement**; AI pose snapshot sends the
+**current playhead pose** with clear labeling; the AI structural-edit schema must
+work with the reworked bone system.
+
+Implementation phases (P1 first — it moves files — then maximum parallelism):
+
+- [ ] **P1. Architecture docs + feature folders** — CLAUDE.md gains a code-
+  architecture section (self-documenting code, ~200-line file guideline — a smell
+  threshold, not a hard limit; feature-grouped folders). src/ reorganizes into
+  feature folders (core model/history, geometry, io/export, view/, timeline/,
+  panels split into layers/inspector/ai modules behind a facade like view's, ai,
+  ui). `npm run pages` (Austin's new gh-pages script) must keep working.
+- [ ] **P2a. Dialog system + context menus + inline rename** — in-app modal dialogs
+  replace every alert/prompt/confirm (save, exports, animation rename/add);
+  double-click a layer renames INLINE (input-in-place); right-click context menus
+  on layer rows (rename/duplicate/delete/group/ungroup/z-order/bind) and on canvas
+  objects (mode-appropriate ops). "Setup" → "Edit" UI rename lands here.
+- [ ] **P2b. Node-editing polish + drag bug fixes** — node type glyphs scale with
+  zoom (currently vanish when zoomed in); selected nodes get an outline + size
+  bump; zero-length bezier handles hidden; segment-bend through a smooth/symmetric
+  node preserves the node type (mirrors the opposite handle instead of silently
+  degrading to corner); glyph shapes stay Inkscape-parity (diamond corner / square
+  smooth / circle symmetric). Fix the gray-triangle visual artifact under the drag
+  delta label. Fix rotation keys recording the "wrong direction" (angle wrapping).
+- [ ] **P2c. Artboard (canvas size)** — optional, toggleable, resizable canvas rect
+  on the doc (defaults from the imported SVG viewBox): rendered as a page
+  boundary, editable in the inspector, used as the export reference frame.
+- [ ] **P3. Selection & navigation semantics (Inkscape parity)** — double-click
+  DIVES into a group (enters context without selecting); further double-clicks
+  dive deeper; single clicks inside the context select individual children
+  (bounding box on the active item only); blank-click/Escape steps out. Layers
+  panel: Shift+click = range select, Ctrl+click = toggle; canvas Shift/Ctrl+click
+  = add to selection. Unified V "gizmo" tool in BOTH modes: first click =
+  translate/scale handles (body drag translates), second click = rotate/skew
+  handles (body drag ROTATES around the pivot — Edit writes rest, Animate keys);
+  gizmo shows a rotate circle + move cross with hover highlighting.
+- [ ] **P4. Bones 2.0 (the big one)** — femur icon; child bones spawn at the
+  parent's tip; placing bones over/inside an art part AUTO-BINDS it (LBS weights)
+  so a 3-bone chain bends an arm with zero manual steps; manual refinement mode:
+  select path nodes → bind to a bone with an origin↔tip % slider (per-node weight
+  overrides); richer inspector (bindings visible/editable per part and per node);
+  IK verified end-to-end on a sample multi-bone limb (bend-direction preserving,
+  reach-clamped; per-bone rotation limits deferred unless trivially cheap). The
+  bone system gets its own design doc section (how weights/bindings work).
+- [ ] **P5a. Timeline/Animate overhaul** — named panel sections; per-property
+  keyframe toggle circles in the inspector; marquee-friendly padding around key
+  lanes; alternating lane colors; transport buttons (⏮ ◀ ▶/⏸ ▶| ⏭); curves/logic
+  as a mutually exclusive mode picker + onion as a toggle; dialog-based add/rename;
+  visual section separation; a resize splitter between canvas and timeline. Curves
+  editor: value snapping + "reset to keyframe value", more vertical headroom,
+  pan/zoom in the plot.
+- [ ] **P5b. AI assistant polish** — panel visible only in Animate; editor disabled
+  during a request with a Cancel button; snapshot option relabeled with a help
+  tooltip stating it sends the CURRENT PLAYHEAD pose; structural-edit schema
+  extended to the new bone system (AI can split a limb into bound bones).
+
 ## Testing conventions (hard-learned)
 
 - **Dispatch to the true hit target**: interaction tests must target
