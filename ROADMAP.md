@@ -315,10 +315,33 @@ inherit from their neighboring vertex).
   editor remains for refinement); the layers indicator gets the subtle rename.
 - [ ] **File → New**: a New button (in-app confirm when unsaved work exists)
   starting a fresh blank document with a default artboard.
-- [ ] **Table-stakes gap audit**: sweep for other missing everyday-editor basics
-  (the "what else are we missing" pass — e.g. Save As naming, recent files,
-  part copy/paste across the clipboard, Esc consistency) and file the findings
-  here as checkboxes.
+- [x] **Table-stakes gap audit** (done 2026-07-11) — findings filed below.
+
+### Table-stakes gap audit findings (2026-07-11)
+
+Category A — do next (untracked basics):
+- [ ] **Unsaved-changes guard** — confirm before Open / Load sample / New replaces the
+  doc (extend New's planned confirm), and set `beforeunload.returnValue` when dirty so
+  tab-close warns. Today all three swap silently + resetHistory → no undo. (S)
+- [ ] **Still-image export (PNG, SVG)** — an "Export PNG" (and SVG) of the current
+  frame / artwork, with an "export selection only" option. The SVG→canvas→PNG
+  rasterizer already exists in panels/ai.ts (reuse it + download()). (S–M)
+
+Category B — nice-to-have (untracked):
+- [ ] **Find/search parts** in the Layers tree. (S–M)
+- [ ] **Project frame rate + frames/timecode display** — add doc.fps (exporters
+  hardcode 60), and a ms↔frames toggle on the timeline time readout. (M)
+- [ ] **Quick-save vs Save As** — remember last filename so Ctrl+S doesn't re-prompt
+  every time; keep Save As for renaming. (S)
+- [ ] **Recent files** menu (localStorage ring), beyond the single autosave slot. (M)
+- [ ] **Invert selection / Select None** menu + shortcut. (S)
+- [ ] **Empty-state call-to-action** on the canvas/Layers/Inspector when no doc is
+  loaded. (S)
+
+(Already tracked — see v3 / v2.13: File→New, rulers/guides, zoom % + zoom-to-selection
++ 100% reset, copy/paste parts [note: Ctrl+C/V are keyframe-only, no-op in Edit mode],
+marquee part-select, layers visibility/lock/opacity, playback range/work area,
+key-pose + auto-key, SVG-import error surfacing.)
 
 ## Testing conventions (hard-learned)
 
