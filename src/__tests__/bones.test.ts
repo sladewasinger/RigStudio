@@ -1,7 +1,13 @@
 /**
- * Unit tests for Bones 2.0 pure logic: bone-chain resolution, segment↔box overlap
- * (auto-bind targeting), per-node override weight rows, weight sharpening, and
- * normalizeDoc's override pruning.
+ * Unit tests for Bones 2.0 pure logic: bone-chain resolution, per-node override weight
+ * rows, weight sharpening, and normalizeDoc's override pruning.
+ *
+ * RE-SPEC: `segIntersectsBox` is retained as pure segment/box geometry but is NO LONGER
+ * the auto-bind criterion — it bound anything a chain's bounding box merely grazed (the
+ * user's arm bone dragged the body in). Auto-bind targeting now hit-tests the chain
+ * against each part's actual FILLED geometry (`isPointInFill`, a live-DOM test) and is
+ * covered at the rendered level in the interaction suite (`interaction/bones.test.ts`
+ * B1/B6). These cases keep the box-clip math honest for any future reuse.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -50,7 +56,7 @@ describe('boneChain', () => {
   });
 });
 
-describe('segIntersectsBox', () => {
+describe('segIntersectsBox (legacy pure geometry — no longer the auto-bind criterion)', () => {
   const box = { x: 0, y: 0, w: 10, h: 10 };
   it('detects an endpoint inside the box', () => {
     expect(segIntersectsBox({ p: { x: 5, y: 5 }, q: { x: 50, y: 50 } }, box)).toBe(true);

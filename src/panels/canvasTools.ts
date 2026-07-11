@@ -173,4 +173,14 @@ export function buildCanvasTools(el: HTMLElement): void {
       'Animate — drags key at the playhead. IK tool bends parent chains.';
     el.appendChild(hint);
   }
+
+  // IK tool: spell out the flagship gesture in both modes.
+  if (state.tool === 'ik') {
+    const ikHint = document.createElement('p');
+    ikHint.className = 'hint';
+    ikHint.textContent =
+      'IK — drag the END of a bone chain (its tip bone, or the skinned art near it); ' +
+      'the parent joints solve so the limb bends to follow.';
+    el.appendChild(ikHint);
+  }
 }

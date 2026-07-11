@@ -28,7 +28,13 @@ export function applyPathAttrs(el: SVGPathElement, p: RigPath): void {
     el.removeAttribute('stroke-width');
     el.removeAttribute('stroke-opacity');
   }
+  // Clear a stale transform when the model no longer carries one — otherwise binding
+  // (which bakes path.transform INTO the geometry and sets path.transform='') would
+  // leave the old DOM transform attribute in place, double-applying it and visibly
+  // shifting the art. This was the "bind moved the art" bug (parts whose paths carried
+  // a transform, e.g. an Inkscape rotate/matrix, drifted; transform-less parts didn't).
   if (p.transform) el.setAttribute('transform', p.transform);
+  else el.removeAttribute('transform');
 }
 
 /** Refresh a rendered path's style/geometry after inspector edits. */

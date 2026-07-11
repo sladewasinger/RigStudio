@@ -10,12 +10,10 @@ import {
   RigPart, SkinBone, SkinOverride,
 } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
-import { segIntersectsBox } from '../geometry/skin';
-import { applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
+import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from '../geometry/transforms';
 import { ctx, linearOnly, parseNodeKey, round1, round3 } from './context';
 import {
   poseTime, groupTransformOf, chainMatOf, effectivePivot, effectiveTip, fullPoseTransform,
-  partRootBoxes,
 } from './pose';
 import { applyPathAttrs } from './partDom';
 import { invalidateSkinCache } from './skinRender';
@@ -121,9 +119,17 @@ function skinBoneOf(bone: RigPart): SkinBone {
  */
 export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
   if (arts.length === 0 || bones.length === 0) return;
+  const doc = state.doc;
+  if (!doc) return;
   const skinBones = bones.map(skinBoneOf);
   const freshBones = (): SkinBone[] =>
     skinBones.map((b) => ({ ...b, bindSeg: { p: { ...b.bindSeg.p }, q: { ...b.bindSeg.q } } }));
+  // Each bone's WORLD matrix BEFORE any art mutation — needed to keep a bone's world
+  // fixed when its parent art's rest pose (which it rides) gets baked away below.
+  const boneWorlds = new Map(
+    bones.map((b) => [b.id, matrixOfTransform(fullPoseTransform(b, null))]),
+  );
+  const bakedArtIds = new Set<string>();
 
   for (const part of arts) {
     if (part.skin) {
@@ -158,7 +164,44 @@ export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
     part.parentId = null;
     part.skin = { bones: freshBones() };
     invalidateSkinCache(part.id);
+    bakedArtIds.add(part.id);
   }
+
+  // RENDER-NEUTRAL bind for a rest-posed art: a bone placed while an art was selected is
+  // parented to that art, so it RODE the art's rest rotate/translate (children inherit a
+  // parent's ownPose). Baking bakes that rest INTO the geometry and zeroes it on the art,
+  // but the bone still referenced the art — so at render its world lost the rotation while
+  // the LBS rest record kept it, and the delta un-did the rotation, visibly shifting the
+  // baked art (the reported "bind moved rest-rotated art" bug; identity-rest arts, and
+  // arts whose rotation lived in `part.transform` not `rest`, never showed it). Fix: move
+  // each such bone to root and FOLD the (rigid) art pose it lost into the bone's own rest,
+  // so its world — hence the identity rest delta and the whole child sub-chain — is
+  // preserved exactly.
+  for (const bone of bones) {
+    if (!bone.parentId || !bakedArtIds.has(bone.parentId)) continue;
+    reparentBoneToRootPreservingWorld(bone, boneWorlds.get(bone.id)!);
+    invalidateSkinCache(bone.id);
+  }
+}
+
+/**
+ * Re-parent a bone to root while keeping its world transform `W` byte-stable: fold the
+ * ancestor pose it loses into its own rest (rotate + translate around its unchanged
+ * pivot). `W` is a product of rigid ownPoses (rotate + translate, no scale), so the
+ * decomposition is exact; the pivot stays put so effectivePivot/effectiveTip — and any
+ * child bones riding this one — are unchanged.
+ */
+function reparentBoneToRootPreservingWorld(bone: RigPart, W: Mat): void {
+  bone.parentId = null;
+  const rotDeg = round3((Math.atan2(W.b, W.a) * 180) / Math.PI);
+  const rad = (rotDeg * Math.PI) / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const { x: px, y: py } = bone.pivot;
+  // ownPose = translate(tx,ty)·rotate(rotDeg, pivot); its matrix translation is
+  // (tx,ty) + pivot − Rot·pivot, so solve (tx,ty) to reproduce W's translation.
+  bone.rest.rotate = rotDeg;
+  bone.rest.tx = round3(W.e - px + (cos * px - sin * py));
+  bone.rest.ty = round3(W.f - py + (sin * px + cos * py));
 }
 
 /**
@@ -178,11 +221,60 @@ export function bindSelectedToBones(): string | null {
 }
 
 /**
- * Bones 2.0 AUTO-BIND (locked decision): after a bone is placed, resolve its full chain
- * (root bone + every descendant bone) and bind every ART part the chain's segments
- * overlap — the arm bends with zero manual binding steps. Overlap is a cheap
- * segment↔rendered-bbox test. Re-binds already-skinned arts as the chain grows. Binds
- * nothing when no art sits under the chain (silent). Does NOT checkpoint/render — the
+ * Fraction of a bone chain's length that actually lies inside an art part's FILLED
+ * geometry (Bones 2.0 auto-bind targeting). Each chain segment is sampled and every
+ * sample is hit-tested against the part's rendered <path> fills via the live DOM
+ * `isPointInFill` — mapping root→screen (rootGroup CTM) →path-local (path CTM). A bbox
+ * that merely brushes the joint (the old test) no longer counts; a real limb the chain
+ * runs down does. Returns 0 when the DOM/geometry isn't measurable.
+ */
+function chainFillCoverage(part: RigPart, segs: { p: { x: number; y: number }; q: { x: number; y: number } }[]): number {
+  const g = ctx.partGroups.get(part.id);
+  const rootCTM = ctx.rootGroup?.getScreenCTM();
+  if (!g || !rootCTM || !ctx.svg) return 0;
+  const paths = Array.from(g.querySelectorAll<SVGPathElement>('path'))
+    .filter((pe) => typeof pe.isPointInFill === 'function' && pe.getAttribute('fill') !== 'none');
+  if (paths.length === 0) return 0;
+  const invByPath = paths.map((pe) => {
+    const m = pe.getScreenCTM();
+    return m ? { pe, inv: m.inverse() } : null;
+  }).filter((x): x is { pe: SVGPathElement; inv: DOMMatrix } => !!x);
+  const SAMPLES_PER_SEG = 12;
+  let total = 0, inside = 0;
+  const sp = ctx.svg.createSVGPoint();
+  for (const s of segs) {
+    for (let i = 0; i <= SAMPLES_PER_SEG; i++) {
+      const f = i / SAMPLES_PER_SEG;
+      total++;
+      sp.x = s.p.x + (s.q.x - s.p.x) * f;
+      sp.y = s.p.y + (s.q.y - s.p.y) * f;
+      const screen = sp.matrixTransform(rootCTM); // root-content → screen
+      for (const { pe, inv } of invByPath) {
+        const lp = screen.matrixTransform(inv); // screen → path-local (`d` space)
+        const dp = ctx.svg.createSVGPoint();
+        dp.x = lp.x; dp.y = lp.y;
+        if (pe.isPointInFill(dp)) { inside++; break; }
+      }
+    }
+  }
+  return total > 0 ? inside / total : 0;
+}
+
+/** A meaningful fraction of the chain must lie inside a part's fill to auto-bind it. */
+const AUTO_BIND_COVERAGE = 0.34;
+
+/**
+ * Bones 2.0 AUTO-BIND (redesigned): after a bone is placed, resolve its full chain
+ * (root bone + every descendant bone) and skin the RIGHT art with zero manual steps —
+ * the arm bends, the body does NOT. Targeting order (most predictable first):
+ *   1. Art already skinned by any bone in this chain — keep it bound as the chain grows
+ *      (later child bones extend the same limb; they never grab new parts).
+ *   2. Otherwise, if the user has art SELECTED when placement finishes, bind exactly
+ *      that (limit to selection — predictable "I'm rigging THIS part").
+ *   3. Otherwise, the geometric fallback: bind every art part whose FILLED geometry a
+ *      meaningful fraction of the chain runs through (`chainFillCoverage`), replacing
+ *      the old far-too-eager segment↔bbox test that bound anything the joint grazed.
+ * Binds nothing when no art qualifies (silent). Does NOT checkpoint/render — the
  * placement gesture owns the single checkpoint and final repaint.
  */
 export function autoBindPlacedBone(boneId: string): void {
@@ -190,19 +282,35 @@ export function autoBindPlacedBone(boneId: string): void {
   if (!doc) return;
   const chain = boneChain(doc.parts, boneId);
   if (chain.length === 0) return;
+  const chainIds = new Set(chain.map((b) => b.id));
+
+  // 1. Art already bound to this chain — always refresh it (keeps the limb set stable).
+  const alreadyBound = doc.parts.filter(
+    (p) => p.kind === 'art' && p.paths.length > 0 && p.skin
+      && p.skin.bones.some((b) => chainIds.has(b.id)),
+  );
+  if (alreadyBound.length > 0) {
+    bindPartsToBones(alreadyBound, chain);
+    return;
+  }
+
+  // 2. A selected art part limits the bind to itself (predictable).
+  const selectedArt = selectedParts().filter((p) => p.kind === 'art' && p.paths.length > 0);
+  if (selectedArt.length > 0) {
+    bindPartsToBones(selectedArt, chain);
+    return;
+  }
+
+  // 3. Geometric fallback: which filled art does the chain actually run through?
+  const t = poseTime();
   const segs = chain.map((b) => {
-    const p = effectivePivot(b, null);
-    const q = effectiveTip(b, null) ?? { x: p.x + 5, y: p.y };
+    const p = effectivePivot(b, t);
+    const q = effectiveTip(b, t) ?? { x: p.x + 5, y: p.y };
     return { p, q };
   });
-  const artIds = doc.parts.filter((p) => p.kind === 'art' && p.paths.length > 0).map((p) => p.id);
-  const boxes = partRootBoxes(artIds);
-  const targets: RigPart[] = [];
-  for (const id of artIds) {
-    const box = boxes.get(id);
-    const part = doc.parts.find((p) => p.id === id);
-    if (box && part && segs.some((s) => segIntersectsBox(s, box))) targets.push(part);
-  }
+  const targets = doc.parts.filter(
+    (p) => p.kind === 'art' && p.paths.length > 0 && chainFillCoverage(p, segs) >= AUTO_BIND_COVERAGE,
+  );
   if (targets.length === 0) return; // no art under the chain — bind nothing
   bindPartsToBones(targets, chain);
 }
@@ -276,6 +384,23 @@ export function resetNodeBindings(): boolean {
   invalidateSkinCache(part.id);
   renderPose();
   return true;
+}
+
+/**
+ * Recompute auto weights for the selected skinned part: drop any per-node overrides and
+ * rebuild the runtime weight cache from the current bones. Enabled whenever the part is
+ * skinned (the inspector button used to gray out unless overrides existed — the reported
+ * "always disabled" bug). Returns whether overrides were actually dropped, so the caller
+ * only spends an undo step when the doc changed.
+ */
+export function recomputeAutoWeights(): boolean {
+  const part = selectedPart();
+  if (!part?.skin) return false;
+  const hadOverrides = !!part.skin.overrides;
+  if (hadOverrides) delete part.skin.overrides;
+  invalidateSkinCache(part.id);
+  renderPose();
+  return hadOverrides;
 }
 
 /** Remove the skin binding (geometry keeps its baked rest look, part turns rigid). */

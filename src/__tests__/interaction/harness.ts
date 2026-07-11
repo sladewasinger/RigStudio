@@ -268,6 +268,51 @@ export function clientPointOnPart(label: string): { x: number; y: number } {
   return docToClient({ x: box.x + box.width / 2, y: box.y + box.height / 2 });
 }
 
+/**
+ * n+1 CLIENT points down a part's MEDIAL axis (the midpoint of its filled span at each
+ * step), so a placed bone chain follows the actual limb. A part's bounding-box centre
+ * line grazes a diagonal or offset limb's edge (Pip's legs widen at the foot, pulling
+ * the bbox centre off the shaft) — Bones 2.0 geometric auto-bind hit-tests the real
+ * fill, so tests must place bones where a user would: down the visible limb, not down
+ * the bbox. Uses the live DOM `isPointInFill`, exactly like the auto-bind targeting.
+ */
+export function medialPoints(
+  label: string, n: number, lo = 0.16, hi = 0.84,
+): { x: number; y: number }[] {
+  const g = partGroupEl(label);
+  const svg = svgEl();
+  const r = g.getBoundingClientRect();
+  const paths = Array.from(g.querySelectorAll('path')) as SVGPathElement[];
+  const inFill = (sx: number, sy: number): boolean => {
+    for (const pe of paths) {
+      const m = pe.getScreenCTM();
+      if (!m) continue;
+      const p = svg.createSVGPoint(); p.x = sx; p.y = sy;
+      const lp = p.matrixTransform(m.inverse());
+      const dp = svg.createSVGPoint(); dp.x = lp.x; dp.y = lp.y;
+      if (pe.isPointInFill(dp)) return true;
+    }
+    return false;
+  };
+  const vertical = r.height >= r.width;
+  const pts: { x: number; y: number }[] = [];
+  for (let k = 0; k <= n; k++) {
+    const f = lo + (hi - lo) * (k / n);
+    if (vertical) {
+      const sy = r.top + r.height * f;
+      const xs: number[] = [];
+      for (let sx = r.left - 3; sx <= r.right + 3; sx += 1) if (inFill(sx, sy)) xs.push(sx);
+      pts.push({ x: xs.length ? (xs[0] + xs[xs.length - 1]) / 2 : r.left + r.width / 2, y: sy });
+    } else {
+      const sx = r.left + r.width * f;
+      const ys: number[] = [];
+      for (let sy = r.top - 3; sy <= r.bottom + 3; sy += 1) if (inFill(sx, sy)) ys.push(sy);
+      pts.push({ x: sx, y: ys.length ? (ys[0] + ys[ys.length - 1]) / 2 : r.top + r.height / 2 });
+    }
+  }
+  return pts;
+}
+
 // ---- Synthetic input ----
 
 interface Mods { ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean; metaKey?: boolean; }

@@ -238,15 +238,39 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   bone-only parent links to the ROOT bone, then collects the root plus every
   descendant bone — the unit the auto-binder treats as one skeleton. It is cycle-safe
   and independent of what non-bone part a chain root happens to hang under.
-- **Auto-bind on placement (locked decision).** After a placement completes,
-  `rigOps.autoBindPlacedBone` resolves the chain and binds every ART part whose
-  rendered bbox a chain segment overlaps (`geometry/skin.ts` `segIntersectsBox`,
-  Liang–Barsky). Binding runs under the SAME history checkpoint as the placement (in
-  the `interactions.ts` placeBone `end()`), so one undo reverts placement + binding
-  together. Placing over empty canvas binds nothing (silent). Re-binding an
-  already-skinned part as the chain grows does NOT re-bake geometry (it is already in
-  its bind pose — re-baking would only drift floats); it refreshes the bone set in
-  place and keeps any surviving overrides.
+- **Auto-bind on placement — GEOMETRIC targeting.** After a placement completes,
+  `rigOps.autoBindPlacedBone` resolves the chain and picks its art targets in this
+  order (most predictable first): (1) any art already skinned by a bone in this chain —
+  keep it bound as the chain grows (later child bones extend the same limb, they never
+  grab new parts); (2) else, if an ART part is SELECTED, bind exactly that (the user's
+  "I'm rigging THIS part"); (3) else the geometric fallback — bind every art part whose
+  actual FILLED geometry a meaningful fraction (`AUTO_BIND_COVERAGE`) of the chain runs
+  through, sampled via the live DOM `isPointInFill` (`chainFillCoverage`). This
+  REPLACES the old segment↔bounding-box test (`segIntersectsBox`), which bound anything
+  a joint's box grazed — a shoulder pivot sits inside the body's box, so an arm bone
+  dragged the whole body in. `segIntersectsBox` stays a pure helper but is no longer
+  wired into binding. Binding runs under the SAME history checkpoint as the placement,
+  so one undo reverts placement + binding. Placing over empty/unmatched canvas binds
+  nothing (silent). Re-binding an already-skinned part does NOT re-bake geometry (it is
+  already in its bind pose); it refreshes the bone set in place and keeps overrides.
+- **Bind is RENDER-NEUTRAL** (< 0.01px): the rendered geometry must be byte-stable
+  before/after bind. Two traps, both fixed and both interaction-tested at the rendered
+  level (`interaction/bones.test.ts` B7): (a) `applyPathAttrs` MUST clear a stale DOM
+  `transform` when the model's is empty — bind bakes `path.transform` into `d` and
+  empties it, so a leftover DOM attribute double-applies (parts with an Inkscape
+  `rotate(...)`/`matrix(...)` on their paths shifted; transform-less parts didn't); (b)
+  a bone placed while an art was selected is parented to that art and RIDES its rest
+  ownPose (rotate+translate) — baking bakes that rest into the geometry and zeroes it on
+  the art, so `bindPartsToBones` then re-parents the bone to root and folds the (rigid)
+  lost pose into the bone's own rest (`reparentBoneToRootPreservingWorld`), keeping the
+  bone's world — hence the identity rest delta — exact. Otherwise the LBS rest delta
+  un-does the art's rotation and shifts the baked art.
+- **Connected chains.** A child bone's origin IS its parent bone's tip — one shared
+  joint. Dragging the child's pivot handle drags that joint and carries the parent's
+  `boneTip` along; dragging the parent's tip handle carries the child's origin (both in
+  `interactions.ts`, pivot/boneTip drag branches). The selected bone's tip handle
+  renders AFTER the glyph loop so a child glyph on the shared joint can't occlude it.
+  Root bones keep a free origin.
 - **Weight model.** Auto weights are normalized inverse-distance-power to each bone's
   bind-time segment (`skinWeights`). The RENDER path passes a sharpened exponent
   (`skinRender.ts` `SKIN_WEIGHT_POWER = 4`, vs the unit-tested default 2) because
@@ -260,18 +284,31 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   rigid. `skinRender` bakes overrides into the cached weight rows (cache sig includes
   the overrides). The inspector's node-binding editor (node-editing mode, skinned
   part, nodes selected) drives `setNodeBinding`/`clearNodeBinding`; "recompute auto
-  weights" is `resetNodeBindings`.
+  weights" is `recomputeAutoWeights` (drops overrides + rebuilds the weight cache),
+  ENABLED whenever the part is skinned — not only when overrides exist (the old
+  `resetNodeBindings`-gated button was permanently grayed out).
 - **What drops overrides.** Structural node edits (insert/delete/join/split) shift
   command indexes, so `nodeEditing.ts` drops the affected path's overrides via
   `dropSkinOverridesForPath` + `invalidateSkinCache`. `normalizeDoc` prunes overrides
   with dangling bone refs or non-finite t and clamps t to [0,1]. Plain node drags and
   one-shot node ops (smooth/symmetric/corner) keep the index, so they keep overrides.
-- **IK.** The IK tool solves the two nearest ANCESTOR joints of the grabbed part
-  (`ik.ts` `solveTwoBone`, bend-direction preserving, reach-clamped). Grabbing the END
-  bone of a chain rotates both ancestor joints; because the art is skinned to those
-  bones, it deforms live (skin weights are cached, bone deltas recompute every
-  `renderPose` — no cache invalidation needed during the drag). Per-bone rotation
+- **IK.** The IK tool solves two joints with `ik.ts` `solveTwoBone` (bend-direction
+  preserving, reach-clamped). Two entry gestures: grabbing a BONE glyph rotates its two
+  nearest BONE ancestors (ancestors are filtered to `kind==='bone'`, so the art a chain
+  roots on is never mistaken for a joint — that made a 2-bone chain's end over-rotate);
+  grabbing the SKINNED ART itself uses the art's own `skin.bones` (deepest-in-chain =
+  tip joint, effector rides it), so dragging the limb end bends the chain and the art
+  deforms live. Skinned parts are otherwise gated out of pose drags, so the IK branch
+  is handled explicitly BEFORE that gate (`interactions.ts` skinned branch). Skin
+  weights are cached; bone deltas recompute every `renderPose`. Per-bone rotation
   limits are out of scope.
+- **Skinned-part UX.** A skinned part takes no translate/rotate/scale pose drag (its
+  geometry follows its bones — such handles would be lies), and IK is the only pose
+  gesture it accepts. Selecting one still draws a selection box + a canvas "skinned —
+  pose with its bones" hint (`overlay.ts` `.skin-hint`, inspector Skinning section) and
+  no scale/rotate handles, so the click never dead-ends. Because a skinned-part click
+  starts NO drag, its pointerdown calls `renderPose()` explicitly (`interactions.ts`
+  skinned branch) — otherwise the overlay stays stale until the next pan/zoom.
 - **Export limitation (unchanged).** Skinned parts export RIGIDLY — LBS is not
   representable in Lottie/Rive transform replay. `io/` is untouched by Bones 2.0.
 

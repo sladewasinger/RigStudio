@@ -125,6 +125,7 @@ export function renderOverlay(): void {
   // Bone/group glyphs: partless parts have no artwork to click, so they get an
   // interactive diamond (bone) or square (group) at their live joint. Carrying
   // data-part-id makes the normal part hit-testing, drags and auto-key work on them.
+  let selectedBoneTip: SVGGElement | null = null;
   for (const part of doc.parts) {
     if (part.paths.length > 0) continue;
     const p = effectivePivot(part, t);
@@ -148,7 +149,10 @@ export function renderOverlay(): void {
     }
     ctx.overlay.appendChild(glyph);
 
-    // The selected bone's tip is editable in Setup (re-aim / re-length).
+    // The selected bone's tip is editable in Setup (re-aim / re-length). Build it here
+    // but append it AFTER the whole glyph loop, so a connected child bone's glyph (which
+    // sits on the shared joint == this tip) can't occlude it — otherwise the parent-tip
+    // drag is unreachable and only the child's pivot moves the shared joint.
     if (setup && tip && part.id === state.selectedPartId) {
       const th = document.createElementNS(SVG_NS, 'circle');
       th.setAttribute('cx', String(tip.x));
@@ -159,9 +163,10 @@ export function renderOverlay(): void {
       const wrap = document.createElementNS(SVG_NS, 'g');
       if (rootTransform) wrap.setAttribute('transform', rootTransform);
       wrap.appendChild(th);
-      ctx.overlay.appendChild(wrap);
+      selectedBoneTip = wrap;
     }
   }
+  if (selectedBoneTip) ctx.overlay.appendChild(selectedBoneTip);
 
   // Selected GROUPS get a dashed box around everything they contain (root-space
   // AABB of the descendants' rendered boxes — groups have no artwork of their own).
@@ -220,6 +225,24 @@ export function renderOverlay(): void {
     ctx.overlay.appendChild(boxHolder);
 
     if (!primary) continue;
+
+    if (part.skin) {
+      // Skinned parts get a box but NO scale/rotate handles — those would be lies, since
+      // the geometry follows its bones, not a group transform. A small label says so, so
+      // the click never dead-ends silently ("why can't I grab a handle?"). A skinned part
+      // renders with an empty group transform, so boxTransform is axis-aligned root space.
+      const hint = document.createElementNS(SVG_NS, 'text');
+      hint.setAttribute('x', String(x0));
+      hint.setAttribute('y', String(y0 - size * 0.6));
+      hint.setAttribute('class', 'skin-hint');
+      hint.setAttribute('font-size', String(size * 1.5));
+      hint.textContent = 'skinned — pose with its bones';
+      const wrap = document.createElementNS(SVG_NS, 'g');
+      wrap.setAttribute('class', 'overlay-passive');
+      wrap.setAttribute('transform', boxTransform);
+      wrap.appendChild(hint);
+      ctx.overlay.appendChild(wrap);
+    }
 
     if (setup && !part.skin) {
       // Interactive Inkscape-style handles for the primary part.

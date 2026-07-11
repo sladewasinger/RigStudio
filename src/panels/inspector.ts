@@ -14,7 +14,7 @@ import {
   renderPose, updatePathAttrs, partRootBoxes, applyRootDeltas, hasSelectedNode,
   applyNodeOp, NodeOp, unbindSelectedSkin, selectedNodeCount, primaryNodeType,
   canJoinNodes, canDeleteSegment, joinSelectedNodes, deleteSelectedSegment,
-  setNodeBinding, clearNodeBinding, resetNodeBindings, primaryNodeBinding,
+  setNodeBinding, clearNodeBinding, recomputeAutoWeights, primaryNodeBinding,
 } from '../view';
 import { alignDeltas, distributeDeltas, AlignEdge, AlignReference } from '../geometry/align';
 import { checkpoint } from '../core/history';
@@ -346,8 +346,9 @@ function buildSkinSection(el: HTMLElement, part: RigPart): void {
   const list = document.createElement('p');
   list.className = 'hint';
   const names = bones.length ? bones.map((b) => b.label).join(', ') : '(deleted bones)';
-  list.textContent = `Deformed by: ${names}. Pose the bones — the artwork follows with ` +
-    'auto weights. Exports render skinned parts rigidly (editor/runtime feature).';
+  list.textContent = `Skinned — deformed by: ${names}. This part has no scale/rotate ` +
+    'handles; pose its bones (or drag it with the IK tool to bend the chain) and the ' +
+    'artwork follows with auto weights. Exports render skinned parts rigidly.';
   el.appendChild(list);
 
   const actions = document.createElement('div');
@@ -364,12 +365,14 @@ function buildSkinSection(el: HTMLElement, part: RigPart): void {
 
   const recompute = document.createElement('button');
   recompute.textContent = 'recompute auto weights';
-  recompute.title = 'Clear all per-node overrides and return to pure auto weighting';
-  recompute.disabled = !part.skin?.overrides;
+  recompute.title = 'Rebuild auto weights from the current bones (clears any per-node overrides)';
+  recompute.disabled = !part.skin; // enabled whenever the part is skinned
   recompute.onclick = () => {
-    if (!part.skin?.overrides) return; // guard before checkpoint — no empty undo step
-    checkpoint();
-    resetNodeBindings();
+    // Only spend an undo step when overrides actually get dropped; a pure recompute
+    // (no overrides) rebuilds the runtime weight cache without mutating the doc.
+    const hadOverrides = !!part.skin?.overrides;
+    if (hadOverrides) checkpoint();
+    recomputeAutoWeights();
     notify();
   };
   actions.appendChild(recompute);

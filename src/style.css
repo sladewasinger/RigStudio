@@ -506,6 +506,20 @@ input[type='number'] { width: 90px; }
 }
 .select-corner { fill: var(--accent-2); stroke: none; }
 
+/* Canvas label on a selected skinned part: no scale/rotate handles (they'd be lies) —
+   this says so, so the click doesn't dead-end silently. */
+.skin-hint {
+  fill: var(--accent);
+  font-family: system-ui, sans-serif;
+  font-weight: 600;
+  paint-order: stroke;
+  stroke: rgba(20, 20, 24, 0.85);
+  stroke-width: 2.5px;
+  vector-effect: non-scaling-stroke;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
 .gizmo-line { stroke: #ffd166; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .gizmo-arc { fill: rgba(255, 209, 102, 0.22); stroke: #ffd166; stroke-width: 0.8; vector-effect: non-scaling-stroke; }
 .gizmo-text { fill: #ffd166; font-family: system-ui, sans-serif; font-weight: 600; }

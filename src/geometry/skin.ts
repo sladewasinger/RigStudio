@@ -49,10 +49,14 @@ export function skinWeights(points: Pt[], segs: Seg[], power = 2): number[][] {
 }
 
 /**
- * Whether a bone segment overlaps an axis-aligned box (Liang–Barsky clip). Used by
- * auto-bind to decide which art a freshly-placed chain deforms: a part is bound when
- * any chain segment crosses its rendered bounding box (endpoint-inside is the subset
- * where t0/t1 stay [0,1]). Pure — unit-testable.
+ * Whether a bone segment overlaps an axis-aligned box (Liang–Barsky clip). Pure —
+ * unit-testable.
+ *
+ * LEGACY: this was Bones 2.0's auto-bind targeting test, but a bounding box is far too
+ * eager — a shoulder joint sits inside the body's box, so an arm bone dragged the whole
+ * body in. Auto-bind now hit-tests the chain against each part's actual FILLED geometry
+ * (`view/rigOps.ts` `chainFillCoverage`, via the live DOM `isPointInFill`). Kept as a
+ * self-contained clip helper; no longer wired into binding.
  */
 export function segIntersectsBox(
   seg: Seg, box: { x: number; y: number; w: number; h: number },

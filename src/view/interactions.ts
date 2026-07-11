@@ -462,7 +462,7 @@ export function wireInteractions(): void {
       } else {
         selectPart(null);
       }
-      if (part && state.mode === 'rig' && !part.skin) {
+      if (part && state.mode === 'rig') {
         const p = pointerInRoot(ev);
         const t = poseTime();
         const setup = state.editorMode === 'setup';
@@ -474,13 +474,56 @@ export function wireInteractions(): void {
           state.tool === 'select'
             ? (ev.shiftKey || ctx.handleMode === 'scale' ? 'translate' : 'rotate')
             : state.tool;
+
+        // Skinned art deforms through its BONES, not a group transform, so translate/
+        // rotate/scale drags are meaningless on it (and would be lies). The one pose
+        // gesture it supports is IK: dragging the art bends the bone chain that deforms
+        // it (drag near the chain end → the limb folds, art follows live). Any other
+        // click just (re)selects; we still repaint so the selection box + "skinned" hint
+        // show immediately instead of staying stale until the next pan/zoom.
+        if (part.skin) {
+          if (action === 'ik') {
+            const bones = part.skin.bones
+              .map((b) => doc.parts.find((pp) => pp.id === b.id))
+              .filter((b): b is RigPart => !!b && b.kind === 'bone');
+            if (bones.length > 0) {
+              // Deepest-in-chain bone is the tip joint; the effector rides it at the grab.
+              bones.sort((a, b) => ancestorChain(a).length - ancestorChain(b).length);
+              const p1 = bones[bones.length - 1];
+              const p2 = bones.length >= 2 ? bones[bones.length - 2] : null;
+              const grabLocal = applyMat(
+                invertMat(matrixOfTransform(fullPoseTransform(p1, t))), p.x, p.y,
+              );
+              ctx.drag = {
+                kind: 'ik', p1, p2, grabbed: p1,
+                grabLocal: { x: grabLocal.x, y: grabLocal.y },
+                startClient: { x: ev.clientX, y: ev.clientY },
+                active: false,
+              };
+              try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+              notify();
+              renderPose();
+              return;
+            }
+          }
+          notify();
+          renderPose(); // selection box + skinned hint appear without a pan/zoom
+          return;
+        }
+
         // A motionless body click on the already-primary part cycles the handle set
         // (scale ↔ rotate), which is what flips the drag between translate and rotate.
         const canToggle =
           state.tool === 'select' && wasPrimary && !ev.shiftKey && !ev.ctrlKey;
 
         if (action === 'ik') {
-          const ancestors = ancestorChain(part); // outermost first
+          // The joints of a chain are its BONES. For a grabbed BONE, walk only bone
+          // ancestors so the art the chain is rooted on is never mistaken for a joint
+          // (that made a 2-bone chain's end wildly over-rotate a single link). Art
+          // grabbed inside a plain art hierarchy keeps using its real ancestors.
+          const ancestors = part.kind === 'bone'
+            ? ancestorChain(part).filter((a) => a.kind === 'bone')
+            : ancestorChain(part); // outermost first
           const p1 = ancestors[ancestors.length - 1] ?? null;
           const p2 = ancestors[ancestors.length - 2] ?? null;
           if (p1) {
@@ -751,6 +794,16 @@ export function wireInteractions(): void {
         invertMat(matrixOfTransform(fullPoseTransform(part, poseTime()))), p.x, p.y,
       );
       part.boneTip = { x: round1(local.x), y: round1(local.y) };
+      // Connected chains: any child bone whose origin sits at this tip rides along, so
+      // dragging the parent tip carries the shared joint (child.pivot + own-translate ==
+      // parent.boneTip in the same frame).
+      const tt = poseTime();
+      for (const child of state.doc?.parts ?? []) {
+        if (child.kind === 'bone' && child.parentId === part.id) {
+          const ot = ownTranslateOf(child, tt);
+          child.pivot = { x: round1(part.boneTip.x - ot.x), y: round1(part.boneTip.y - ot.y) };
+        }
+      }
       renderPose();
     } else if (ctx.drag.kind === 'pivot') {
       const d = ctx.drag;
@@ -818,6 +871,19 @@ export function wireInteractions(): void {
       const tn = translateFor(part.pivot);
       part.rest.tx = round3(tn.x);
       part.rest.ty = round3(tn.y);
+      // Connected chains: a child bone's origin IS its parent bone's tip — one shared
+      // joint. Dragging the child's pivot drags that joint, so carry the parent's tip
+      // along. chainMatOf(child) === the parent's full-pose matrix, so the (snapped)
+      // root target maps straight into the parent's local frame as its new boneTip.
+      const parentBone = part.parentId
+        ? state.doc?.parts.find((pp) => pp.id === part.parentId)
+        : null;
+      if (part.kind === 'bone' && parentBone?.kind === 'bone') {
+        const tipLocal = applyMat(
+          invertMat(matrixOfTransform(fullPoseTransform(parentBone, t))), sx, sy,
+        );
+        parentBone.boneTip = { x: round1(tipLocal.x), y: round1(tipLocal.y) };
+      }
       renderPose();
     } else if (ctx.drag.kind === 'bendSegment') {
       const d = ctx.drag;
