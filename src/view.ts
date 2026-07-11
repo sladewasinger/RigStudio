@@ -24,8 +24,8 @@
 
 import {
   RigPart, RigPath, Channel, state, notify, setKeyframe, selectedPart, selectedParts,
-  selectPart, ancestorChain, activeClip, channelValue, sampleChannel, addNullPart,
-  partById, freshId,
+  selectPart, ancestorChain, activeClip, channelValue, addNullPart,
+  freshId,
 } from './model';
 import {
   parsePath, serializePath, insertNodeAfter, pathToCubics, PathCmd,
@@ -33,118 +33,28 @@ import {
 } from './paths';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from './transforms';
 import { solveAim, solveTwoBone } from './ik';
-import { skinWeights, Seg } from './skin';
 import { snapPoint, snapDelta, boxFeaturePoints, SnapCandidate, SnapAxis } from './snap';
 import { checkpoint } from './history';
+import {
+  ctx, DragState, SVG_NS, ROTATE_SNAP_DEGREES, DRAG_THRESHOLD_PX, MIN_SCALE, MAX_SCALE,
+  round1, round2, round3, linearOnly, nodeKey, parseNodeKey, snappingActive,
+} from './view/context';
+import {
+  svgPoint, pointerInRoot, screenScaleOf, snapThreshold, rootToUser,
+  pathHolderMat, pointerInPathSpace, handleSize,
+} from './view/coords';
+import {
+  poseTime, rootPoseTransform, innerLocalTransform, fullPoseTransform, groupTransformOf,
+  chainMatOf, ownTranslateOf, effectivePivot, effectiveTip, partRootBoxes,
+} from './view/pose';
+import {
+  clearGroupEntry, enterGroupsFor, focusContext, artworkUnderPointer,
+} from './view/focus';
+import { renderSkinnedPart, invalidateSkinCache } from './view/skinRender';
+import { renderOverlay } from './view/overlay';
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
-const ROTATE_SNAP_DEGREES = 15;
-/** Client-pixel movement before a drag counts as a drag (keeps clicks mutation-free). */
-const DRAG_THRESHOLD_PX = 3;
-const MIN_SCALE = 0.05;
-const MAX_SCALE = 50;
-
-let svg: SVGSVGElement | null = null;
-let rootGroup: SVGGElement | null = null;
-let onionGroup: SVGGElement | null = null;
-let overlay: SVGGElement | null = null;
-const partGroups = new Map<string, SVGGElement>();
-
-// Which handle set the selected part shows in Setup mode; clicking the part again
-// toggles it (Inkscape behavior). Resets when the primary selection changes.
-let handleMode: 'scale' | 'rotate' = 'scale';
-let handlePartId: string | null = null;
-
-// Groups the user has double-clicked into (clicks inside them select parts directly).
-const enteredGroups = new Set<string>();
-
-// The point (in SVG user/viewBox space) a live drag is currently snapped to, drawn as
-// an overlay marker. Null when no snap is engaged; cleared when the drag ends.
-let snapMarker: { x: number; y: number } | null = null;
-
-// Snapping is a SETUP-mode editing aid only (node/pivot/part-body drags line up on
-// nearby geometry). Animate posing stays free — keyed motion should never jump to art.
-function snappingActive(): boolean {
-  return state.snapEnabled && state.editorMode === 'setup';
-}
-
-/** Escape/blank-click hook: close all entered groups. */
-export function clearGroupEntry(): void {
-  enteredGroups.clear();
-}
-
-/**
- * The artwork part/path under the pointer, looking THROUGH overlay widgets (pivot
- * grab circles, handles, gizmos). document.elementsFromPoint returns the full stack
- * top-to-bottom; the first hit inside rootGroup is the real artwork.
- */
-function artworkUnderPointer(
-  ev: MouseEvent,
-): { part: RigPart; pathEl: SVGElement | null } | null {
-  const doc = state.doc;
-  if (!doc || !rootGroup) return null;
-  for (const el of document.elementsFromPoint(ev.clientX, ev.clientY)) {
-    if (!rootGroup.contains(el)) continue;
-    const partEl = (el as Element).closest('[data-part-id]') as SVGGElement | null;
-    const part = doc.parts.find((p) => p.id === partEl?.dataset.partId);
-    if (part) {
-      const pathEl = (el as SVGElement).dataset?.pathId ? (el as SVGElement) : null;
-      return { part, pathEl };
-    }
-  }
-  return null;
-}
-
-/**
- * Which parts are "in focus" while drilling: node editing focuses the edited part;
- * entered groups focus their subtrees. Everything else dims and stops catching
- * clicks (renderPose applies the class), so drags over faded artwork rubber-band
- * nodes instead of selecting parts, and a click on faded artwork falls through to
- * blank canvas — which exits the focus, Inkscape-style. Null = nothing dimmed.
- */
-function focusContext(): Set<string> | null {
-  const part = selectedPart();
-  if (state.mode === 'nodes' && state.editorMode === 'setup' && part) {
-    return new Set([part.id]);
-  }
-  if (enteredGroups.size > 0) {
-    const doc = state.doc!;
-    const focus = new Set<string>();
-    for (const p of doc.parts) {
-      if (enteredGroups.has(p.id) || ancestorChain(p).some((a) => enteredGroups.has(a.id))) {
-        focus.add(p.id);
-      }
-    }
-    return focus;
-  }
-  return null;
-}
-
-/**
- * Open every group above a part (Layers-panel selection does this so a part picked
- * in the tree is immediately draggable on canvas instead of re-selecting its group).
- */
-export function enterGroupsFor(partId: string): void {
-  const part = partById(partId);
-  if (!part) return;
-  for (const a of ancestorChain(part)) {
-    if (a.kind === 'group') enteredGroups.add(a.id);
-  }
-}
-
-// Node-editing selection: every selected endpoint (multi-select), plus the primary
-// (last-clicked) node the inspector reports on. Keys are `${pathId}|${cmdIndex}`.
-const selectedNodes = new Set<string>();
-let selectedNode: { pathId: string; cmdIndex: number } | null = null;
-
-function nodeKey(pathId: string, cmdIndex: number): string {
-  return `${pathId}|${cmdIndex}`;
-}
-
-function parseNodeKey(key: string): { pathId: string; cmdIndex: number } {
-  const i = key.lastIndexOf('|');
-  return { pathId: key.slice(0, i), cmdIndex: Number(key.slice(i + 1)) };
-}
+export { partRootBoxes };
+export { clearGroupEntry, enterGroupsFor };
 
 /** Index of a command among the drawing commands (Z excluded) — nodeTypes position. */
 function nodeIndexOf(cmds: PathCmd[], cmdIndex: number): number {
@@ -165,21 +75,17 @@ function ensureNodeTypes(path: RigPath): string {
   return types;
 }
 
-// Current viewBox rect — the zoom/pan state. Survives canvas rebuilds (undo/redo);
-// reset explicitly on document import.
-let viewRect: { x: number; y: number; w: number; h: number } | null = null;
-
 export function resetView(): void {
-  viewRect = null;
-  if (svg && state.doc) {
-    viewRect = { ...state.doc.viewBox };
+  ctx.viewRect = null;
+  if (ctx.svg && state.doc) {
+    ctx.viewRect = { ...state.doc.viewBox };
     applyViewRect();
   }
 }
 
 function applyViewRect(): void {
-  if (!svg || !viewRect) return;
-  svg.setAttribute('viewBox', `${viewRect.x} ${viewRect.y} ${viewRect.w} ${viewRect.h}`);
+  if (!ctx.svg || !ctx.viewRect) return;
+  ctx.svg.setAttribute('viewBox', `${ctx.viewRect.x} ${ctx.viewRect.y} ${ctx.viewRect.w} ${ctx.viewRect.h}`);
 }
 
 /**
@@ -188,25 +94,25 @@ function applyViewRect(): void {
  * by the wheel handler (cursor-anchored) and zoomBy (keyboard, canvas-center-anchored).
  */
 function zoomAround(px: number, py: number, factor: number): void {
-  if (!svg || !viewRect) return;
+  if (!ctx.svg || !ctx.viewRect) return;
   const doc = state.doc;
   const minW = doc ? doc.viewBox.w / 60 : 1;
   const maxW = doc ? doc.viewBox.w * 12 : 10000;
-  const newW = Math.min(maxW, Math.max(minW, viewRect.w / factor));
-  const applied = viewRect.w / newW;
-  viewRect.x = px - (px - viewRect.x) / applied;
-  viewRect.y = py - (py - viewRect.y) / applied;
-  viewRect.w = newW;
-  viewRect.h = viewRect.h / applied;
+  const newW = Math.min(maxW, Math.max(minW, ctx.viewRect.w / factor));
+  const applied = ctx.viewRect.w / newW;
+  ctx.viewRect.x = px - (px - ctx.viewRect.x) / applied;
+  ctx.viewRect.y = py - (py - ctx.viewRect.y) / applied;
+  ctx.viewRect.w = newW;
+  ctx.viewRect.h = ctx.viewRect.h / applied;
   applyViewRect();
   renderPose(); // overlay handle sizes track the zoom level
 }
 
 /** Zoom in/out by `factor` (>1 = in), centered on the canvas viewport (keyboard +/-). */
 export function zoomBy(factor: number): void {
-  if (!svg || !viewRect) return;
-  const rect = svg.getBoundingClientRect();
-  const m = svg.getScreenCTM();
+  if (!ctx.svg || !ctx.viewRect) return;
+  const rect = ctx.svg.getBoundingClientRect();
+  const m = ctx.svg.getScreenCTM();
   if (!m) return;
   const p = svgPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
     .matrixTransform(m.inverse());
@@ -218,21 +124,21 @@ export function buildCanvas(container: HTMLElement): void {
   const doc = state.doc;
   if (!doc) return;
 
-  svg = document.createElementNS(SVG_NS, 'svg');
-  if (!viewRect) viewRect = { ...doc.viewBox };
+  ctx.svg = document.createElementNS(SVG_NS, 'svg');
+  if (!ctx.viewRect) ctx.viewRect = { ...doc.viewBox };
   applyViewRect();
-  svg.id = 'rig-svg';
+  ctx.svg.id = 'rig-svg';
 
-  onionGroup = document.createElementNS(SVG_NS, 'g');
-  onionGroup.id = 'onion';
-  svg.appendChild(onionGroup);
-  rootGroup = document.createElementNS(SVG_NS, 'g');
-  svg.appendChild(rootGroup);
-  overlay = document.createElementNS(SVG_NS, 'g');
-  overlay.id = 'overlay';
-  svg.appendChild(overlay);
+  ctx.onionGroup = document.createElementNS(SVG_NS, 'g');
+  ctx.onionGroup.id = 'onion';
+  ctx.svg.appendChild(ctx.onionGroup);
+  ctx.rootGroup = document.createElementNS(SVG_NS, 'g');
+  ctx.svg.appendChild(ctx.rootGroup);
+  ctx.overlay = document.createElementNS(SVG_NS, 'g');
+  ctx.overlay.id = 'overlay';
+  ctx.svg.appendChild(ctx.overlay);
 
-  partGroups.clear();
+  ctx.partGroups.clear();
   for (const part of doc.parts) {
     const g = document.createElementNS(SVG_NS, 'g');
     g.dataset.partId = part.id;
@@ -242,10 +148,10 @@ export function buildCanvas(container: HTMLElement): void {
       el.dataset.pathId = p.id;
       g.appendChild(el);
     }
-    rootGroup.appendChild(g);
-    partGroups.set(part.id, g);
+    ctx.rootGroup.appendChild(g);
+    ctx.partGroups.set(part.id, g);
   }
-  container.appendChild(svg);
+  container.appendChild(ctx.svg);
 
   // Apply the rest pose first so each group carries its baked transform, THEN measure:
   // bbox centers must be mapped through the part transform into root coordinates.
@@ -253,11 +159,11 @@ export function buildCanvas(container: HTMLElement): void {
   for (const part of doc.parts) {
     const needsSeed = part.pivotHint || (part.pivot.x === 0 && part.pivot.y === 0);
     if (!needsSeed) continue;
-    const g = partGroups.get(part.id)!;
+    const g = ctx.partGroups.get(part.id)!;
     const box = g.getBBox();
     const local = svgPoint(box.x + box.width / 2, box.y + box.height / 2);
     const m = g.getCTM();
-    const rootM = rootGroup.getCTM();
+    const rootM = ctx.rootGroup.getCTM();
     if (!m || !rootM) continue;
     const center = local.matrixTransform(m).matrixTransform(rootM.inverse());
     if (part.pivotHint) {
@@ -293,7 +199,7 @@ function applyPathAttrs(el: SVGPathElement, p: RigPath): void {
 
 /** Refresh a rendered path's style/geometry after inspector edits. */
 export function updatePathAttrs(p: RigPath): void {
-  const el = svg?.querySelector<SVGPathElement>(`[data-path-id="${p.id}"]`);
+  const el = ctx.svg?.querySelector<SVGPathElement>(`[data-path-id="${p.id}"]`);
   if (el) applyPathAttrs(el, p);
   renderOverlay();
 }
@@ -304,11 +210,11 @@ export function updatePathAttrs(p: RigPath): void {
  */
 export function reorderCanvas(): void {
   const doc = state.doc;
-  if (!doc || !rootGroup) return;
+  if (!doc || !ctx.rootGroup) return;
   for (const part of doc.parts) {
-    const g = partGroups.get(part.id);
+    const g = ctx.partGroups.get(part.id);
     if (!g) continue;
-    rootGroup.appendChild(g);
+    ctx.rootGroup.appendChild(g);
     for (const p of part.paths) {
       const el = g.querySelector(`[data-path-id="${p.id}"]`);
       if (el) g.appendChild(el);
@@ -319,17 +225,17 @@ export function reorderCanvas(): void {
 
 /** Register a canvas group for a part created after buildCanvas (bones, groups). */
 export function registerPart(part: RigPart): void {
-  if (!rootGroup || partGroups.has(part.id)) return;
+  if (!ctx.rootGroup || ctx.partGroups.has(part.id)) return;
   const g = document.createElementNS(SVG_NS, 'g');
   g.dataset.partId = part.id;
-  rootGroup.appendChild(g);
-  partGroups.set(part.id, g);
+  ctx.rootGroup.appendChild(g);
+  ctx.partGroups.set(part.id, g);
 }
 
 /** Drop a removed part's canvas group (ungroup/dissolve). */
 export function unregisterPart(id: string): void {
-  partGroups.get(id)?.remove();
-  partGroups.delete(id);
+  ctx.partGroups.get(id)?.remove();
+  ctx.partGroups.delete(id);
 }
 
 /**
@@ -339,7 +245,7 @@ export function unregisterPart(id: string): void {
  * still owns transforms; undo/redo rebuilds via buildCanvas so this is forward-only.
  */
 function syncPartPathDom(part: RigPart): void {
-  const g = partGroups.get(part.id);
+  const g = ctx.partGroups.get(part.id);
   if (!g) return;
   const wanted = new Set(part.paths.map((p) => p.id));
   for (const el of Array.from(g.querySelectorAll('[data-path-id]'))) {
@@ -365,11 +271,11 @@ function syncPartPathDom(part: RigPart): void {
  */
 export function flipSelected(axis: 'h' | 'v'): boolean {
   if (state.editorMode !== 'setup') return false;
-  const parts = selectedParts().filter((p) => p.paths.length > 0 && partGroups.has(p.id));
+  const parts = selectedParts().filter((p) => p.paths.length > 0 && ctx.partGroups.has(p.id));
   if (parts.length === 0) return false;
   const t = poseTime();
   for (const part of parts) {
-    const g = partGroups.get(part.id)!;
+    const g = ctx.partGroups.get(part.id)!;
     const box = g.getBBox();
     const c = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     const before = applyMat(matrixOfTransform(groupTransformOf(part, t)), c.x, c.y);
@@ -386,32 +292,6 @@ export function flipSelected(axis: 'h' | 'v'): boolean {
   return true;
 }
 
-/** Rendered root-space AABBs of the given parts (for align/distribute). */
-export function partRootBoxes(ids: string[]): Map<string, { x: number; y: number; w: number; h: number }> {
-  const out = new Map<string, { x: number; y: number; w: number; h: number }>();
-  const doc = state.doc;
-  if (!doc) return out;
-  const t = poseTime();
-  for (const id of ids) {
-    const part = doc.parts.find((p) => p.id === id);
-    const g = part ? partGroups.get(id) : null;
-    if (!part || !g || part.paths.length === 0) continue;
-    const box = g.getBBox();
-    const m = matrixOfTransform(groupTransformOf(part, t));
-    const corners = [
-      applyMat(m, box.x, box.y),
-      applyMat(m, box.x + box.width, box.y),
-      applyMat(m, box.x + box.width, box.y + box.height),
-      applyMat(m, box.x, box.y + box.height),
-    ];
-    const xs = corners.map((c) => c.x);
-    const ys = corners.map((c) => c.y);
-    const x0 = Math.min(...xs), y0 = Math.min(...ys);
-    out.set(id, { x: x0, y: y0, w: Math.max(...xs) - x0, h: Math.max(...ys) - y0 });
-  }
-  return out;
-}
-
 /**
  * Nudge the selected parts by a SCREEN-pixel delta (arrow keys), converted through
  * the current zoom and each part's parent chain — the keyboard twin of a translate
@@ -419,10 +299,10 @@ export function partRootBoxes(ids: string[]): Map<string, { x: number; y: number
  * high zoom survive thanks to finer rounding. Returns whether anything moved.
  */
 export function nudgeSelectedParts(dxPx: number, dyPx: number): boolean {
-  if (!svg) return false;
+  if (!ctx.svg) return false;
   const parts = selectedParts().filter((p) => !p.skin);
   if (parts.length === 0) return false;
-  const ctm = svg.getScreenCTM();
+  const ctm = ctx.svg.getScreenCTM();
   const scale = ctm ? Math.hypot(ctm.a, ctm.b) : 1;
   const dx = dxPx / scale;
   const dy = dyPx / scale;
@@ -502,7 +382,7 @@ export function bindSelectedToBones(): string | null {
       path.d = serializePath(cmds);
       path.transform = '';
       path.strokeWidth = path.strokeWidth * Math.sqrt(Math.abs(m.a * m.d - m.b * m.c));
-      const el = svg?.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
+      const el = ctx.svg?.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
       if (el) applyPathAttrs(el, path);
     }
     part.pivot = effectivePivot(part, null);
@@ -510,7 +390,7 @@ export function bindSelectedToBones(): string | null {
     part.rest = { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 };
     part.parentId = null;
     part.skin = { bones: skinBones.map((b) => ({ ...b, bindSeg: { p: { ...b.bindSeg.p }, q: { ...b.bindSeg.q } } })) };
-    skinCache.delete(part.id);
+    invalidateSkinCache(part.id);
   }
   renderPose();
   return null;
@@ -522,7 +402,7 @@ export function unbindSelectedSkin(): boolean {
   if (parts.length === 0) return false;
   for (const part of parts) {
     part.skin = null;
-    skinCache.delete(part.id);
+    invalidateSkinCache(part.id);
   }
   renderPose();
   return true;
@@ -530,134 +410,38 @@ export function unbindSelectedSkin(): boolean {
 
 // ---- Bone placement ----
 
-let placingBone = false;
-
 /** Arm click-to-place: the next canvas click drops a bone (parented to the selection). */
 export function startBonePlacement(): void {
-  placingBone = true;
-  if (svg) svg.style.cursor = 'crosshair';
+  ctx.placingBone = true;
+  if (ctx.svg) ctx.svg.style.cursor = 'crosshair';
 }
 
 /** Returns whether placement was active (Escape handling). */
 export function cancelBonePlacement(): boolean {
-  const was = placingBone;
-  placingBone = false;
-  if (svg) svg.style.cursor = '';
+  const was = ctx.placingBone;
+  ctx.placingBone = false;
+  if (ctx.svg) ctx.svg.style.cursor = '';
   return was;
 }
 
 // ---- Pose evaluation helpers ----
 
-/**
- * State-machine PREVIEW override: when set (by smPanel), renderPose samples every channel
- * from the running SMInstance — which owns its own clocks — instead of the active clip at
- * the current time. Null restores normal Animate/Setup sampling. This is the ONLY hook the
- * state-machine editor needs inside the view monolith.
- */
-let poseSampler: ((target: string, channel: Channel) => number) | null = null;
-
 /** Route renderPose's channel sampling through fn (state-machine preview), or null to restore. */
 export function setPoseSampler(fn: ((target: string, channel: Channel) => number) | null): void {
-  poseSampler = fn;
+  ctx.poseSampler = fn;
   renderPose();
-}
-
-/** The time to sample animation at, or null when Setup mode shows the bare rest pose. */
-function poseTime(): number | null {
-  return state.editorMode === 'animate' ? state.currentTime : null;
-}
-
-function rootPoseTransform(t: number | null): string {
-  const doc = state.doc!;
-  const rtx = poseSampler ? poseSampler('root', 'tx') : t === null ? 0 : sampleChannel('root', 'tx', t);
-  const rty = poseSampler ? poseSampler('root', 'ty') : t === null ? 0 : sampleChannel('root', 'ty', t);
-  const rsx = poseSampler ? poseSampler('root', 'sx') : t === null ? 1 : sampleChannel('root', 'sx', t);
-  const rsy = poseSampler ? poseSampler('root', 'sy') : t === null ? 1 : sampleChannel('root', 'sy', t);
-  const rp = doc.rootPivot;
-  return (
-    `translate(${rtx},${rty}) translate(${rp.x},${rp.y}) ` +
-    `scale(${rsx},${rsy}) translate(${-rp.x},${-rp.y})`
-  );
-}
-
-/** A part's own pose transform: keyed channels are absolute, rest fills the gaps. */
-function ownPoseTransform(part: RigPart, t: number | null): string {
-  const rot = poseSampler ? poseSampler(part.id, 'rotate') : channelValue(part, 'rotate', t);
-  const tx = poseSampler ? poseSampler(part.id, 'tx') : channelValue(part, 'tx', t);
-  const ty = poseSampler ? poseSampler(part.id, 'ty') : channelValue(part, 'ty', t);
-  return `translate(${tx},${ty}) rotate(${rot},${part.pivot.x},${part.pivot.y})`;
-}
-
-/** The pivot mapped into the part's pre-baked local space (where rest scale applies). */
-function localPivotOf(part: RigPart, pivot = part.pivot): { x: number; y: number } {
-  return applyMat(invertMat(matrixOfTransform(part.transform)), pivot.x, pivot.y);
-}
-
-/**
- * Rest scale AND skew, applied innermost (after the baked transform) around the local
- * pivot: the artwork reshapes along its own axes and the joint stays exactly in place.
- * `pivot` overrides the stored pivot (pivot drags evaluate candidate positions).
- */
-function innerLocalTransform(part: RigPart, pivot = part.pivot): string {
-  const { sx, sy, kx, ky } = part.rest;
-  if (sx === 1 && sy === 1 && kx === 0 && ky === 0) return '';
-  const pl = localPivotOf(part, pivot);
-  const ops = [`translate(${pl.x},${pl.y})`];
-  if (sx !== 1 || sy !== 1) ops.push(`scale(${sx},${sy})`);
-  if (kx !== 0) ops.push(`skewX(${kx})`);
-  if (ky !== 0) ops.push(`skewY(${ky})`);
-  ops.push(`translate(${-pl.x},${-pl.y})`);
-  return ops.join(' ');
-}
-
-/** Ancestor poses composed with the part's own pose (bone hierarchy). */
-function fullPoseTransform(part: RigPart, t: number | null): string {
-  const pieces = ancestorChain(part).map((a) => ownPoseTransform(a, t));
-  pieces.push(ownPoseTransform(part, t));
-  return pieces.join(' ');
-}
-
-/** The complete transform string a part group renders with. */
-function groupTransformOf(part: RigPart, t: number | null): string {
-  return [fullPoseTransform(part, t), part.transform, innerLocalTransform(part)]
-    .filter(Boolean)
-    .join(' ');
-}
-
-/** Matrix of the ancestors' poses only (maps a part's rest space into root space). */
-function chainMatOf(part: RigPart, t: number | null): Mat {
-  return matrixOfTransform(ancestorChain(part).map((a) => ownPoseTransform(a, t)).join(' '));
-}
-
-function ownTranslateOf(part: RigPart, t: number | null): { x: number; y: number } {
-  return { x: channelValue(part, 'tx', t), y: channelValue(part, 'ty', t) };
-}
-
-/** Where the part's joint actually sits right now, in root coordinates. */
-function effectivePivot(part: RigPart, t: number | null): { x: number; y: number } {
-  const m = chainMatOf(part, t);
-  const ot = ownTranslateOf(part, t);
-  return applyMat(m, part.pivot.x + ot.x, part.pivot.y + ot.y);
-}
-
-/** A bone's tip in root coordinates (follows the bone's own rotation), or null. */
-function effectiveTip(part: RigPart, t: number | null): { x: number; y: number } | null {
-  if (!part.boneTip) return null;
-  return applyMat(
-    matrixOfTransform(fullPoseTransform(part, t)), part.boneTip.x, part.boneTip.y,
-  );
 }
 
 /** Applies the sampled pose at the current time to every part group. */
 export function renderPose(): void {
   const doc = state.doc;
-  if (!doc || !rootGroup) return;
+  if (!doc || !ctx.rootGroup) return;
   const t = poseTime();
 
-  rootGroup.setAttribute('transform', rootPoseTransform(t));
+  ctx.rootGroup.setAttribute('transform', rootPoseTransform(t));
   const focus = focusContext();
   for (const part of doc.parts) {
-    const g = partGroups.get(part.id);
+    const g = ctx.partGroups.get(part.id);
     if (!g) continue;
     // Drill-down focus: parts outside the editing context fade and stop catching
     // pointer events (clicks fall through; node marquees sweep right over them).
@@ -674,90 +458,12 @@ export function renderPose(): void {
   renderOverlay();
 }
 
-// ---- Linear-blend skinning ----
-
-// Runtime cache: parsed rest geometry + per-point weights, invalidated when the
-// rest path data changes (node edits) or the binding changes.
-const skinCache = new Map<string, {
-  sig: string;
-  paths: { id: string; cmds: PathCmd[]; pts: { x: number; y: number }[][]; weights: number[][] }[];
-}>();
-
-function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get>> {
-  const sig =
-    part.paths.map((p) => `${p.id}:${p.d.length}`).join('|') +
-    '#' + (part.skin?.bones.map((b) => b.id).join(',') ?? '');
-  const hit = skinCache.get(part.id);
-  if (hit && hit.sig === sig) return hit;
-
-  const segs: Seg[] = (part.skin?.bones ?? []).map((b) => b.bindSeg);
-  const paths = part.paths.map((p) => {
-    const cmds = pathToCubics(parsePath(p.d));
-    // Every coordinate pair in order — endpoints and control points alike.
-    const pts: { x: number; y: number }[][] = cmds.map((c) => {
-      if (c.cmd === 'C') {
-        return [{ x: c.x1, y: c.y1 }, { x: c.x2, y: c.y2 }, { x: c.x, y: c.y }];
-      }
-      if (c.cmd === 'Z') return [];
-      return [{ x: (c as { x: number }).x, y: (c as { y: number }).y }];
-    });
-    const flat = pts.flat();
-    const weights = skinWeights(flat, segs);
-    return { id: p.id, cmds, pts, weights };
-  });
-  const entry = { sig, paths };
-  skinCache.set(part.id, entry);
-  return entry;
-}
-
-/** Per-frame linear-blend deformation: rewrite each path's d attribute. */
-function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | null): void {
-  const skin = part.skin;
-  if (!skin) return;
-  const data = skinDataFor(part);
-
-  // Each bone's delta from its bind pose (identity at rest → rest geometry).
-  const deltas: Mat[] = skin.bones.map((b) => {
-    const bone = state.doc?.parts.find((p) => p.id === b.id);
-    if (!bone) return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-    return multiply(matrixOfTransform(fullPoseTransform(bone, t)), b.restWorldInv);
-  });
-
-  for (const pd of data.paths) {
-    let k = 0;
-    const out: PathCmd[] = pd.cmds.map((c, i) => {
-      const mapped = pd.pts[i].map((pt) => {
-        const w = pd.weights[k++];
-        let x = 0, y = 0;
-        for (let bi = 0; bi < deltas.length; bi++) {
-          const m = deltas[bi];
-          x += w[bi] * (m.a * pt.x + m.c * pt.y + m.e);
-          y += w[bi] * (m.b * pt.x + m.d * pt.y + m.f);
-        }
-        return { x, y };
-      });
-      if (c.cmd === 'C') {
-        return {
-          cmd: 'C' as const,
-          x1: mapped[0].x, y1: mapped[0].y,
-          x2: mapped[1].x, y2: mapped[1].y,
-          x: mapped[2].x, y: mapped[2].y,
-        };
-      }
-      if (c.cmd === 'Z') return c;
-      return { ...c, x: mapped[0].x, y: mapped[0].y } as PathCmd;
-    });
-    const el = g.querySelector(`[data-path-id="${pd.id}"]`);
-    el?.setAttribute('d', serializePath(out));
-  }
-}
-
 // ---- Onion skinning ----
 
 /** Ghost silhouettes of the previous/next keyed poses while animating. */
 function renderOnion(): void {
-  if (!onionGroup) return;
-  onionGroup.innerHTML = '';
+  if (!ctx.onionGroup) return;
+  ctx.onionGroup.innerHTML = '';
   const doc = state.doc;
   if (!doc || !state.onionSkin || state.editorMode !== 'animate') return;
   const clip = activeClip();
@@ -788,674 +494,11 @@ function renderOnion(): void {
       }
       layer.appendChild(g);
     }
-    onionGroup.appendChild(layer);
+    ctx.onionGroup.appendChild(layer);
   }
-}
-
-// ---- Overlay: selection box, handles, pivots, drag gizmos, node handles ----
-
-function renderOverlay(): void {
-  if (!overlay || !svg || !rootGroup) return;
-  overlay.innerHTML = '';
-  const doc = state.doc;
-  if (!doc) return;
-
-  const setup = state.editorMode === 'setup';
-
-  // Reset the handle cycle when the primary selection changes.
-  if (state.selectedPartId !== handlePartId) {
-    handlePartId = state.selectedPartId;
-    handleMode = 'scale';
-  }
-
-  if (state.mode === 'nodes' && setup) {
-    const part = selectedPart();
-    if (part) renderNodeHandles(part);
-    drawSnapMarker();
-    return;
-  }
-
-  const size = handleSize();
-  const t = poseTime();
-  const rootTransform = rootGroup.getAttribute('transform') ?? '';
-
-  // Everything positioned in root coordinates rides in one passive holder.
-  const holder = document.createElementNS(SVG_NS, 'g');
-  holder.setAttribute('class', 'overlay-passive');
-  if (rootTransform) holder.setAttribute('transform', rootTransform);
-  overlay.appendChild(holder);
-
-  // Ghost markers: every art part's live joint, so the skeleton is visible at a
-  // glance. Bones and groups get interactive glyphs below instead.
-  for (const part of doc.parts) {
-    if (part.id === state.selectedPartId || part.paths.length === 0) continue;
-    const p = effectivePivot(part, t);
-    const dot = document.createElementNS(SVG_NS, 'circle');
-    dot.setAttribute('cx', String(p.x));
-    dot.setAttribute('cy', String(p.y));
-    dot.setAttribute('r', String(size * 0.55));
-    dot.setAttribute('class', 'pivot-ghost');
-    holder.appendChild(dot);
-  }
-
-  // Bone lines: connect each parented part's joint to its parent's joint.
-  for (const part of doc.parts) {
-    if (!part.parentId) continue;
-    const parent = doc.parts.find((p) => p.id === part.parentId);
-    if (!parent) continue;
-    const a = effectivePivot(parent, t);
-    const b = effectivePivot(part, t);
-    const line = document.createElementNS(SVG_NS, 'line');
-    line.setAttribute('x1', String(a.x));
-    line.setAttribute('y1', String(a.y));
-    line.setAttribute('x2', String(b.x));
-    line.setAttribute('y2', String(b.y));
-    line.setAttribute('class', 'bone-line');
-    line.setAttribute('stroke-dasharray', `${size * 0.5} ${size * 0.5}`);
-    holder.appendChild(line);
-  }
-
-  // Highlight the "entered" path, if any (Setup path selection).
-  if (setup && state.selectedPathId) {
-    const part = selectedPart();
-    const g = part ? partGroups.get(part.id) : null;
-    const path = part?.paths.find((p) => p.id === state.selectedPathId);
-    if (part && g && path) {
-      const hl = document.createElementNS(SVG_NS, 'path');
-      hl.setAttribute('d', path.d);
-      hl.setAttribute('class', 'path-highlight');
-      hl.setAttribute('stroke-dasharray', `${size * 0.8} ${size * 0.6}`);
-      const wrap = document.createElementNS(SVG_NS, 'g');
-      wrap.setAttribute('class', 'overlay-passive');
-      wrap.setAttribute(
-        'transform',
-        [rootTransform, g.getAttribute('transform') ?? '', path.transform]
-          .filter(Boolean)
-          .join(' '),
-      );
-      wrap.appendChild(hl);
-      overlay.appendChild(wrap);
-    }
-  }
-
-  // Bone/group glyphs: partless parts have no artwork to click, so they get an
-  // interactive diamond (bone) or square (group) at their live joint. Carrying
-  // data-part-id makes the normal part hit-testing, drags and auto-key work on them.
-  for (const part of doc.parts) {
-    if (part.paths.length > 0) continue;
-    const p = effectivePivot(part, t);
-    const s = size * 1.6;
-    const glyph = document.createElementNS(SVG_NS, 'g');
-    glyph.dataset.partId = part.id;
-    const sel = state.selectedPartIds.includes(part.id) ? ' selected' : '';
-    glyph.setAttribute('class', `null-glyph ${part.kind}${sel}`);
-    if (rootTransform) glyph.setAttribute('transform', rootTransform);
-    const tip = effectiveTip(part, t);
-    if (part.kind === 'group') {
-      glyph.innerHTML =
-        `<rect x="${p.x - s * 0.8}" y="${p.y - s * 0.8}" width="${s * 1.6}" height="${s * 1.6}" />`;
-    } else if (tip) {
-      // Classic bone: a kite from the joint to the tip, widest near the joint.
-      glyph.innerHTML = boneKitePath(p, tip, size);
-    } else {
-      glyph.innerHTML =
-        `<path d="M ${p.x},${p.y - s} L ${p.x + s * 0.7},${p.y} L ${p.x},${p.y + s} ` +
-        `L ${p.x - s * 0.7},${p.y} Z" />`;
-    }
-    overlay.appendChild(glyph);
-
-    // The selected bone's tip is editable in Setup (re-aim / re-length).
-    if (setup && tip && part.id === state.selectedPartId) {
-      const th = document.createElementNS(SVG_NS, 'circle');
-      th.setAttribute('cx', String(tip.x));
-      th.setAttribute('cy', String(tip.y));
-      th.setAttribute('r', String(size * 0.9));
-      th.setAttribute('class', 'bone-tip-handle');
-      th.dataset.role = 'bone-tip';
-      const wrap = document.createElementNS(SVG_NS, 'g');
-      if (rootTransform) wrap.setAttribute('transform', rootTransform);
-      wrap.appendChild(th);
-      overlay.appendChild(wrap);
-    }
-  }
-
-  // Selected GROUPS get a dashed box around everything they contain (root-space
-  // AABB of the descendants' rendered boxes — groups have no artwork of their own).
-  for (const part of selectedParts()) {
-    if (part.kind !== 'group') continue;
-    const descendantIds = doc.parts
-      .filter((p) => p.paths.length > 0 && ancestorChain(p).some((a) => a.id === part.id))
-      .map((p) => p.id);
-    const boxes = [...partRootBoxes(descendantIds).values()];
-    if (boxes.length === 0) continue;
-    const x0 = Math.min(...boxes.map((b) => b.x));
-    const y0 = Math.min(...boxes.map((b) => b.y));
-    const x1 = Math.max(...boxes.map((b) => b.x + b.w));
-    const y1 = Math.max(...boxes.map((b) => b.y + b.h));
-    const pad = size * 0.8;
-    const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', String(x0 - pad));
-    rect.setAttribute('y', String(y0 - pad));
-    rect.setAttribute('width', String(x1 - x0 + pad * 2));
-    rect.setAttribute('height', String(y1 - y0 + pad * 2));
-    rect.setAttribute(
-      'class',
-      part.id === state.selectedPartId ? 'select-box' : 'select-box secondary',
-    );
-    rect.setAttribute('stroke-dasharray', `${size * 0.9} ${size * 0.7}`);
-    holder.appendChild(rect); // root-coordinate passive holder
-  }
-
-  // Dashed transform boxes around every selected part, rotating live with the pose.
-  for (const part of selectedParts()) {
-    const g = partGroups.get(part.id);
-    if (!g || part.paths.length === 0) continue;
-    const primary = part.id === state.selectedPartId;
-    const partTransform = g.getAttribute('transform') ?? '';
-    const boxTransform = [rootTransform, partTransform].filter(Boolean).join(' ');
-    const box = g.getBBox();
-    const pad = size * 0.6;
-    const x0 = box.x - pad, y0 = box.y - pad;
-    const x1 = box.x + box.width + pad, y1 = box.y + box.height + pad;
-
-    const boxHolder = document.createElementNS(SVG_NS, 'g');
-    boxHolder.setAttribute('class', 'overlay-passive');
-    boxHolder.setAttribute('transform', boxTransform);
-    const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', String(x0));
-    rect.setAttribute('y', String(y0));
-    rect.setAttribute('width', String(x1 - x0));
-    rect.setAttribute('height', String(y1 - y0));
-    rect.setAttribute('class', primary ? 'select-box' : 'select-box secondary');
-    rect.setAttribute('stroke-dasharray', `${size * 0.9} ${size * 0.7}`);
-    boxHolder.appendChild(rect);
-    overlay.appendChild(boxHolder);
-
-    if (!primary) continue;
-
-    if (setup && !part.skin) {
-      // Interactive Inkscape-style handles for the primary part.
-      const handles = document.createElementNS(SVG_NS, 'g');
-      handles.setAttribute('transform', boxTransform);
-      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-      if (handleMode === 'scale') {
-        const spots: [string, number, number][] = [
-          ['nw', x0, y0], ['ne', x1, y0], ['se', x1, y1], ['sw', x0, y1],
-          ['n', cx, y0], ['e', x1, cy], ['s', cx, y1], ['w', x0, cy],
-        ];
-        for (const [name, hx, hy] of spots) {
-          const s = size * 1.1;
-          const h = document.createElementNS(SVG_NS, 'rect');
-          h.setAttribute('x', String(hx - s / 2));
-          h.setAttribute('y', String(hy - s / 2));
-          h.setAttribute('width', String(s));
-          h.setAttribute('height', String(s));
-          h.setAttribute('class', `scale-handle handle-${name}`);
-          h.dataset.handle = name;
-          handles.appendChild(h);
-        }
-      } else {
-        // Inkscape's second handle set: corners rotate, sides SKEW.
-        for (const [name, hx, hy] of [
-          ['nw', x0, y0], ['ne', x1, y0], ['se', x1, y1], ['sw', x0, y1],
-        ] as [string, number, number][]) {
-          const h = document.createElementNS(SVG_NS, 'circle');
-          h.setAttribute('cx', String(hx));
-          h.setAttribute('cy', String(hy));
-          h.setAttribute('r', String(size * 0.9));
-          h.setAttribute('class', `rotate-handle handle-${name}`);
-          h.dataset.role = 'rotate-handle';
-          handles.appendChild(h);
-        }
-        for (const [name, hx, hy] of [
-          ['n', cx, y0], ['e', x1, cy], ['s', cx, y1], ['w', x0, cy],
-        ] as [string, number, number][]) {
-          const s = size * 1.0;
-          const h = document.createElementNS(SVG_NS, 'rect');
-          h.setAttribute('x', String(hx - s / 2));
-          h.setAttribute('y', String(hy - s / 2));
-          h.setAttribute('width', String(s));
-          h.setAttribute('height', String(s));
-          h.setAttribute('class', `skew-handle handle-${name}`);
-          h.dataset.skewSide = name;
-          handles.appendChild(h);
-        }
-      }
-      overlay.appendChild(handles);
-    } else {
-      // Animate mode: passive corner markers only (drag the body to rotate).
-      const boxCorners = document.createElementNS(SVG_NS, 'g');
-      boxCorners.setAttribute('class', 'overlay-passive');
-      boxCorners.setAttribute('transform', boxTransform);
-      for (const [hx, hy] of [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) {
-        const corner = document.createElementNS(SVG_NS, 'rect');
-        const s = size * 0.9;
-        corner.setAttribute('x', String(hx - s / 2));
-        corner.setAttribute('y', String(hy - s / 2));
-        corner.setAttribute('width', String(s));
-        corner.setAttribute('height', String(s));
-        corner.setAttribute('class', 'select-corner');
-        boxCorners.appendChild(corner);
-      }
-      overlay.appendChild(boxCorners);
-    }
-  }
-
-  renderDragGizmo(holder, size);
-  renderToolGizmo(size, t, rootTransform);
-
-  // The selected pivot: crosshair + ring, with a generous invisible grab circle.
-  // Drawn last (and in its own interactive group) so it stays on top; draggable only in
-  // Setup mode — moving a joint is a rig edit, not an animation edit.
-  const part = selectedPart();
-  if (part) {
-    const ep = effectivePivot(part, t);
-    const px = ep.x, py = ep.y;
-    const cross = document.createElementNS(SVG_NS, 'g');
-    cross.setAttribute('class', setup ? 'pivot-handle' : 'pivot-handle locked');
-    if (setup) cross.dataset.role = 'pivot';
-    if (rootTransform) cross.setAttribute('transform', rootTransform);
-    cross.innerHTML =
-      `<circle class="pivot-grab" cx="${px}" cy="${py}" r="${size * 1.6}" />` +
-      `<circle class="pivot-ring" cx="${px}" cy="${py}" r="${size * 1.1}" />` +
-      `<circle class="pivot-dot" cx="${px}" cy="${py}" r="${size * 0.3}" />` +
-      `<line x1="${px - size * 2}" y1="${py}" x2="${px + size * 2}" y2="${py}" />` +
-      `<line x1="${px}" y1="${py - size * 2}" x2="${px}" y2="${py + size * 2}" />`;
-    overlay.appendChild(cross);
-  }
-  drawSnapMarker();
-}
-
-/** The classic bone silhouette between two points (joint fat end, pointed tip). */
-function boneKitePath(p: { x: number; y: number }, q: { x: number; y: number }, size: number): string {
-  const dx = q.x - p.x, dy = q.y - p.y;
-  const len = Math.hypot(dx, dy);
-  if (len < 1e-6) return '';
-  const ux = dx / len, uy = dy / len;
-  const w = Math.min(len * 0.18, size * 1.6);
-  const bx = p.x + ux * Math.min(len * 0.22, size * 2);
-  const by = p.y + uy * Math.min(len * 0.22, size * 2);
-  return (
-    `<path d="M ${p.x},${p.y} L ${bx - uy * w},${by + ux * w} L ${q.x},${q.y} ` +
-    `L ${bx + uy * w},${by - ux * w} Z" />` +
-    `<circle cx="${p.x}" cy="${p.y}" r="${w * 0.5}" />`
-  );
-}
-
-/** Rive/Blender-style axis gizmo for the translate/rotate tools, at the live pivot. */
-function renderToolGizmo(size: number, t: number | null, rootTransform: string): void {
-  if (!overlay || state.mode !== 'rig') return;
-  if (state.tool !== 'translate' && state.tool !== 'rotate') return;
-  const part = selectedPart();
-  if (!part || part.skin) return;
-  const p = effectivePivot(part, t);
-  const g = document.createElementNS(SVG_NS, 'g');
-  g.setAttribute('class', 'tool-gizmo');
-  if (rootTransform) g.setAttribute('transform', rootTransform);
-
-  if (state.tool === 'translate') {
-    const len = size * 8;
-    const head = size * 1.4;
-    const box = size * 1.5;
-    g.innerHTML =
-      // X axis (red): line, arrow head, invisible fat hit line
-      `<line class="gizmo-axis-x" x1="${p.x}" y1="${p.y}" x2="${p.x + len}" y2="${p.y}" />` +
-      `<path class="gizmo-axis-x head" d="M ${p.x + len + head},${p.y} L ${p.x + len},${p.y - head * 0.6} L ${p.x + len},${p.y + head * 0.6} Z" />` +
-      `<line class="gizmo-hit" data-gizmo-axis="x" x1="${p.x + box}" y1="${p.y}" x2="${p.x + len + head}" y2="${p.y}" />` +
-      // Y axis (green)
-      `<line class="gizmo-axis-y" x1="${p.x}" y1="${p.y}" x2="${p.x}" y2="${p.y + len}" />` +
-      `<path class="gizmo-axis-y head" d="M ${p.x},${p.y + len + head} L ${p.x - head * 0.6},${p.y + len} L ${p.x + head * 0.6},${p.y + len} Z" />` +
-      `<line class="gizmo-hit" data-gizmo-axis="y" x1="${p.x}" y1="${p.y + box}" x2="${p.x}" y2="${p.y + len + head}" />` +
-      // Free-move square in the middle
-      `<rect class="gizmo-free" data-gizmo-axis="xy" x="${p.x - box}" y="${p.y - box}" width="${box * 2}" height="${box * 2}" />`;
-  } else {
-    const r = size * 7;
-    g.innerHTML =
-      `<circle class="gizmo-ring-visual" cx="${p.x}" cy="${p.y}" r="${r}" />` +
-      `<circle class="gizmo-ring-hit" data-role="gizmo-ring" cx="${p.x}" cy="${p.y}" r="${r}" />`;
-  }
-  overlay.appendChild(g);
-}
-
-/** Rotation arc + angle readout, translation deltas, or scale % while a drag is live. */
-function renderDragGizmo(holder: SVGGElement, size: number): void {
-  if (!drag || drag.kind === 'pan' || drag.kind === 'placeBone' || drag.kind === 'nodeMarquee') {
-    // Bone placement previews the segment being drawn.
-    if (drag?.kind === 'placeBone' && drag.current) {
-      const ghost = document.createElementNS(SVG_NS, 'g');
-      ghost.setAttribute('class', 'null-glyph bone placing');
-      ghost.innerHTML = boneKitePath(drag.originRoot, drag.current, size);
-      holder.appendChild(ghost);
-    }
-    return;
-  }
-  if (!drag.active) return;
-
-  if (drag.kind === 'rotate' && drag.current) {
-    const p = { x: drag.pivotX, y: drag.pivotY };
-    const r = size * 5;
-    const a0 = drag.startAngle;
-    const a1 = Math.atan2(drag.current.y - p.y, drag.current.x - p.x);
-    let delta = a1 - a0;
-    // Normalize the drawn arc into (-2π, 2π) so multi-turn wind-ups stay readable.
-    while (delta > Math.PI * 2) delta -= Math.PI * 2;
-    while (delta < -Math.PI * 2) delta += Math.PI * 2;
-
-    const sx = p.x + r * Math.cos(a0), sy = p.y + r * Math.sin(a0);
-    const ex = p.x + r * Math.cos(a0 + delta), ey = p.y + r * Math.sin(a0 + delta);
-    const largeArc = Math.abs(delta) > Math.PI ? 1 : 0;
-    const sweep = delta > 0 ? 1 : 0;
-
-    const arc = document.createElementNS(SVG_NS, 'path');
-    arc.setAttribute(
-      'd',
-      `M ${p.x},${p.y} L ${sx},${sy} A ${r} ${r} 0 ${largeArc} ${sweep} ${ex},${ey} Z`,
-    );
-    arc.setAttribute('class', 'gizmo-arc');
-    holder.appendChild(arc);
-
-    const line = document.createElementNS(SVG_NS, 'line');
-    line.setAttribute('x1', String(p.x));
-    line.setAttribute('y1', String(p.y));
-    line.setAttribute('x2', String(drag.current.x));
-    line.setAttribute('y2', String(drag.current.y));
-    line.setAttribute('class', 'gizmo-line');
-    line.setAttribute('stroke-dasharray', `${size * 0.7} ${size * 0.5}`);
-    holder.appendChild(line);
-
-    addGizmoText(
-      holder,
-      drag.current.x + size * 1.5,
-      drag.current.y - size * 1.5,
-      `${drag.currentDelta.toFixed(1)}°${drag.snapped ? ' (snap)' : ''}`,
-      size,
-    );
-  } else if (drag.kind === 'translate' && drag.current) {
-    const dx = drag.current.x - drag.startX;
-    const dy = drag.current.y - drag.startY;
-    const line = document.createElementNS(SVG_NS, 'line');
-    line.setAttribute('x1', String(drag.startX));
-    line.setAttribute('y1', String(drag.startY));
-    line.setAttribute('x2', String(drag.current.x));
-    line.setAttribute('y2', String(drag.current.y));
-    line.setAttribute('class', 'gizmo-line');
-    line.setAttribute('stroke-dasharray', `${size * 0.7} ${size * 0.5}`);
-    holder.appendChild(line);
-    addGizmoText(
-      holder,
-      drag.current.x + size * 1.5,
-      drag.current.y - size * 1.5,
-      `Δ ${round1(dx)}, ${round1(dy)}`,
-      size,
-    );
-  } else if (drag.kind === 'scale' && drag.current) {
-    addGizmoText(
-      holder,
-      drag.current.x + size * 1.5,
-      drag.current.y - size * 1.5,
-      `${Math.round(drag.part.rest.sx * 100)}% × ${Math.round(drag.part.rest.sy * 100)}%`,
-      size,
-    );
-  }
-}
-
-function addGizmoText(holder: SVGGElement, x: number, y: number, text: string, size: number): void {
-  const bg = document.createElementNS(SVG_NS, 'text');
-  bg.setAttribute('x', String(x));
-  bg.setAttribute('y', String(y));
-  bg.setAttribute('class', 'gizmo-text-halo');
-  bg.setAttribute('font-size', String(size * 2));
-  bg.textContent = text;
-  holder.appendChild(bg);
-  const t = document.createElementNS(SVG_NS, 'text');
-  t.setAttribute('x', String(x));
-  t.setAttribute('y', String(y));
-  t.setAttribute('class', 'gizmo-text');
-  t.setAttribute('font-size', String(size * 2));
-  t.textContent = text;
-  holder.appendChild(t);
-}
-
-function renderNodeHandles(part: RigPart): void {
-  const g = partGroups.get(part.id)!;
-  // With a path "entered", node editing scopes to it; otherwise every path is editable.
-  const paths = state.selectedPathId
-    ? part.paths.filter((p) => p.id === state.selectedPathId)
-    : part.paths;
-  // Prune stale node selections (path gone, or the path shrank under them).
-  for (const key of [...selectedNodes]) {
-    const { pathId, cmdIndex } = parseNodeKey(key);
-    if (!paths.some((p) => p.id === pathId && cmdIndex < parsePath(p.d).length)) {
-      selectedNodes.delete(key);
-    }
-  }
-  if (selectedNode && !selectedNodes.has(nodeKey(selectedNode.pathId, selectedNode.cmdIndex))) {
-    selectedNode = null;
-  }
-  for (const path of paths) {
-    const cmds = parsePath(path.d);
-    const types = path.nodeTypes ?? '';
-    const holder = document.createElementNS(SVG_NS, 'g');
-    // Same accumulated transform as the drawn path (root + part + path), so raw path
-    // coordinates land exactly on the rendered artwork.
-    const rootTransform = rootGroup?.getAttribute('transform') ?? '';
-    const groupTransform = g.getAttribute('transform') ?? '';
-    holder.setAttribute(
-      'transform',
-      [rootTransform, groupTransform, path.transform].filter(Boolean).join(' '),
-    );
-    const size = handleSize();
-
-    // Handle lines first (underneath): control points connect to their nodes —
-    // x1 to the segment's start node, x2 to its end node.
-    let prev: { x: number; y: number } | null = null;
-    cmds.forEach((c) => {
-      if (c.cmd === 'Z') return;
-      if (c.cmd === 'C' && prev) {
-        addHandleLine(holder, prev.x, prev.y, c.x1, c.y1);
-        addHandleLine(holder, c.x, c.y, c.x2, c.y2);
-      }
-      prev = { x: (c as { x: number }).x, y: (c as { y: number }).y };
-    });
-
-    let nodeIdx = -1;
-    cmds.forEach((c, i) => {
-      if (c.cmd === 'Z') return;
-      nodeIdx++;
-      if (c.cmd === 'C') {
-        addHandle(holder, path.id, i, 'x1', c.x1, c.y1, size * 0.6, 'ctrl');
-        addHandle(holder, path.id, i, 'x2', c.x2, c.y2, size * 0.6, 'ctrl');
-      }
-      const isSelected = selectedNodes.has(nodeKey(path.id, i));
-      addHandle(
-        holder, path.id, i, 'x',
-        (c as { x: number }).x, (c as { y: number }).y,
-        size * (isSelected ? 1.05 : 0.8), 'node', isSelected,
-        types[nodeIdx], // persistent type tints the node
-      );
-    });
-    overlay!.appendChild(holder);
-  }
-}
-
-function addHandleLine(holder: SVGGElement, x1: number, y1: number, x2: number, y2: number): void {
-  const line = document.createElementNS(SVG_NS, 'line');
-  line.setAttribute('x1', String(x1));
-  line.setAttribute('y1', String(y1));
-  line.setAttribute('x2', String(x2));
-  line.setAttribute('y2', String(y2));
-  line.setAttribute('class', 'handle-line');
-  holder.appendChild(line);
-}
-
-/**
- * A node/control handle. Node endpoints take Inkscape's shape language: corner
- * ('c') = diamond, smooth ('s') = square, symmetric ('z') = circle; untyped nodes
- * are small circles. Control points are always small circles.
- */
-function addHandle(
-  holder: SVGGElement, pathId: string, cmdIndex: number,
-  field: 'x' | 'x1' | 'x2', x: number, y: number, r: number, kind: 'node' | 'ctrl',
-  selected = false, typeChar?: string,
-): void {
-  let c: SVGElement;
-  if (kind === 'node' && typeChar === 'c') {
-    c = document.createElementNS(SVG_NS, 'rect');
-    c.setAttribute('x', String(x - r * 0.9));
-    c.setAttribute('y', String(y - r * 0.9));
-    c.setAttribute('width', String(r * 1.8));
-    c.setAttribute('height', String(r * 1.8));
-    c.setAttribute('transform', `rotate(45 ${x} ${y})`); // diamond
-  } else if (kind === 'node' && typeChar === 's') {
-    c = document.createElementNS(SVG_NS, 'rect');
-    c.setAttribute('x', String(x - r * 0.85));
-    c.setAttribute('y', String(y - r * 0.85));
-    c.setAttribute('width', String(r * 1.7));
-    c.setAttribute('height', String(r * 1.7));
-  } else {
-    c = document.createElementNS(SVG_NS, 'circle');
-    c.setAttribute('cx', String(x));
-    c.setAttribute('cy', String(y));
-    c.setAttribute('r', String(r));
-  }
-  const typeClass =
-    typeChar === 's' ? ' nt-s' : typeChar === 'z' ? ' nt-z' : typeChar === 'c' ? ' nt-c' : '';
-  c.setAttribute(
-    'class',
-    (kind === 'node' ? 'node-handle' : 'ctrl-handle') +
-      (selected ? ' selected' : '') + typeClass,
-  );
-  c.dataset.role = 'node';
-  c.dataset.pathId = pathId;
-  c.dataset.cmdIndex = String(cmdIndex);
-  c.dataset.field = field;
-  holder.appendChild(c);
-}
-
-/** Handle radius in user units, compensating for on-screen scale. */
-function handleSize(): number {
-  if (!svg) return 4;
-  const ctm = svg.getScreenCTM();
-  const scale = ctm ? Math.hypot(ctm.a, ctm.b) : 1;
-  return 6 / scale;
 }
 
 // ---- Interactions ----
-
-type DragState =
-  | {
-      kind: 'rotate';
-      /** Every selected part with its starting (absolute) value; setup writes rest. */
-      targets: { part: RigPart; start: number }[];
-      pivotX: number; pivotY: number; // primary part's live pivot, root coords
-      startAngle: number;
-      current: { x: number; y: number } | null;
-      currentDelta: number;
-      snapped: boolean;
-      startClient: { x: number; y: number };
-      active: boolean;
-    }
-  | {
-      kind: 'translate';
-      /** invLinear maps a root-space delta into each part's parent-chain space. */
-      targets: { part: RigPart; startTx: number; startTy: number; invLinear: Mat }[];
-      startX: number; startY: number;
-      current: { x: number; y: number } | null;
-      startClient: { x: number; y: number };
-      active: boolean;
-      /** Gizmo axis constraint: deltas lock to root-space x or y. */
-      axis: 'x' | 'y' | null;
-      /** Click (no movement) on the already-primary part cycles scale↔rotate handles. */
-      toggleOnClick: boolean;
-      /** Frozen snap features (start pose), computed lazily on the first snapped frame. */
-      snapFeatures?: { moving: SnapCandidate[]; targets: SnapCandidate[] } | null;
-    }
-  | {
-      kind: 'ik';
-      /** Nearest ancestor (link 2, e.g. forearm) — rotated by delta2. */
-      p1: RigPart;
-      /** Second ancestor (link 1, e.g. upper arm) — rotated by delta1; null = aim. */
-      p2: RigPart | null;
-      /** Grab point in the clicked part's full-pose frame (rides the chain). */
-      grabLocal: { x: number; y: number };
-      grabbed: RigPart;
-      startClient: { x: number; y: number };
-      active: boolean;
-    }
-  | { kind: 'boneTip'; part: RigPart; startClient: { x: number; y: number }; active: boolean }
-  | {
-      kind: 'placeBone';
-      originRoot: { x: number; y: number };
-      current: { x: number; y: number } | null;
-    }
-  | {
-      kind: 'scale';
-      part: RigPart;
-      handle: string; // nw|ne|se|sw|n|e|s|w
-      startSx: number; startSy: number;
-      startTx: number; startTy: number;
-      grabLocal: { x: number; y: number };
-      anchorLocal: { x: number; y: number };
-      anchorRoot: { x: number; y: number };
-      /** root → part-local at drag start (frozen frame for stable factors). */
-      invStart: Mat;
-      invChainLinear: Mat;
-      current: { x: number; y: number } | null;
-      startClient: { x: number; y: number };
-      active: boolean;
-    }
-  | {
-      kind: 'skew';
-      part: RigPart;
-      side: 'n' | 'e' | 's' | 'w';
-      startTanKx: number; startTanKy: number;
-      startTx: number; startTy: number;
-      grabLocal: { x: number; y: number };
-      anchorLocal: { x: number; y: number };
-      anchorRoot: { x: number; y: number };
-      invStart: Mat;
-      invChainLinear: Mat;
-      current: { x: number; y: number } | null;
-      startClient: { x: number; y: number };
-      active: boolean;
-    }
-  | {
-      kind: 'pivot';
-      part: RigPart;
-      /** Pivot + own translate at drag start: compensation is solved absolutely from
-       * these so per-move rounding never accumulates into artwork drift. */
-      startPivot: { x: number; y: number };
-      startTranslate: { x: number; y: number };
-      startClient: { x: number; y: number };
-      active: boolean;
-    }
-  | {
-      kind: 'node'; part: RigPart; pathId: string; cmdIndex: number;
-      field: 'x' | 'x1' | 'x2';
-      /** Opposite handle to mirror while dragging a control point (smooth nodes). */
-      mirror: { cmdIndex: number; field: 'x1' | 'x2'; len: number; matchLen: boolean } | null;
-      startClient: { x: number; y: number }; active: boolean;
-    }
-  | {
-      kind: 'nodeMarquee';
-      startClient: { x: number; y: number };
-      rect: HTMLDivElement;
-      additive: boolean;
-    }
-  | {
-      kind: 'bendSegment';
-      part: RigPart;
-      pathId: string;
-      /** The L/C command forming the grabbed segment (bends between its two nodes). */
-      cmdIndex: number;
-      /** Curve parameter of the grab point, clamped away from the endpoints. */
-      t: number;
-      startClient: { x: number; y: number };
-      active: boolean;
-    }
-  | { kind: 'pan'; startClient: { x: number; y: number }; startRect: { x: number; y: number; w: number; h: number } };
-
-let drag: DragState | null = null;
 
 /** The start point of the segment ending at cmds[i] (previous node, Z-aware). */
 function segmentStart(cmds: PathCmd[], i: number): { x: number; y: number } | null {
@@ -1562,13 +605,13 @@ function activateDrag(
 }
 
 function wireInteractions(): void {
-  if (!svg) return;
+  if (!ctx.svg) return;
 
   // Middle-drag pan + wheel zoom (navigation, not editing — no checkpoints).
-  svg.addEventListener('wheel', (ev) => {
-    if (!viewRect || !svg) return;
+  ctx.svg.addEventListener('wheel', (ev) => {
+    if (!ctx.viewRect || !ctx.svg) return;
     ev.preventDefault();
-    const m = svg.getScreenCTM();
+    const m = ctx.svg.getScreenCTM();
     if (!m) return;
     const p = svgPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
     const factor = Math.pow(1.0015, -ev.deltaY);
@@ -1577,7 +620,7 @@ function wireInteractions(): void {
 
   // Double-click steps INTO things, SVG-editor style: group → part → path. Escape or
   // a blank click steps back out.
-  svg.addEventListener('dblclick', (ev) => {
+  ctx.svg.addEventListener('dblclick', (ev) => {
     // Resolve the ARTWORK under the cursor with elementsFromPoint, skipping overlay
     // widgets: the first click of a double-click selects a part and draws its pivot
     // grab circle — often right where the second click lands. The overlay must never
@@ -1589,8 +632,8 @@ function wireInteractions(): void {
       // path, drop the node selection, close entered groups, and deselect everything.
       if (state.editorMode === 'setup' && state.mode === 'nodes') {
         state.selectedPathId = null;
-        selectedNodes.clear();
-        selectedNode = null;
+        ctx.selectedNodes.clear();
+        ctx.selectedNode = null;
         clearGroupEntry();
         selectPart(null);
         notify();
@@ -1601,12 +644,12 @@ function wireInteractions(): void {
     const { part, pathEl } = hit;
     // First: open the outermost still-closed group and select the next level.
     const closed = ancestorChain(part).find(
-      (a) => a.kind === 'group' && !enteredGroups.has(a.id),
+      (a) => a.kind === 'group' && !ctx.enteredGroups.has(a.id),
     );
     if (closed) {
-      enteredGroups.add(closed.id);
+      ctx.enteredGroups.add(closed.id);
       const next = ancestorChain(part).find(
-        (a) => a.kind === 'group' && !enteredGroups.has(a.id),
+        (a) => a.kind === 'group' && !ctx.enteredGroups.has(a.id),
       );
       selectPart(next?.id ?? part.id);
       notify();
@@ -1623,17 +666,17 @@ function wireInteractions(): void {
     renderPose();
   });
 
-  svg.addEventListener('pointerdown', (ev) => {
+  ctx.svg.addEventListener('pointerdown', (ev) => {
     const target = ev.target as Element;
     const doc = state.doc;
     if (!doc) return;
 
     // Bone placement: press to set the origin (the joint), drag to aim, release to
     // set the tip — like drawing a bone in Rive/Blender.
-    if (placingBone && ev.button === 0) {
+    if (ctx.placingBone && ev.button === 0) {
       const p = pointerInRoot(ev);
-      drag = { kind: 'placeBone', originRoot: { x: p.x, y: p.y }, current: null };
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      ctx.drag = { kind: 'placeBone', originRoot: { x: p.x, y: p.y }, current: null };
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
 
@@ -1645,7 +688,7 @@ function wireInteractions(): void {
       const t = poseTime();
       const setup = state.editorMode === 'setup';
       const axisAttr = target.dataset.gizmoAxis;
-      drag = {
+      ctx.drag = {
         kind: 'translate',
         targets: selectedParts().map((sp) => ({
           part: sp,
@@ -1660,7 +703,7 @@ function wireInteractions(): void {
         axis: axisAttr === 'x' || axisAttr === 'y' ? axisAttr : null,
         toggleOnClick: false,
       };
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
     if (target instanceof SVGElement && target.dataset.role === 'gizmo-ring') {
@@ -1669,7 +712,7 @@ function wireInteractions(): void {
       const p = pointerInRoot(ev);
       const setup = state.editorMode === 'setup';
       const pivot = effectivePivot(part, poseTime());
-      drag = {
+      ctx.drag = {
         kind: 'rotate',
         targets: selectedParts().map((sp) => ({
           part: sp,
@@ -1683,7 +726,7 @@ function wireInteractions(): void {
         startClient: { x: ev.clientX, y: ev.clientY },
         active: false,
       };
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
 
@@ -1691,16 +734,16 @@ function wireInteractions(): void {
     if (target instanceof SVGElement && target.dataset.role === 'bone-tip') {
       const part = selectedPart();
       if (!part) return;
-      drag = { kind: 'boneTip', part, startClient: { x: ev.clientX, y: ev.clientY }, active: false };
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      ctx.drag = { kind: 'boneTip', part, startClient: { x: ev.clientX, y: ev.clientY }, active: false };
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
 
     if (ev.button === 1) {
       ev.preventDefault(); // no middle-click autoscroll
-      drag = { kind: 'pan', startClient: { x: ev.clientX, y: ev.clientY }, startRect: { ...viewRect! } };
-      svg!.style.cursor = 'grabbing';
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      ctx.drag = { kind: 'pan', startClient: { x: ev.clientX, y: ev.clientY }, startRect: { ...ctx.viewRect! } };
+      ctx.svg!.style.cursor = 'grabbing';
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
     if (ev.button !== 0) return;
@@ -1708,7 +751,7 @@ function wireInteractions(): void {
     // Scale handle (Setup mode)
     if (target instanceof SVGElement && target.dataset.handle) {
       const part = selectedPart();
-      const g = part ? partGroups.get(part.id) : null;
+      const g = part ? ctx.partGroups.get(part.id) : null;
       if (!part || !g) return;
       const box = g.getBBox();
       const pad = handleSize() * 0.6;
@@ -1732,7 +775,7 @@ function wireInteractions(): void {
       // drag start so scale factors are measured in a stable local frame.
       const mStart = matrixOfTransform(groupTransformOf(part, t));
       const chainM = chainMatOf(part, t);
-      drag = {
+      ctx.drag = {
         kind: 'scale',
         part,
         handle: target.dataset.handle,
@@ -1747,7 +790,7 @@ function wireInteractions(): void {
         startClient: { x: ev.clientX, y: ev.clientY },
         active: false,
       };
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
 
@@ -1755,7 +798,7 @@ function wireInteractions(): void {
     // opposite edge pinned — Inkscape's rotate-mode side handles.
     if (target instanceof SVGElement && target.dataset.skewSide) {
       const part = selectedPart();
-      const g = part ? partGroups.get(part.id) : null;
+      const g = part ? ctx.partGroups.get(part.id) : null;
       if (!part || !g) return;
       const box = g.getBBox();
       const pad = handleSize() * 0.6;
@@ -1772,7 +815,7 @@ function wireInteractions(): void {
       const spot = spots[side];
       const t = poseTime();
       const mStart = matrixOfTransform(groupTransformOf(part, t));
-      drag = {
+      ctx.drag = {
         kind: 'skew',
         part,
         side,
@@ -1788,7 +831,7 @@ function wireInteractions(): void {
         startClient: { x: ev.clientX, y: ev.clientY },
         active: false,
       };
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
 
@@ -1798,7 +841,7 @@ function wireInteractions(): void {
       if (!part) return;
       const p = pointerInRoot(ev);
       const pivot = effectivePivot(part, poseTime());
-      drag = {
+      ctx.drag = {
         kind: 'rotate',
         targets: selectedParts().map((sp) => ({ part: sp, start: sp.rest.rotate })),
         pivotX: pivot.x, pivotY: pivot.y,
@@ -1809,7 +852,7 @@ function wireInteractions(): void {
         startClient: { x: ev.clientX, y: ev.clientY },
         active: false,
       };
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
 
@@ -1824,13 +867,13 @@ function wireInteractions(): void {
         // selection keeps the group (so dragging moves them all); plain click solos.
         const key = nodeKey(pathId, cmdIndex);
         if (ev.shiftKey) {
-          if (selectedNodes.has(key)) selectedNodes.delete(key);
-          else selectedNodes.add(key);
-        } else if (!selectedNodes.has(key)) {
-          selectedNodes.clear();
-          selectedNodes.add(key);
+          if (ctx.selectedNodes.has(key)) ctx.selectedNodes.delete(key);
+          else ctx.selectedNodes.add(key);
+        } else if (!ctx.selectedNodes.has(key)) {
+          ctx.selectedNodes.clear();
+          ctx.selectedNodes.add(key);
         }
-        selectedNode = selectedNodes.has(key) ? { pathId, cmdIndex } : null;
+        ctx.selectedNode = ctx.selectedNodes.has(key) ? { pathId, cmdIndex } : null;
       }
       const path = part.paths.find((p) => p.id === pathId);
       const nodeDrag: DragState = {
@@ -1851,8 +894,8 @@ function wireInteractions(): void {
         editNodeStructure(nodeDrag, ev.altKey ? 'insert' : 'delete');
         return;
       }
-      drag = nodeDrag;
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      ctx.drag = nodeDrag;
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       renderOverlay(); // show the new node selection immediately
       return;
     }
@@ -1861,7 +904,7 @@ function wireInteractions(): void {
     if (pivotEl) {
       const part = selectedPart();
       if (!part) return;
-      drag = {
+      ctx.drag = {
         kind: 'pivot',
         part,
         startPivot: { ...part.pivot },
@@ -1869,7 +912,7 @@ function wireInteractions(): void {
         startClient: { x: ev.clientX, y: ev.clientY },
         active: false,
       };
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
 
@@ -1894,24 +937,24 @@ function wireInteractions(): void {
         }
       }
       if (bestBend) {
-        drag = {
+        ctx.drag = {
           kind: 'bendSegment', part, pathId: bestBend.path.id,
           cmdIndex: bestBend.cmdIndex, t: bestBend.t,
           startClient: { x: ev.clientX, y: ev.clientY }, active: false,
         };
-        try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+        try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
         return;
       }
       const rect = document.createElement('div');
       rect.className = 'node-marquee';
-      svg!.parentElement?.appendChild(rect);
-      drag = {
+      ctx.svg!.parentElement?.appendChild(rect);
+      ctx.drag = {
         kind: 'nodeMarquee',
         startClient: { x: ev.clientX, y: ev.clientY },
         rect,
         additive: ev.shiftKey,
       };
-      try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
     }
 
@@ -1924,7 +967,7 @@ function wireInteractions(): void {
       // never hijacked back to its group.
       if (part && state.mode === 'rig' && !state.selectedPartIds.includes(part.id)) {
         const closed = ancestorChain(part).find(
-          (a) => a.kind === 'group' && !enteredGroups.has(a.id),
+          (a) => a.kind === 'group' && !ctx.enteredGroups.has(a.id),
         );
         if (closed) part = closed;
       }
@@ -1961,13 +1004,13 @@ function wireInteractions(): void {
             const grabLocal = applyMat(
               invertMat(matrixOfTransform(fullPoseTransform(part, t))), p.x, p.y,
             );
-            drag = {
+            ctx.drag = {
               kind: 'ik', p1, p2, grabbed: part,
               grabLocal: { x: grabLocal.x, y: grabLocal.y },
               startClient: { x: ev.clientX, y: ev.clientY },
               active: false,
             };
-            try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+            try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
             notify();
             return;
           }
@@ -1975,7 +1018,7 @@ function wireInteractions(): void {
         }
 
         if (action === 'translate') {
-          drag = {
+          ctx.drag = {
             kind: 'translate',
             targets: selectedParts().map((sp) => ({
               part: sp,
@@ -1993,7 +1036,7 @@ function wireInteractions(): void {
           };
         } else {
           const pivot = effectivePivot(part, t);
-          drag = {
+          ctx.drag = {
             kind: 'rotate',
             targets: selectedParts().map((sp) => ({
               part: sp,
@@ -2010,7 +1053,7 @@ function wireInteractions(): void {
             active: false,
           };
         }
-        try { svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+        try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       }
       notify();
       return;
@@ -2021,90 +1064,90 @@ function wireInteractions(): void {
     // path. No drag follows a blank click, so repaint the overlay here — notify()
     // only rebuilds the side panels, and the stale selection box would linger.
     state.selectedPathId = null;
-    enteredGroups.clear();
+    ctx.enteredGroups.clear();
     selectPart(null);
     notify();
     renderOverlay();
   });
 
-  svg.addEventListener('pointermove', (ev) => {
-    if (!drag) return;
+  ctx.svg.addEventListener('pointermove', (ev) => {
+    if (!ctx.drag) return;
 
-    if (drag.kind === 'pan') {
-      if (!svg || !viewRect) return;
-      const ctm = svg.getScreenCTM();
+    if (ctx.drag.kind === 'pan') {
+      if (!ctx.svg || !ctx.viewRect) return;
+      const ctm = ctx.svg.getScreenCTM();
       const scale = ctm ? Math.hypot(ctm.a, ctm.b) : 1;
-      viewRect.x = drag.startRect.x - (ev.clientX - drag.startClient.x) / scale;
-      viewRect.y = drag.startRect.y - (ev.clientY - drag.startClient.y) / scale;
+      ctx.viewRect.x = ctx.drag.startRect.x - (ev.clientX - ctx.drag.startClient.x) / scale;
+      ctx.viewRect.y = ctx.drag.startRect.y - (ev.clientY - ctx.drag.startClient.y) / scale;
       applyViewRect();
       return;
     }
-    if (drag.kind === 'placeBone') {
+    if (ctx.drag.kind === 'placeBone') {
       const p = pointerInRoot(ev);
-      drag.current = { x: p.x, y: p.y };
+      ctx.drag.current = { x: p.x, y: p.y };
       renderOverlay(); // live bone preview
       return;
     }
-    if (drag.kind === 'nodeMarquee') {
-      const host = svg!.parentElement!.getBoundingClientRect();
-      const x0 = Math.min(drag.startClient.x, ev.clientX);
-      const y0 = Math.min(drag.startClient.y, ev.clientY);
-      drag.rect.style.left = `${x0 - host.left}px`;
-      drag.rect.style.top = `${y0 - host.top}px`;
-      drag.rect.style.width = `${Math.abs(ev.clientX - drag.startClient.x)}px`;
-      drag.rect.style.height = `${Math.abs(ev.clientY - drag.startClient.y)}px`;
+    if (ctx.drag.kind === 'nodeMarquee') {
+      const host = ctx.svg!.parentElement!.getBoundingClientRect();
+      const x0 = Math.min(ctx.drag.startClient.x, ev.clientX);
+      const y0 = Math.min(ctx.drag.startClient.y, ev.clientY);
+      ctx.drag.rect.style.left = `${x0 - host.left}px`;
+      ctx.drag.rect.style.top = `${y0 - host.top}px`;
+      ctx.drag.rect.style.width = `${Math.abs(ev.clientX - ctx.drag.startClient.x)}px`;
+      ctx.drag.rect.style.height = `${Math.abs(ev.clientY - ctx.drag.startClient.y)}px`;
       return;
     }
 
-    if (!activateDrag(drag, ev)) return;
+    if (!activateDrag(ctx.drag, ev)) return;
     const setup = state.editorMode === 'setup';
 
-    if (drag.kind === 'rotate') {
+    if (ctx.drag.kind === 'rotate') {
       const p = pointerInRoot(ev);
-      const angle = Math.atan2(p.y - drag.pivotY, p.x - drag.pivotX);
-      const deltaDeg = ((angle - drag.startAngle) * 180) / Math.PI;
-      drag.snapped = ev.ctrlKey;
-      drag.current = { x: p.x, y: p.y };
-      for (const { part, start } of drag.targets) {
+      const angle = Math.atan2(p.y - ctx.drag.pivotY, p.x - ctx.drag.pivotX);
+      const deltaDeg = ((angle - ctx.drag.startAngle) * 180) / Math.PI;
+      ctx.drag.snapped = ev.ctrlKey;
+      ctx.drag.current = { x: p.x, y: p.y };
+      for (const { part, start } of ctx.drag.targets) {
         let value = start + deltaDeg;
         if (ev.ctrlKey) value = Math.round(value / ROTATE_SNAP_DEGREES) * ROTATE_SNAP_DEGREES;
         value = round1(value);
-        if (part.id === drag.targets[0]?.part.id) drag.currentDelta = round1(value - start);
+        if (part.id === ctx.drag.targets[0]?.part.id) ctx.drag.currentDelta = round1(value - start);
         if (setup) part.rest.rotate = value;
         else setKeyframe(part.id, 'rotate', value);
       }
       renderPose();
       notifyTimelineOnly();
-    } else if (drag.kind === 'translate') {
+    } else if (ctx.drag.kind === 'translate') {
       const p = pointerInRoot(ev);
-      let dx = p.x - drag.startX;
-      let dy = p.y - drag.startY;
+      let dx = p.x - ctx.drag.startX;
+      let dy = p.y - ctx.drag.startY;
       // Axis lock (gizmo arrow or Ctrl) applies to the delta BEFORE snapping; the FREE
       // axis is the one still moving, so snapping can only correct along it — the lock
       // is never broken.
       let freeAxis: SnapAxis = null;
-      if (drag.axis === 'x') { dy = 0; freeAxis = 'x'; }
-      else if (drag.axis === 'y') { dx = 0; freeAxis = 'y'; }
+      if (ctx.drag.axis === 'x') { dy = 0; freeAxis = 'x'; }
+      else if (ctx.drag.axis === 'y') { dx = 0; freeAxis = 'y'; }
       else if (ev.ctrlKey) {
         // Ctrl constrains a free move to the dominant axis (Inkscape-style).
         if (Math.abs(dx) >= Math.abs(dy)) { dy = 0; freeAxis = 'x'; }
         else { dx = 0; freeAxis = 'y'; }
       }
-      snapMarker = null;
+      ctx.snapMarker = null;
       const primary = selectedPart();
       if (snappingActive() && primary) {
-        if (!drag.snapFeatures) drag.snapFeatures = translateSnapFeatures(primary, poseTime());
+        if (!ctx.drag.snapFeatures) ctx.drag.snapFeatures = translateSnapFeatures(primary, poseTime());
         const snapped = snapDelta(
-          drag.snapFeatures.moving, drag.snapFeatures.targets,
+          ctx.drag.snapFeatures.moving, ctx.drag.snapFeatures.targets,
           { dx, dy }, snapThreshold(), freeAxis,
         );
         dx = snapped.dx;
         dy = snapped.dy;
-        if (snapped.target) snapMarker = rootToUser(snapped.target);
+        if (snapped.target) ctx.snapMarker = rootToUser(snapped.target);
       }
       // The constrained point, so the dashed line + Δ readout show the applied move.
-      drag.current = { x: drag.startX + dx, y: drag.startY + dy };
-      for (const { part, startTx, startTy, invLinear } of drag.targets) {
+      ctx.drag.current = { x: ctx.drag.startX + dx, y: ctx.drag.startY + dy };
+      for (const { part, startTx, startTy, invLinear } of ctx.drag.targets) {
         const local = applyMat(invLinear, dx, dy);
         const tx = round1(startTx + local.x);
         const ty = round1(startTy + local.y);
@@ -2118,8 +1161,8 @@ function wireInteractions(): void {
       }
       renderPose();
       notifyTimelineOnly();
-    } else if (drag.kind === 'scale') {
-      const d = drag;
+    } else if (ctx.drag.kind === 'scale') {
+      const d = ctx.drag;
       const p = pointerInRoot(ev);
       d.current = { x: p.x, y: p.y };
       const local = applyMat(d.invStart, p.x, p.y);
@@ -2150,8 +1193,8 @@ function wireInteractions(): void {
       d.part.rest.tx = round1(d.startTx + deltaLocal.x);
       d.part.rest.ty = round1(d.startTy + deltaLocal.y);
       renderPose();
-    } else if (drag.kind === 'skew') {
-      const d = drag;
+    } else if (ctx.drag.kind === 'skew') {
+      const d = ctx.drag;
       const p = pointerInRoot(ev);
       d.current = { x: p.x, y: p.y };
       const local = applyMat(d.invStart, p.x, p.y);
@@ -2181,8 +1224,8 @@ function wireInteractions(): void {
       d.part.rest.tx = round1(d.startTx + deltaLocal.x);
       d.part.rest.ty = round1(d.startTy + deltaLocal.y);
       renderPose();
-    } else if (drag.kind === 'ik') {
-      const d = drag;
+    } else if (ctx.drag.kind === 'ik') {
+      const d = ctx.drag;
       const p = pointerInRoot(ev);
       const t = poseTime();
       // Current geometry (recomputed every move — the solve is incremental).
@@ -2205,16 +1248,16 @@ function wireInteractions(): void {
       }
       renderPose();
       notifyTimelineOnly();
-    } else if (drag.kind === 'boneTip') {
+    } else if (ctx.drag.kind === 'boneTip') {
       const p = pointerInRoot(ev);
-      const part = drag.part;
+      const part = ctx.drag.part;
       const local = applyMat(
         invertMat(matrixOfTransform(fullPoseTransform(part, poseTime()))), p.x, p.y,
       );
       part.boneTip = { x: round1(local.x), y: round1(local.y) };
       renderPose();
-    } else if (drag.kind === 'pivot') {
-      const d = drag;
+    } else if (ctx.drag.kind === 'pivot') {
+      const d = ctx.drag;
       const p = pointerInRoot(ev);
       const part = d.part;
       const t = poseTime();
@@ -2222,13 +1265,13 @@ function wireInteractions(): void {
       // joints. The pivot-compensation solve below then keeps the artwork fixed, so the
       // joint lands on the target WITHOUT moving the art.
       let sx = p.x, sy = p.y;
-      snapMarker = null;
+      ctx.snapMarker = null;
       if (snappingActive()) {
         const match = snapPoint({ x: sx, y: sy }, pivotSnapCandidates(part, t), snapThreshold());
         if (match) {
           sx = match.point.x;
           sy = match.point.y;
-          snapMarker = rootToUser(match.point);
+          ctx.snapMarker = rootToUser(match.point);
         }
       }
       // Un-apply the ancestors' motion so we work in the part's parent-chain frame
@@ -2280,8 +1323,8 @@ function wireInteractions(): void {
       part.rest.tx = round3(tn.x);
       part.rest.ty = round3(tn.y);
       renderPose();
-    } else if (drag.kind === 'bendSegment') {
-      const d = drag;
+    } else if (ctx.drag.kind === 'bendSegment') {
+      const d = ctx.drag;
       const path = d.part.paths.find((p) => p.id === d.pathId);
       if (!path) return;
       const cmds = parsePath(path.d);
@@ -2308,8 +1351,8 @@ function wireInteractions(): void {
           const ni = nodeIndexOf(cmds, d.cmdIndex);
           path.nodeTypes = types.slice(0, ni) + 'c' + types.slice(ni);
         }
-        selectedNodes.clear(); // command indexes shifted
-        selectedNode = null;
+        ctx.selectedNodes.clear(); // command indexes shifted
+        ctx.selectedNode = null;
         c = closing;
       }
       if (c.cmd === 'L') {
@@ -2337,20 +1380,20 @@ function wireInteractions(): void {
       c.x2 += (dx * b2) / denom;
       c.y2 += (dy * b2) / denom;
       path.d = serializePath(cmds);
-      svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
+      ctx.svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
       renderOverlay();
-    } else if (drag.kind === 'node') {
-      moveNode(drag, ev);
+    } else if (ctx.drag.kind === 'node') {
+      moveNode(ctx.drag, ev);
     }
   });
 
   const end = () => {
-    if (drag) {
-      if (drag.kind === 'pan') svg!.style.cursor = '';
-      if (drag.kind === 'placeBone') {
+    if (ctx.drag) {
+      if (ctx.drag.kind === 'pan') ctx.svg!.style.cursor = '';
+      if (ctx.drag.kind === 'placeBone') {
         // Release finishes the bone: origin = press point, tip = release point.
-        const origin = drag.originRoot;
-        const tipRoot = drag.current ?? origin;
+        const origin = ctx.drag.originRoot;
+        const tipRoot = ctx.drag.current ?? origin;
         const parent = selectedPart();
         const t = poseTime();
         const inv = parent
@@ -2373,37 +1416,37 @@ function wireInteractions(): void {
         cancelBonePlacement();
         selectPart(bone.id);
       }
-      if (drag.kind === 'nodeMarquee') {
+      if (ctx.drag.kind === 'nodeMarquee') {
         // Select every node handle whose center sits inside the rubber band.
-        const r = drag.rect.getBoundingClientRect();
-        drag.rect.remove();
-        if (!drag.additive) selectedNodes.clear();
+        const r = ctx.drag.rect.getBoundingClientRect();
+        ctx.drag.rect.remove();
+        if (!ctx.drag.additive) ctx.selectedNodes.clear();
         const isClick = r.width < 3 && r.height < 3;
-        if (!isClick && svg) {
-          for (const h of svg.querySelectorAll<SVGCircleElement>('.node-handle')) {
+        if (!isClick && ctx.svg) {
+          for (const h of ctx.svg.querySelectorAll<SVGCircleElement>('.node-handle')) {
             const hb = h.getBoundingClientRect();
             const cx = hb.left + hb.width / 2;
             const cy = hb.top + hb.height / 2;
             if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
-              selectedNodes.add(nodeKey(h.dataset.pathId!, Number(h.dataset.cmdIndex)));
+              ctx.selectedNodes.add(nodeKey(h.dataset.pathId!, Number(h.dataset.cmdIndex)));
             }
           }
         }
-        const last = [...selectedNodes].pop();
-        selectedNode = last ? parseNodeKey(last) : null;
+        const last = [...ctx.selectedNodes].pop();
+        ctx.selectedNode = last ? parseNodeKey(last) : null;
       }
       // A motionless click on the already-selected part cycles scale ↔ rotate handles.
-      if (drag.kind === 'translate' && !drag.active && drag.toggleOnClick) {
-        handleMode = handleMode === 'scale' ? 'rotate' : 'scale';
+      if (ctx.drag.kind === 'translate' && !ctx.drag.active && ctx.drag.toggleOnClick) {
+        ctx.handleMode = ctx.handleMode === 'scale' ? 'rotate' : 'scale';
       }
-      drag = null;
-      snapMarker = null; // drop any snap marker before the final repaint
+      ctx.drag = null;
+      ctx.snapMarker = null; // drop any snap marker before the final repaint
       notify();
       renderPose(); // clears gizmos + snap marker
     }
   };
-  svg.addEventListener('pointerup', end);
-  svg.addEventListener('pointercancel', end);
+  ctx.svg.addEventListener('pointerup', end);
+  ctx.svg.addEventListener('pointercancel', end);
 }
 
 /**
@@ -2473,31 +1516,6 @@ function shiftEndpoint(cmds: PathCmd[], cmdIndex: number, dx: number, dy: number
   c.x += dx; c.y += dy;
 }
 
-/** The holder matrix a path's raw coordinates render through (root+group+path). */
-function pathHolderMat(part: RigPart, path: RigPath): Mat {
-  const g = partGroups.get(part.id);
-  return matrixOfTransform([
-    rootGroup?.getAttribute('transform') ?? '',
-    g?.getAttribute('transform') ?? '',
-    path.transform,
-  ].filter(Boolean).join(' '));
-}
-
-/**
- * Pointer position in a path's raw-coordinate space, computed from the TRANSFORM
- * STRINGS (root pose + part chain + path transform) rather than a captured overlay
- * element — overlay rebuilds mid-drag would leave such an element detached, and a
- * detached element's screen matrix is garbage (nodes teleporting off-screen).
- * Going through the svg's own screen CTM keeps zoom/pan exact.
- */
-function pointerInPathSpace(
-  ev: PointerEvent, part: RigPart, path: RigPath,
-): { x: number; y: number } {
-  const m = svg!.getScreenCTM()!;
-  const user = svgPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
-  return applyMat(invertMat(pathHolderMat(part, path)), user.x, user.y);
-}
-
 function moveNode(d: Extract<DragState, { kind: 'node' }>, ev: PointerEvent): void {
   const path = d.part.paths.find((p) => p.id === d.pathId);
   if (!path) return;
@@ -2507,19 +1525,19 @@ function moveNode(d: Extract<DragState, { kind: 'node' }>, ev: PointerEvent): vo
   if (!c || c.cmd === 'Z') return;
 
   // Node drags (endpoints only) snap to other visible nodes of the same part's paths.
-  snapMarker = null;
+  ctx.snapMarker = null;
   if (d.field === 'x' && snappingActive()) {
     const scoped = state.selectedPathId
       ? d.part.paths.filter((p) => p.id === state.selectedPathId)
       : d.part.paths;
-    const moving = new Set(selectedNodes);
+    const moving = new Set(ctx.selectedNodes);
     moving.add(nodeKey(d.pathId, d.cmdIndex)); // exclude the dragged node even if unselected
     const { candidates, threshold } = nodeSnapCandidates(d.part, path, scoped, moving);
     const match = snapPoint({ x: local.x, y: local.y }, candidates, threshold);
     if (match) {
       local.x = match.point.x;
       local.y = match.point.y;
-      snapMarker = applyMat(pathHolderMat(d.part, path), local.x, local.y); // path → user
+      ctx.snapMarker = applyMat(pathHolderMat(d.part, path), local.x, local.y); // path → user
     }
   }
 
@@ -2527,13 +1545,13 @@ function moveNode(d: Extract<DragState, { kind: 'node' }>, ev: PointerEvent): vo
     const dx = local.x - c.x;
     const dy = local.y - c.y;
     const key = nodeKey(d.pathId, d.cmdIndex);
-    if (selectedNodes.has(key) && selectedNodes.size > 1) {
+    if (ctx.selectedNodes.has(key) && ctx.selectedNodes.size > 1) {
       // Multi-node drag: the same ROOT-space delta moves every selected endpoint,
       // converted into each path's own local frame.
       const draggedLin = linearOnly(pathHolderMat(d.part, path));
       const rootD = applyMat(draggedLin, dx, dy);
       const byPath = new Map<string, number[]>();
-      for (const k of selectedNodes) {
+      for (const k of ctx.selectedNodes) {
         const { pathId, cmdIndex } = parseNodeKey(k);
         if (!byPath.has(pathId)) byPath.set(pathId, []);
         byPath.get(pathId)!.push(cmdIndex);
@@ -2547,7 +1565,7 @@ function moveNode(d: Extract<DragState, { kind: 'node' }>, ev: PointerEvent): vo
         const pCmds = pathId === d.pathId ? cmds : parsePath(p.d);
         for (const idx of indexes) shiftEndpoint(pCmds, idx, localD.x, localD.y);
         p.d = serializePath(pCmds);
-        svg!.querySelector(`[data-path-id="${p.id}"]`)?.setAttribute('d', p.d);
+        ctx.svg!.querySelector(`[data-path-id="${p.id}"]`)?.setAttribute('d', p.d);
       }
       renderOverlay();
       return;
@@ -2581,7 +1599,7 @@ function moveNode(d: Extract<DragState, { kind: 'node' }>, ev: PointerEvent): vo
   }
 
   path.d = serializePath(cmds);
-  const el = svg!.querySelector(`[data-path-id="${path.id}"]`);
+  const el = ctx.svg!.querySelector(`[data-path-id="${path.id}"]`);
   el?.setAttribute('d', path.d);
   renderOverlay();
 }
@@ -2591,11 +1609,11 @@ function moveNode(d: Extract<DragState, { kind: 'node' }>, ev: PointerEvent): vo
 export type NodeOp = 'smooth' | 'symmetric' | 'retract' | 'toCurve' | 'toLine';
 
 export function hasSelectedNode(): boolean {
-  return selectedNodes.size > 0;
+  return ctx.selectedNodes.size > 0;
 }
 
 export function selectedNodeCount(): number {
-  return selectedNodes.size;
+  return ctx.selectedNodes.size;
 }
 
 /**
@@ -2609,26 +1627,26 @@ export function selectAllNodes(): number {
   const paths = state.selectedPathId
     ? part.paths.filter((p) => p.id === state.selectedPathId)
     : part.paths;
-  selectedNodes.clear();
+  ctx.selectedNodes.clear();
   for (const path of paths) {
     const cmds = parsePath(path.d);
     cmds.forEach((c, i) => {
       if (c.cmd === 'Z') return;
-      selectedNodes.add(nodeKey(path.id, i));
+      ctx.selectedNodes.add(nodeKey(path.id, i));
     });
   }
-  selectedNode = null;
+  ctx.selectedNode = null;
   renderOverlay();
-  return selectedNodes.size;
+  return ctx.selectedNodes.size;
 }
 
 /** The primary node's persistent type char ('c'/'s'/'z'), or null when untyped. */
 export function primaryNodeType(): string | null {
   const part = selectedPart();
-  if (!part || !selectedNode) return null;
-  const path = part.paths.find((p) => p.id === selectedNode!.pathId);
+  if (!part || !ctx.selectedNode) return null;
+  const path = part.paths.find((p) => p.id === ctx.selectedNode!.pathId);
   if (!path?.nodeTypes) return null;
-  return path.nodeTypes[nodeIndexOf(parsePath(path.d), selectedNode.cmdIndex)] ?? null;
+  return path.nodeTypes[nodeIndexOf(parsePath(path.d), ctx.selectedNode.cmdIndex)] ?? null;
 }
 
 /** Ops set the PERSISTENT node type too: smooth→'s', symmetric→'z', retract→'c'. */
@@ -2637,11 +1655,11 @@ const OP_FLAG: Partial<Record<NodeOp, string>> = { smooth: 's', symmetric: 'z', 
 /** Apply a node op to every selected node. Returns whether anything changed. */
 export function applyNodeOp(op: NodeOp): boolean {
   const part = selectedPart();
-  if (!part || selectedNodes.size === 0) return false;
+  if (!part || ctx.selectedNodes.size === 0) return false;
   let changed = false;
   const touched = new Set<RigPath>();
 
-  for (const key of selectedNodes) {
+  for (const key of ctx.selectedNodes) {
     const { pathId, cmdIndex } = parseNodeKey(key);
     const path = part.paths.find((p) => p.id === pathId);
     if (!path) continue;
@@ -2659,7 +1677,7 @@ export function applyNodeOp(op: NodeOp): boolean {
     }
   }
   for (const path of touched) {
-    svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
+    ctx.svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
   }
   if (changed) renderOverlay();
   return changed;
@@ -2716,10 +1734,10 @@ function applyNodeOpToCmds(cmds: PathCmd[], i: number, op: NodeOp): boolean {
 /** Delete every selected node (kept above each path's minimum). Main wires Delete. */
 export function deleteSelectedNodes(): boolean {
   const part = selectedPart();
-  if (!part || selectedNodes.size === 0) return false;
+  if (!part || ctx.selectedNodes.size === 0) return false;
   let changed = false;
   const byPath = new Map<string, number[]>();
-  for (const key of selectedNodes) {
+  for (const key of ctx.selectedNodes) {
     const { pathId, cmdIndex } = parseNodeKey(key);
     if (!byPath.has(pathId)) byPath.set(pathId, []);
     byPath.get(pathId)!.push(cmdIndex);
@@ -2741,11 +1759,11 @@ export function deleteSelectedNodes(): boolean {
     if (changed) {
       path.d = serializePath(cmds);
       path.nodeTypes = list;
-      svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
+      ctx.svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
     }
   }
-  selectedNodes.clear();
-  selectedNode = null;
+  ctx.selectedNodes.clear();
+  ctx.selectedNode = null;
   if (changed) renderOverlay();
   return changed;
 }
@@ -2753,9 +1771,9 @@ export function deleteSelectedNodes(): boolean {
 /** Nudge every selected node by a document-space delta (arrow keys in node mode). */
 export function nudgeSelectedNodes(dx: number, dy: number): boolean {
   const part = selectedPart();
-  if (!part || selectedNodes.size === 0) return false;
+  if (!part || ctx.selectedNodes.size === 0) return false;
   const byPath = new Map<string, number[]>();
-  for (const key of selectedNodes) {
+  for (const key of ctx.selectedNodes) {
     const { pathId, cmdIndex } = parseNodeKey(key);
     if (!byPath.has(pathId)) byPath.set(pathId, []);
     byPath.get(pathId)!.push(cmdIndex);
@@ -2767,7 +1785,7 @@ export function nudgeSelectedNodes(dx: number, dy: number): boolean {
     const cmds = parsePath(path.d);
     for (const idx of indexes) shiftEndpoint(cmds, idx, local.x, local.y);
     path.d = serializePath(cmds);
-    svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
+    ctx.svg!.querySelector(`[data-path-id="${path.id}"]`)?.setAttribute('d', path.d);
   }
   renderOverlay();
   return true;
@@ -2782,7 +1800,7 @@ function selectedNodeRefs(): SelectedNodeRef[] {
   const part = selectedPart();
   if (!part) return [];
   const refs: SelectedNodeRef[] = [];
-  for (const key of selectedNodes) {
+  for (const key of ctx.selectedNodes) {
     const { pathId, cmdIndex } = parseNodeKey(key);
     const path = part.paths.find((p) => p.id === pathId);
     if (path) refs.push({ path, cmdIndex });
@@ -2846,8 +1864,8 @@ export function deleteSelectedSegment(): boolean {
     });
   }
   part.paths.splice(idx + 1, 0, ...extra);
-  selectedNodes.clear();
-  selectedNode = null;
+  ctx.selectedNodes.clear();
+  ctx.selectedNode = null;
   state.selectedPathId = null; // un-scope so both resulting pieces stay node-selectable
   syncPartPathDom(part);
   renderPose();
@@ -2873,8 +1891,8 @@ export function joinSelectedNodes(mode: 'weld' | 'segment'): boolean {
     checkpoint();
     path.d = serializePath(piece.cmds);
     path.nodeTypes = piece.nodeTypes;
-    selectedNodes.clear();
-    selectedNode = null;
+    ctx.selectedNodes.clear();
+    ctx.selectedNode = null;
     syncPartPathDom(part);
     renderPose();
     notify();
@@ -2897,8 +1915,8 @@ export function joinSelectedNodes(mode: 'weld' | 'segment'): boolean {
   first.path.d = serializePath(piece.cmds);
   first.path.nodeTypes = piece.nodeTypes;
   part.paths = part.paths.filter((p) => p.id !== removedId);
-  selectedNodes.clear();
-  selectedNode = null;
+  ctx.selectedNodes.clear();
+  ctx.selectedNode = null;
   state.selectedPathId = null;
   syncPartPathDom(part);
   renderPose();
@@ -2926,40 +1944,15 @@ function editNodeStructure(d: Extract<DragState, { kind: 'node' }>, op: 'insert'
     if (types) path.nodeTypes = types.slice(0, ni) + types.slice(ni + 1);
   }
   // Command indexes shifted: a stale node selection would point at the wrong nodes.
-  selectedNodes.clear();
-  selectedNode = null;
+  ctx.selectedNodes.clear();
+  ctx.selectedNode = null;
   path.d = serializePath(cmds);
-  const el = svg!.querySelector(`[data-path-id="${path.id}"]`);
+  const el = ctx.svg!.querySelector(`[data-path-id="${path.id}"]`);
   el?.setAttribute('d', path.d);
   renderOverlay();
 }
 
-// ---- Coordinate helpers ----
-
-function svgPoint(x: number, y: number): DOMPoint {
-  const pt = svg!.createSVGPoint();
-  pt.x = x; pt.y = y;
-  return pt;
-}
-
 // ---- Snapping ----
-
-/** On-screen scale (user units → device px) of the current zoom. */
-function screenScaleOf(): number {
-  const ctm = svg?.getScreenCTM();
-  return ctm ? Math.hypot(ctm.a, ctm.b) : 1;
-}
-
-/** ~8 screen px expressed in root/user units (root pose is identity in Setup). */
-function snapThreshold(): number {
-  return 8 / screenScaleOf();
-}
-
-/** Map a root-space point into SVG user (viewBox) space, where overlay markers live. */
-function rootToUser(p: { x: number; y: number }): { x: number; y: number } {
-  const m = matrixOfTransform(rootGroup?.getAttribute('transform') ?? '');
-  return applyMat(m, p.x, p.y);
-}
 
 /**
  * Candidate points (root space) a pivot drag snaps to: the part's own path nodes and
@@ -3038,47 +2031,6 @@ function nodeSnapCandidates(
   const pathUserScale = Math.hypot(draggedHolder.a, draggedHolder.b) || 1;
   const threshold = 8 / (screenScaleOf() * pathUserScale);
   return { candidates, threshold };
-}
-
-/** Draw the snap-target marker (a small non-scaling ring + crosshair) if one is live. */
-function drawSnapMarker(): void {
-  if (!overlay || !snapMarker) return;
-  const size = handleSize();
-  const r = size * 1.3;
-  const { x, y } = snapMarker;
-  const g = document.createElementNS(SVG_NS, 'g');
-  g.setAttribute('class', 'snap-marker');
-  g.style.pointerEvents = 'none';
-  g.innerHTML =
-    `<circle class="gizmo-line" fill="none" cx="${x}" cy="${y}" r="${r}" />` +
-    `<line class="gizmo-line" x1="${x - r}" y1="${y}" x2="${x + r}" y2="${y}" />` +
-    `<line class="gizmo-line" x1="${x}" y1="${y - r}" x2="${x}" y2="${y + r}" />`;
-  overlay.appendChild(g);
-}
-
-/** Pointer position in root (document) coordinates — where pivots and parts live. */
-function pointerInRoot(ev: PointerEvent): DOMPoint {
-  const m = rootGroup!.getScreenCTM();
-  return svgPoint(ev.clientX, ev.clientY).matrixTransform(m!.inverse());
-}
-
-/** Strip translation from a matrix (for converting deltas rather than points). */
-function linearOnly(m: Mat): Mat {
-  return { ...m, e: 0, f: 0 };
-}
-
-function round1(n: number): number {
-  return Math.round(n * 10) / 10;
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100;
-}
-
-/** For values that must stay finer than the 0.1 rest grid (zoomed-in nudges, pivot
- * compensation) — still coarse enough to keep serialized floats clean. */
-function round3(n: number): number {
-  return Math.round(n * 1000) / 1000;
 }
 
 // The timeline listens for this to redraw keyframe diamonds during a drag without the
