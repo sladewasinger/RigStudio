@@ -6,6 +6,9 @@ state machines, and an AI animation assistant. Exports **Rive `.riv`** files (pl
 anywhere the official Rive runtimes run: web, Android, iOS, Flutter, React Native,
 Unity) and **Lottie JSON**.
 
+Try it here:
+[Rig Studio (Github Pages)](https://sladewasinger.github.io/RigStudio/)
+
 ![Rig Studio screenshot](samples/rig_studio_screenshot.png)
 
 ```sh
