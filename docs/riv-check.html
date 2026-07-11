@@ -10,7 +10,7 @@
          browser's javascript_tool):
 
          1. STATE MACHINE (self-contained): builds a tiny RigDoc with one machine in-page,
-            exports it with the REAL exporter (imported from /src/exportRiv.ts — Vite
+            exports it with the REAL exporter (imported from /src/io/exportRiv.ts — Vite
             transforms the .ts on the fly), loads the .riv in the official runtime, then
             DRIVES it: resolve Entry->A, set the bool input and advance a 400ms blend
             (sampling mid-blend), then fire the trigger. It asserts the keyed arm node's
@@ -37,7 +37,7 @@
     <canvas id="c" width="200" height="200"></canvas>
     <pre id="out">running…</pre>
     <script type="module">
-      import { exportRiv } from '/src/exportRiv.ts';
+      import { exportRiv } from '/src/io/exportRiv.ts';
 
       const DEG = 180 / Math.PI;
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
