@@ -21,6 +21,7 @@ const GROUP_ORDER = [
 
 export const SHORTCUTS: ShortcutEntry[] = [
   // ---- File ----
+  { keys: 'toolbar only', description: 'New — start a blank project', context: 'File' },
   { keys: 'Ctrl+S', description: 'Save the project (downloads a .rig.json)', context: 'File' },
   { keys: 'Ctrl+O', description: 'Open an SVG or a saved .rig.json project', context: 'File' },
   { keys: 'toolbar only', description: 'Load sample', context: 'File' },
@@ -67,6 +68,12 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: 'R', description: 'Rotate tool', context: 'Tools' },
   { keys: 'I', description: 'IK tool — drag a limb end, its parent joints solve to follow', context: 'Tools' },
   { keys: '%', description: 'Toggle Edit-mode snapping', context: 'Tools' },
+  {
+    keys: 'Y',
+    description: 'Toggle freeze (origin-editing) mode — unlocks pivot / origin / joint ' +
+      'dragging (off by default so origins never move by accident)',
+    context: 'Tools',
+  },
   { keys: 'Shift+H', description: 'Flip the selection horizontally, in place (Edit)', context: 'Tools' },
   { keys: 'Shift+V', description: 'Flip the selection vertically, in place (Edit)', context: 'Tools' },
 
@@ -80,7 +87,8 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: '? / F1', description: 'Toggle this shortcut overlay', context: 'View' },
   {
     keys: 'Escape',
-    description: 'Step back out: close this overlay → cancel bone placement → exit path → exit group / deselect',
+    description: 'Step back out: close this overlay → exit freeze mode → cancel bone ' +
+      'placement → exit path → exit group / deselect',
     context: 'View',
   },
 

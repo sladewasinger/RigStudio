@@ -7,7 +7,7 @@
 
 import {
   state, notify, selectedPart, selectedParts, selectPart, groupParts,
-  ungroupPart, setSnapEnabled,
+  ungroupPart, setSnapEnabled, setFreezeMode,
 } from '../core/model';
 import {
   renderPose, partRootBoxes, registerPart, unregisterPart, startBonePlacement,
@@ -128,6 +128,22 @@ export function buildCanvasTools(el: HTMLElement): void {
   });
   if (state.snapEnabled) snapBtn.classList.add('active');
   el.appendChild(snapBtn);
+
+  // Freeze (origin-editing) toggle (Y). While OFF (default) pivot/origin/joint handles
+  // are inert; while ON they're draggable and the canvas shows a banner + tint. A
+  // momentary mode, so it reads state.freezeMode live (never persisted).
+  const freezeBtn = document.createElement('button');
+  freezeBtn.className = 'freeze-btn';
+  freezeBtn.textContent = '❄ Freeze';
+  freezeBtn.title = 'Freeze mode (Y) — unlock pivot / origin / joint editing. ' +
+    'Off by default so origins never drag by accident.';
+  if (state.freezeMode) freezeBtn.classList.add('active');
+  freezeBtn.onclick = () => {
+    setFreezeMode(!state.freezeMode);
+    notify();
+    renderPose();
+  };
+  el.appendChild(freezeBtn);
   sep();
 
   if (setup) {
@@ -157,7 +173,7 @@ export function buildCanvasTools(el: HTMLElement): void {
       }), true);
     const arts = selectedParts().filter((p) => p.paths.length > 0);
     const bones = selectedParts().filter((p) => p.kind === 'bone');
-    add(iconButton('bind', 'bind', 'Skin the selected art to the selected bones (auto weights)',
+    add(iconButton('bind', 'bind', 'Bind the selected art to the selected bones (auto weights)',
       bindAction), arts.length > 0 && bones.length > 0);
 
     const hint = document.createElement('p');

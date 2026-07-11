@@ -6,6 +6,7 @@ import {
   bootRig, resetRig, state, partByLabel, clientPointOnPart, gestureDrag,
   screenScale, expectClose, docToClient, selectByLabel, overlayEl, overlayCount,
   clientCenterOf, partMatrix, partGroupEl, setEditorMode, clipTrack, repaint, click,
+  pressKey,
 } from './harness';
 
 /** Effective (sampled) channel value at the current time — rest when unkeyed. */
@@ -112,12 +113,16 @@ describe('scenario 3 — handle-set toggle + rotate handle', () => {
 });
 
 describe('scenario 4 — pivot drag compensation', () => {
+  // RE-SPEC (v2.13 freeze mode): pivots are inert outside freeze, so this scenario now
+  // presses Y to enter freeze mode before dragging the origin — the drag pipeline it
+  // exercises is otherwise unchanged.
   it('re-anchors the joint without moving the artwork; one undo restores pivot AND rest tx/ty', () => {
     const part = partByLabel('right_arm');
     part.rest.rotate = 25;
     part.rest.sx = 1.3;
     part.rest.kx = 5;
     selectByLabel('right_arm');
+    pressKey('y'); // enter freeze mode so the origin becomes draggable
     repaint();
 
     const g = partGroupEl('right_arm');

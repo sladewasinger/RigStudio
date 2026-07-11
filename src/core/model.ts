@@ -342,6 +342,15 @@ export interface AppState {
    * preference — never serialized into a project; persisted separately in localStorage.
    */
   snapEnabled: boolean;
+  /**
+   * Freeze (origin-editing) mode: when TRUE the canvas unlocks pivot/origin/joint handle
+   * drags (and shows their move cursors plus an unmissable banner + canvas tint); when
+   * FALSE — the default — those handles stay VISIBLE but INERT so a stray drag never
+   * moves a joint (the constant-accidental-origin-drag complaint). A MOMENTARY app-state
+   * flag: toggled by Y / the canvas-tools button / Escape, and — unlike snapEnabled, a
+   * saved preference — never serialized into a project and never persisted to localStorage.
+   */
+  freezeMode: boolean;
 }
 
 /** localStorage key for the snapping preference (a UI setting, not project data). */
@@ -382,7 +391,13 @@ export const state: AppState = {
   playDirection: 1,
   onionSkin: false,
   snapEnabled: readSnapEnabled(),
+  freezeMode: false,
 };
+
+/** Toggle freeze (origin-editing) mode. App state only — never serialized or persisted. */
+export function setFreezeMode(on: boolean): void {
+  state.freezeMode = on;
+}
 
 type Listener = () => void;
 const listeners: Listener[] = [];
@@ -648,6 +663,69 @@ export function boneChain(parts: RigPart[], boneId: string): RigPart[] {
   };
   const root = rootOf(start);
   return parts.filter((p) => p.kind === 'bone' && rootOf(p).id === root.id);
+}
+
+// ---- Bone position model (root-only position; children are rotation + length) ----
+//
+// A chain's ROOT bone has a position (its pivot). Every CHILD bone is defined by rotation
+// + length off the parent tip — its origin IS the parent's tip (one shared joint), so it
+// is never independently positioned. These pure helpers back the bone inspector and the
+// canvas tip drag: length/angle are read from the pivot→tip vector in the bone's own
+// frame (rigid chain transforms preserve distance, so it matches the on-canvas length).
+
+/** A bone's length: the pivot→tip distance in its own frame (0 when it has no tip). Pure. */
+export function boneLength(bone: RigPart): number {
+  if (!bone.boneTip) return 0;
+  return Math.hypot(bone.boneTip.x - bone.pivot.x, bone.boneTip.y - bone.pivot.y);
+}
+
+/** A bone's axis angle (degrees, atan2) from pivot to tip in its own frame. Pure. */
+export function boneAxisAngle(bone: RigPart): number {
+  if (!bone.boneTip) return 0;
+  return (Math.atan2(bone.boneTip.y - bone.pivot.y, bone.boneTip.x - bone.pivot.x) * 180) / Math.PI;
+}
+
+/** The tip position for a target length along the bone's CURRENT axis (pure). A
+ *  degenerate bone (tip == pivot, or no tip) defaults its axis to +x so a length is
+ *  still settable. */
+export function boneTipForLength(bone: RigPart, length: number): Vec2 {
+  const tip = bone.boneTip ?? { x: bone.pivot.x + 1, y: bone.pivot.y };
+  const dx = tip.x - bone.pivot.x, dy = tip.y - bone.pivot.y;
+  const len = Math.hypot(dx, dy);
+  const ux = len < 1e-9 ? 1 : dx / len;
+  const uy = len < 1e-9 ? 0 : dy / len;
+  return { x: bone.pivot.x + ux * length, y: bone.pivot.y + uy * length };
+}
+
+/**
+ * Set a bone's LENGTH (pivot→tip distance) along its current axis: moves the tip, and
+ * carries any child bones' origins with it — a child bone's origin IS this bone's tip
+ * (one shared joint). The bone position model keeps child rest translate at 0, so
+ * child.pivot lands exactly on the new tip. Mutates `parts` in place; caller repaints.
+ */
+export function setBoneLength(parts: RigPart[], bone: RigPart, length: number): void {
+  const tip = boneTipForLength(bone, Math.max(0, length));
+  bone.boneTip = { x: tip.x, y: tip.y };
+  for (const child of parts) {
+    if (child.kind === 'bone' && child.parentId === bone.id) {
+      child.pivot = { x: tip.x - child.rest.tx, y: tip.y - child.rest.ty };
+    }
+  }
+}
+
+/**
+ * Translate an entire bone chain (its root + every descendant bone) rigidly by (dx,dy):
+ * every bone's pivot AND tip shift together, so all shared joints stay connected. This
+ * is how a ROOT bone's position edit moves the whole limb. Exact for chains with no baked
+ * rest rotation (the common fitting case); a rotated chain translates approximately, but
+ * the anchors still stay mutually connected. Mutates `parts` in place.
+ */
+export function translateBoneChain(parts: RigPart[], boneId: string, dx: number, dy: number): void {
+  if (dx === 0 && dy === 0) return;
+  for (const b of boneChain(parts, boneId)) {
+    b.pivot = { x: b.pivot.x + dx, y: b.pivot.y + dy };
+    if (b.boneTip) b.boneTip = { x: b.boneTip.x + dx, y: b.boneTip.y + dy };
+  }
 }
 
 /**
@@ -1085,6 +1163,26 @@ export function artboardFrame(doc: RigDoc): { x: number; y: number; w: number; h
   const ab = doc.artboard;
   if (ab && ab.enabled) return { x: ab.x, y: ab.y, w: ab.w, h: ab.h };
   return { x: doc.viewBox.x, y: doc.viewBox.y, w: doc.viewBox.w, h: doc.viewBox.h };
+}
+
+// ---- New document ----
+
+/**
+ * A fresh, empty document for File → New: no parts, one 2 s 'idle' clip, a 512×512
+ * viewBox with a matching ENABLED artboard, and no state machines. Run through
+ * normalizeDoc so every back-compat default is filled exactly as a loaded file would be,
+ * then loaded through the same afterDocReplaced path Open uses.
+ */
+export function newBlankDoc(): RigDoc {
+  return normalizeDoc({
+    name: 'untitled',
+    viewBox: { x: 0, y: 0, w: 512, h: 512 },
+    parts: [],
+    rootPivot: { x: 256, y: 256 },
+    clips: [{ name: 'idle', duration: 2000, tracks: [] }],
+    stateMachines: [],
+    artboard: { enabled: true, x: 0, y: 0, w: 512, h: 512 },
+  });
 }
 
 // ---- Serialization (project save/load) ----

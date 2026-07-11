@@ -8,7 +8,7 @@
 import {
   state, notify, selectedPart, selectedPath, sampleChannel, channelValue,
   setKeyframe, isAncestorOf, setParent, RigPart, Channel, ensureArtboard,
-  keyAt, removeKeyAt,
+  keyAt, removeKeyAt, boneLength, setBoneLength, translateBoneChain,
 } from '../core/model';
 import {
   renderPose, updatePathAttrs, partRootBoxes, applyRootDeltas, hasSelectedNode,
@@ -59,7 +59,12 @@ export function buildInspector(el: HTMLElement): void {
     title.textContent = part.label + (setup ? ' — rest pose' : ' — keyed at playhead');
     el.appendChild(title);
 
-    if (setup) {
+    if (setup && part.kind === 'bone') {
+      // Bone position model: a chain's ROOT has a position (+ rotation + length); a CHILD
+      // bone is rotation + length only, its origin riding the parent tip. No raw pivot/
+      // rest-translate fields — those would let the shared joint drift independently.
+      buildBoneRestSection(el, part);
+    } else if (setup) {
       el.appendChild(numberField('rest rotate (deg)', part.rest.rotate, (v) => {
         checkpoint();
         part.rest.rotate = v;
@@ -106,33 +111,7 @@ export function buildInspector(el: HTMLElement): void {
         renderPose();
       }));
 
-      // Parent selector (bone hierarchy) — anything but itself or a descendant.
-      const row = document.createElement('label');
-      row.className = 'field';
-      const span = document.createElement('span');
-      span.textContent = 'parent';
-      const sel = document.createElement('select');
-      const none = document.createElement('option');
-      none.value = '';
-      none.textContent = '(none)';
-      sel.appendChild(none);
-      for (const candidate of doc.parts) {
-        if (candidate.id === part.id || isAncestorOf(part, candidate)) continue;
-        const opt = document.createElement('option');
-        opt.value = candidate.id;
-        opt.textContent = candidate.label;
-        if (part.parentId === candidate.id) opt.selected = true;
-        sel.appendChild(opt);
-      }
-      sel.onchange = () => {
-        checkpoint();
-        setParent(part.id, sel.value || null);
-        notify();
-        renderPose();
-      };
-      row.appendChild(span);
-      row.appendChild(sel);
-      el.appendChild(row);
+      buildParentSelector(el, part);
     } else {
       // Displayed values are absolute (rest fills unkeyed channels); editing keys.
       // Each field gets a keyframe-toggle circle (filled = keyed at the playhead).
@@ -224,6 +203,86 @@ export function buildInspector(el: HTMLElement): void {
   }
 
   buildAiPanel(el);
+}
+
+// ---- Bone position model ----
+
+/**
+ * Setup-mode fields for a BONE. A chain's ROOT bone gets position (its origin) + rotation
+ * + length; a CHILD bone gets rotation + length only, its origin riding the parent's tip
+ * (one shared joint — never independently editable, so no raw pivot / rest-translate
+ * fields). Editing length moves the tip along the bone's current axis and carries any
+ * child origins with it; editing position translates the whole chain.
+ */
+function buildBoneRestSection(el: HTMLElement, part: RigPart): void {
+  const doc = state.doc!;
+  const parentBone = part.parentId
+    ? doc.parts.find((p) => p.id === part.parentId && p.kind === 'bone')
+    : null;
+
+  el.appendChild(numberField('rotation (deg)', part.rest.rotate, (v) => {
+    checkpoint();
+    part.rest.rotate = v;
+    poseEdited();
+  }));
+  el.appendChild(numberField('length', boneLength(part), (v) => {
+    checkpoint();
+    setBoneLength(doc.parts, part, Math.max(0, v));
+    poseEdited();
+  }, 0.5));
+
+  if (!parentBone) {
+    // Root of the chain: it alone carries a position; moving it translates the whole limb.
+    el.appendChild(numberField('position x', part.pivot.x, (v) => {
+      checkpoint();
+      translateBoneChain(doc.parts, part.id, v - part.pivot.x, 0);
+      renderPose();
+    }));
+    el.appendChild(numberField('position y', part.pivot.y, (v) => {
+      checkpoint();
+      translateBoneChain(doc.parts, part.id, 0, v - part.pivot.y);
+      renderPose();
+    }));
+  } else {
+    const info = document.createElement('p');
+    info.className = 'hint';
+    info.textContent = `Origin follows ${parentBone.label}'s tip (shared joint). ` +
+      'Fit this bone with rotation + length.';
+    el.appendChild(info);
+  }
+
+  buildParentSelector(el, part);
+}
+
+/** Parent selector (bone hierarchy) — anything but the part itself or a descendant. */
+function buildParentSelector(el: HTMLElement, part: RigPart): void {
+  const doc = state.doc!;
+  const row = document.createElement('label');
+  row.className = 'field';
+  const span = document.createElement('span');
+  span.textContent = 'parent';
+  const sel = document.createElement('select');
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '(none)';
+  sel.appendChild(none);
+  for (const candidate of doc.parts) {
+    if (candidate.id === part.id || isAncestorOf(part, candidate)) continue;
+    const opt = document.createElement('option');
+    opt.value = candidate.id;
+    opt.textContent = candidate.label;
+    if (part.parentId === candidate.id) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => {
+    checkpoint();
+    setParent(part.id, sel.value || null);
+    notify();
+    renderPose();
+  };
+  row.appendChild(span);
+  row.appendChild(sel);
+  el.appendChild(row);
 }
 
 // ---- Artboard (page frame) ----
@@ -340,15 +399,15 @@ function buildSkinSection(el: HTMLElement, part: RigPart): void {
     .filter((p): p is RigPart => !!p);
 
   const title = document.createElement('h3');
-  title.textContent = 'Skinning';
+  title.textContent = 'Bones & binding';
   el.appendChild(title);
 
   const list = document.createElement('p');
   list.className = 'hint';
   const names = bones.length ? bones.map((b) => b.label).join(', ') : '(deleted bones)';
-  list.textContent = `Skinned — deformed by: ${names}. This part has no scale/rotate ` +
+  list.textContent = `Deformed by: ${names}. This part has no scale/rotate ` +
     'handles; pose its bones (or drag it with the IK tool to bend the chain) and the ' +
-    'artwork follows with auto weights. Exports render skinned parts rigidly.';
+    'artwork follows with auto weights. Exports render bound parts rigidly.';
   el.appendChild(list);
 
   const actions = document.createElement('div');

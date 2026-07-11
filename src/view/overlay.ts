@@ -158,7 +158,10 @@ export function renderOverlay(): void {
       th.setAttribute('cx', String(tip.x));
       th.setAttribute('cy', String(tip.y));
       th.setAttribute('r', String(size * 0.9));
-      th.setAttribute('class', 'bone-tip-handle');
+      // A tip with a child bone hanging off it is a shared JOINT (origin editing) —
+      // freeze-gated, so mark it so the cursor drops its move affordance outside freeze.
+      const tipIsJoint = doc.parts.some((p) => p.kind === 'bone' && p.parentId === part.id);
+      th.setAttribute('class', `bone-tip-handle${tipIsJoint ? ' joint' : ''}`);
       th.dataset.role = 'bone-tip';
       const wrap = document.createElementNS(SVG_NS, 'g');
       if (rootTransform) wrap.setAttribute('transform', rootTransform);
@@ -236,7 +239,7 @@ export function renderOverlay(): void {
       hint.setAttribute('y', String(y0 - size * 0.6));
       hint.setAttribute('class', 'skin-hint');
       hint.setAttribute('font-size', String(size * 1.5));
-      hint.textContent = 'skinned — pose with its bones';
+      hint.textContent = 'posed by its bones';
       const wrap = document.createElementNS(SVG_NS, 'g');
       wrap.setAttribute('class', 'overlay-passive');
       wrap.setAttribute('transform', boxTransform);

@@ -37,6 +37,7 @@ export const INDEX_BODY = `
   <header id="toolbar">
     <strong class="brand">Rig Studio</strong>
     <div class="tb-group" role="group" aria-label="File">
+      <button id="btn-new" title="Start a new blank project">New</button>
       <button id="btn-open" title="SVG artwork or a saved .rig.json project">Open…</button>
       <button id="btn-sample" title="Load the bundled sample character">Load sample</button>
       <button id="btn-save" title="Download the project as JSON">Save project</button>
@@ -133,6 +134,7 @@ export function resetRig(): void {
   state.mode = 'rig';
   state.tool = 'select';
   state.snapEnabled = false; // deterministic drags; the snapping scenario opts back in
+  state.freezeMode = false; // origins locked by default; freeze scenarios opt back in
   state.onionSkin = false;
   state.currentTime = 0;
   state.activeClipIndex = 0;

@@ -100,8 +100,10 @@ function partNode(part: RigPart): HTMLElement {
   if (part.kind !== 'art' || part.skin) {
     const kindIcon = document.createElement('span');
     kindIcon.className = `layer-kind ${part.skin ? 'skin' : part.kind}`;
-    kindIcon.textContent = part.skin ? '≋' : part.kind === 'bone' ? '◆' : '▣';
-    kindIcon.title = part.skin ? 'skinned to bones' : part.kind;
+    // A deformed (skin-bound) art part carries the bone glyph with a "deformed by its
+    // bones" tooltip; the .skin class keeps it visually distinct from a real bone part.
+    kindIcon.textContent = part.skin ? '◆' : part.kind === 'bone' ? '◆' : '▣';
+    kindIcon.title = part.skin ? 'deformed by its bones' : part.kind;
     row.appendChild(kindIcon);
   }
 

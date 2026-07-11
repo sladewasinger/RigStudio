@@ -37,6 +37,14 @@ import {
   state,
   ungroupPart,
 } from '../core/model';
+import {
+  boneLength,
+  boneAxisAngle,
+  boneTipForLength,
+  setBoneLength,
+  translateBoneChain,
+  newBlankDoc,
+} from '../core/model';
 import { multiply, rotationMat, translationMat } from '../geometry/transforms';
 import { makeClip, makeDoc, makePart, makePath, makeTrack, resetState } from './helpers';
 
@@ -1436,5 +1444,72 @@ describe('serializeDoc / deserializeDoc round trip', () => {
     expect(sm.transitions[3].conditions).toEqual([{ inputId: 'in_speed', op: '>', value: 5 }]);
     expect(sm.listeners[0].actions).toHaveLength(2);
     expect(sm.listeners[0].targetPartId).toBe(TORSO);
+  });
+});
+
+describe('bone position model (length/rotation helpers)', () => {
+  const rootBone = () =>
+    makePart('b1', { kind: 'bone', pivot: { x: 10, y: 20 }, boneTip: { x: 30, y: 20 } });
+
+  it('boneLength/boneAxisAngle read the pivot→tip vector; no tip → 0', () => {
+    const b = rootBone(); // horizontal, length 20
+    expect(boneLength(b)).toBeCloseTo(20, 9);
+    expect(boneAxisAngle(b)).toBeCloseTo(0, 9);
+    const diag = makePart('b', { kind: 'bone', pivot: { x: 0, y: 0 }, boneTip: { x: 3, y: 4 } });
+    expect(boneLength(diag)).toBeCloseTo(5, 9);
+    expect(boneAxisAngle(diag)).toBeCloseTo((Math.atan2(4, 3) * 180) / Math.PI, 9);
+    expect(boneLength(makePart('n', { kind: 'bone', boneTip: null }))).toBe(0);
+  });
+
+  it('boneTipForLength moves the tip along the current axis, keeping direction', () => {
+    const b = makePart('b', { kind: 'bone', pivot: { x: 0, y: 0 }, boneTip: { x: 3, y: 4 } });
+    const tip = boneTipForLength(b, 10); // same direction (3,4)/5, length 10 → (6,8)
+    expect(tip.x).toBeCloseTo(6, 9);
+    expect(tip.y).toBeCloseTo(8, 9);
+    // Degenerate (tip == pivot): axis defaults to +x so a length is still settable.
+    const deg = makePart('d', { kind: 'bone', pivot: { x: 5, y: 5 }, boneTip: { x: 5, y: 5 } });
+    expect(boneTipForLength(deg, 4)).toEqual({ x: 9, y: 5 });
+  });
+
+  it('setBoneLength moves the tip AND carries a child bone origin (shared joint)', () => {
+    const b1 = rootBone(); // pivot (10,20) tip (30,20), horizontal
+    const b2 = makePart('b2', {
+      kind: 'bone', parentId: 'b1', pivot: { x: 30, y: 20 }, boneTip: { x: 50, y: 20 },
+    });
+    const parts = [b1, b2];
+    setBoneLength(parts, b1, 30); // tip moves to (40,20)
+    expect(b1.boneTip).toEqual({ x: 40, y: 20 });
+    // The child's origin (== parent tip) follows the joint exactly.
+    expect(b2.pivot).toEqual({ x: 40, y: 20 });
+  });
+
+  it('translateBoneChain shifts every bone (pivot + tip) in the chain, keeping joints', () => {
+    const b1 = rootBone();
+    const b2 = makePart('b2', {
+      kind: 'bone', parentId: 'b1', pivot: { x: 30, y: 20 }, boneTip: { x: 45, y: 20 },
+    });
+    const art = makePart('a1', { kind: 'art', pivot: { x: 0, y: 0 } }); // not a bone — untouched
+    const parts = [b1, b2, art];
+    translateBoneChain(parts, 'b1', 5, -3);
+    expect(b1.pivot).toEqual({ x: 15, y: 17 });
+    expect(b1.boneTip).toEqual({ x: 35, y: 17 });
+    expect(b2.pivot).toEqual({ x: 35, y: 17 }); // still on the parent tip
+    expect(b2.boneTip).toEqual({ x: 50, y: 17 });
+    expect(art.pivot).toEqual({ x: 0, y: 0 }); // non-bone unaffected
+  });
+});
+
+describe('newBlankDoc', () => {
+  it('is an empty, normalized document with a 512² enabled artboard and one idle clip', () => {
+    const doc = newBlankDoc();
+    expect(doc.parts).toEqual([]);
+    expect(doc.viewBox).toEqual({ x: 0, y: 0, w: 512, h: 512 });
+    expect(doc.clips).toHaveLength(1);
+    expect(doc.clips[0]).toMatchObject({ name: 'idle', duration: 2000 });
+    expect(doc.clips[0].tracks).toEqual([]);
+    expect(doc.artboard).toEqual({ enabled: true, x: 0, y: 0, w: 512, h: 512 });
+    expect(doc.stateMachines).toEqual([]);
+    // Normalized: survives a save/load round-trip byte-identically.
+    expect(serializeDoc(deserializeDoc(serializeDoc(doc)))).toBe(serializeDoc(doc));
   });
 });

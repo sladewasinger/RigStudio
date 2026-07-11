@@ -136,6 +136,19 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   untouched (moving a joint under keyed animation legitimately changes those frames).
   Overlay handle strokes use `vector-effect: non-scaling-stroke` — widths are screen
   px, radii doc units via `handleSize()`; keep new overlay chrome on that pattern.
+- **Freeze (origin-editing) mode gates all joint editing** (`state.freezeMode`): a
+  MOMENTARY app-state flag — never serialized into a project, never persisted to
+  localStorage (unlike `snapEnabled`). OUTSIDE freeze (the default), every pivot/origin
+  handle and every shared-JOINT bone tip (a tip that has a child bone) is VISIBLE but
+  INERT: the `interactions.ts` pointerdown branch returns without starting a drag — a
+  hard no-op, NOT a fall-through that would translate the part underneath — and the
+  cursor drops its move affordance (`#canvas.freeze-mode` scoping in `style.css`). LEAF
+  bone tips are pure rotation/length edits and stay live regardless. Toggle with `Y`
+  (guarded like the tool keys), the canvas-tools ❄ button, or Escape (its own early
+  tier, ahead of bone-placement/group-exit). Freeze ON shows an UNMISSABLE banner +
+  canvas tint, driven by the `.freeze-mode` class that `renderPose` toggles on `#canvas`.
+  Interaction-tested (`freeze.test.ts`): the art-pivot and chain-joint drags are
+  byte-level no-ops outside freeze and work inside; mutation-checked by removing the gate.
 - **Flips are negative rest scale** pinned at the part's rendered bbox center — never
   a geometry rewrite — so both exporters inherit them through the existing rest-scale
   paths. The scale-drag clamp applies to drag factors, not stored values; don't
@@ -270,7 +283,10 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   `boneTip` along; dragging the parent's tip handle carries the child's origin (both in
   `interactions.ts`, pivot/boneTip drag branches). The selected bone's tip handle
   renders AFTER the glyph loop so a child glyph on the shared joint can't occlude it.
-  Root bones keep a free origin.
+  Root bones keep a free origin. **Freeze rule:** a shared JOINT — any bone pivot, and a
+  bone tip that has a child bone (marked with the `joint` class) — is only draggable in
+  freeze mode (`state.freezeMode`; see the conventions bullet). A LEAF bone's tip carries
+  no child origin, so it stays live outside freeze as an ordinary rotation/length edit.
 - **Weight model.** Auto weights are normalized inverse-distance-power to each bone's
   bind-time segment (`skinWeights`). The RENDER path passes a sharpened exponent
   (`skinRender.ts` `SKIN_WEIGHT_POWER = 4`, vs the unit-tested default 2) because

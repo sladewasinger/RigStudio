@@ -23,7 +23,7 @@ import { startBonePlacement, renderPose, setNodeBinding, recomputeAutoWeights } 
 import {
   bootRig, resetRig, state, partByLabel, partGroupEl, gestureDrag, click,
   clientCenterOf, overlayEl, overlayCount, expectClose, setEditorMode, repaint,
-  enterNodeMode, medialPoints, clientPointOnPart, svgEl, selectByLabel,
+  enterNodeMode, medialPoints, clientPointOnPart, svgEl, selectByLabel, pressKey,
 } from './harness';
 
 beforeAll(bootRig);
@@ -297,9 +297,13 @@ describe('scenario B8 — skinned-part overlay is fresh + explains itself', () =
 });
 
 describe('scenario B9 — connected chain: the shared joint moves as one', () => {
+  // RE-SPEC (v2.13 freeze mode): both a child bone's origin and a parent bone's tip are
+  // shared JOINTS, so both are freeze-gated. Press Y to enter freeze mode before dragging
+  // them; the shared-joint coupling the scenario verifies is otherwise unchanged.
   it('dragging a child bone pivot carries the parent tip, and vice-versa', () => {
     const [b1, b2] = placeChain(LIMB, 2);
     const cur = (id: string) => state.doc!.parts.find((p) => p.id === id)!;
+    pressKey('y'); // freeze mode: unlock origin/joint editing for this scenario
 
     // Drag the CHILD's pivot handle — the parent tip must follow (one shared joint).
     state.tool = 'select';
@@ -354,6 +358,50 @@ describe('scenario B10 — IK on the SKINNED ART bends the chain', () => {
       || Math.abs(cur(b2.id).rest.rotate - r2) > 0.5;
     expect(bent, 'IK rotated at least one chain joint').toBe(true);
     expect(renderedD(LIMB), 'skinned art deformed under IK').not.toBe(artBefore);
+  });
+});
+
+describe('scenario B12 — bone position model: length edit propagates the chain', () => {
+  function fieldInput(label: string): HTMLInputElement | null {
+    const field = Array.from(document.querySelectorAll<HTMLLabelElement>('#inspector label.field'))
+      .find((f) => f.querySelector('span')?.textContent === label);
+    return (field?.querySelector('input') as HTMLInputElement) ?? null;
+  }
+
+  it('editing a ROOT bone length moves its tip and carries the child origin (shared joint)', () => {
+    const [b1, b2] = placeChain(LIMB, 2);
+    modelSelectPart(b1.id); // b1 is a root bone (placed free-form)
+    notify();
+    renderPose();
+
+    const len0 = Math.hypot(b1.boneTip!.x - b1.pivot.x, b1.boneTip!.y - b1.pivot.y);
+    const target = len0 + 25;
+    const input = fieldInput('length');
+    expect(input, 'root bone inspector shows a length field').toBeTruthy();
+    input!.value = String(target);
+    input!.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const cur = (id: string) => state.doc!.parts.find((p) => p.id === id)!;
+    const nb1 = cur(b1.id), nb2 = cur(b2.id);
+    const newLen = Math.hypot(nb1.boneTip!.x - nb1.pivot.x, nb1.boneTip!.y - nb1.pivot.y);
+    expectClose(newLen, target, 0.01, 'root bone length updated');
+    expectClose(nb2.pivot.x, nb1.boneTip!.x, 0.01, 'child origin x tracks the extended tip');
+    expectClose(nb2.pivot.y, nb1.boneTip!.y, 0.01, 'child origin y tracks the extended tip');
+  });
+
+  it('a CHILD bone inspector shows rotation + length but NO position / raw pivot / rest fields', () => {
+    const [, b2] = placeChain(LIMB, 2);
+    modelSelectPart(b2.id); // b2 is a child bone (parented to b1)
+    notify();
+    renderPose();
+    const labels = Array.from(
+      document.querySelectorAll<HTMLLabelElement>('#inspector label.field span'),
+    ).map((s) => s.textContent);
+    expect(labels, 'rotation field present').toContain('rotation (deg)');
+    expect(labels, 'length field present').toContain('length');
+    expect(labels, 'no independent position on a child').not.toContain('position x');
+    expect(labels, 'no raw pivot field on a child').not.toContain('pivot x');
+    expect(labels, 'no raw rest-translate field on a child').not.toContain('rest x');
   });
 });
 

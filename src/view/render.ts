@@ -22,6 +22,10 @@ export function renderPose(): void {
   const t = poseTime();
 
   updateArtboardRect(doc);
+  // Freeze (origin-editing) mode: toggle the class that drives the canvas banner + tint
+  // and the pivot/joint-handle cursor affordances (style.css). The #canvas container is
+  // the svg's parent (buildCanvas appends it there).
+  ctx.svg?.parentElement?.classList.toggle('freeze-mode', state.freezeMode);
   ctx.rootGroup.setAttribute('transform', rootPoseTransform(t));
   const focus = focusContext();
   for (const part of doc.parts) {

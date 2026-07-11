@@ -205,6 +205,13 @@ export function wireInteractions(): void {
     if (target instanceof SVGElement && target.dataset.role === 'bone-tip') {
       const part = selectedPart();
       if (!part) return;
+      // Freeze gate: a tip that is ALSO a shared joint — a child bone hangs off it, so
+      // dragging it moves that child's ORIGIN — is origin editing and only works in
+      // freeze mode. A LEAF bone's tip is a pure rotation/length edit and stays live.
+      const tipIsJoint = (state.doc?.parts ?? []).some(
+        (p) => p.kind === 'bone' && p.parentId === part.id,
+      );
+      if (tipIsJoint && !state.freezeMode) return;
       ctx.drag = { kind: 'boneTip', part, startClient: { x: ev.clientX, y: ev.clientY }, active: false };
       try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
@@ -380,6 +387,11 @@ export function wireInteractions(): void {
     if (pivotEl) {
       const part = selectedPart();
       if (!part) return;
+      // Freeze gate: pivots/origins are visible but INERT outside freeze mode, so a stray
+      // press on the joint handle never moves it (the accidental-origin-drag complaint).
+      // Swallow the press (no drag, no selection change) rather than fall through — a
+      // hard no-op, not a translate of the part underneath.
+      if (!state.freezeMode) return;
       ctx.drag = {
         kind: 'pivot',
         part,

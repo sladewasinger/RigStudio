@@ -1,7 +1,7 @@
 import {
   state, notify, subscribe, activeClip, serializeDoc, deserializeDoc, EditorMode,
   selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder,
-  setSnapEnabled, selectAllParts, partById,
+  setSnapEnabled, setFreezeMode, selectAllParts, partById, newBlankDoc,
 } from './core/model';
 import { importSvg } from './io/importSvg';
 import {
@@ -69,6 +69,23 @@ function loadProjectText(text: string): boolean {
     return false;
   }
 }
+
+/** File → New: replace the current document with a fresh blank one (confirming first if
+ *  there's work to lose), through the SAME afterDocReplaced path Open uses. The debounced
+ *  autosave then overwrites the saved session with the blank doc — it IS the current doc. */
+async function newProject(): Promise<void> {
+  if (state.doc) {
+    const ok = await dialog.confirm(
+      'Start a new project? The current one will be replaced — save first if you want to keep it.',
+      { title: 'New project', okText: 'New project' },
+    );
+    if (!ok) return;
+  }
+  state.doc = newBlankDoc();
+  state.editorMode = 'setup';
+  afterDocReplaced();
+}
+document.getElementById('btn-new')!.onclick = () => { void newProject(); };
 
 document.getElementById('btn-open')!.onclick = () => fileInput.click();
 fileInput.onchange = async () => {
@@ -373,7 +390,17 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'Escape') {
-    // State-machine editor first: cancel an armed transition or stop a running preview.
+    // Freeze mode exits first (its own early tier) — Escape drops out of origin editing
+    // before anything else, so a stray Escape can't cancel a bone placement or step out
+    // of a group while the user only meant to leave freeze.
+    if (state.freezeMode) {
+      ev.preventDefault();
+      setFreezeMode(false);
+      notify();
+      renderPose();
+      return;
+    }
+    // State-machine editor next: cancel an armed transition or stop a running preview.
     if (smHandleEscape()) {
       ev.preventDefault();
       return;
@@ -407,6 +434,15 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === '%' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
     ev.preventDefault();
     setSnapEnabled(!state.snapEnabled);
+    notify();
+    renderPose();
+    return;
+  }
+  // Freeze (origin-editing) mode toggle (Y). Guarded against ctrl/meta/alt like the tool
+  // keys, so Ctrl+Y (redo, handled above) and browser shortcuts pass through untouched.
+  if (ev.key.toLowerCase() === 'y' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    ev.preventDefault();
+    setFreezeMode(!state.freezeMode);
     notify();
     renderPose();
     return;

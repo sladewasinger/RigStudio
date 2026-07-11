@@ -68,6 +68,15 @@ export function buildCanvas(container: HTMLElement): void {
   }
   container.appendChild(ctx.svg);
 
+  // Freeze-mode indicator: an always-present banner shown via CSS only while #canvas
+  // carries the .freeze-mode class (toggled by renderPose). pointer-events:none so it
+  // never steals hit-testing. Re-created here because buildCanvas clears the container.
+  const banner = document.createElement('div');
+  banner.className = 'freeze-banner';
+  banner.setAttribute('aria-hidden', 'true');
+  banner.textContent = 'FREEZE — origin editing';
+  container.appendChild(banner);
+
   // Apply the rest pose first so each group carries its baked transform, THEN measure:
   // bbox centers must be mapped through the part transform into root coordinates.
   renderPose();
