@@ -6,6 +6,13 @@ import {
   parsePath,
   pathToCubics,
   serializePath,
+  deleteSegment,
+  reversePath,
+  closePath,
+  joinPaths,
+  isSingleSubpath,
+  isClosedPath,
+  nodeCount,
 } from '../paths';
 
 type CubicCmd = Extract<PathCmd, { cmd: 'C' }>;
@@ -332,5 +339,224 @@ describe('insertNodeAfter', () => {
     expect(insertNodeAfter(closed, 5)).toBe(false); // out of range
     const twoSubpaths = parsePath('M 0 0 L 5 5 M 9 9 L 10 10');
     expect(insertNodeAfter(twoSubpaths, 1)).toBe(false); // next is M
+  });
+});
+
+// ---- Structural editing (break / join / reverse) --------------------------------
+
+/** nodeTypes length must always equal the node count (Z excluded). */
+function typesInSync(cmds: PathCmd[], nodeTypes: string | null): boolean {
+  return nodeTypes == null || nodeTypes.length === nodeCount(cmds);
+}
+
+describe('subpath predicates', () => {
+  it('recognizes single subpaths and refuses compound ones', () => {
+    expect(isSingleSubpath(parsePath('M 0 0 L 5 5'))).toBe(true);
+    expect(isSingleSubpath(parsePath('M 0 0 L 5 5 Z'))).toBe(true);
+    expect(isSingleSubpath(parsePath('M 0 0 L 5 5 M 9 9 L 8 8'))).toBe(false);
+    expect(isSingleSubpath(parsePath('M 0 0 Z M 9 9 L 8 8 Z'))).toBe(false);
+  });
+
+  it('detects closed paths and counts nodes excluding Z', () => {
+    expect(isClosedPath(parsePath('M 0 0 L 5 5 Z'))).toBe(true);
+    expect(isClosedPath(parsePath('M 0 0 L 5 5'))).toBe(false);
+    expect(nodeCount(parsePath('M 0 0 L 5 5 L 9 9 Z'))).toBe(3);
+  });
+});
+
+describe('deleteSegment', () => {
+  const square = 'M 0 0 L 10 0 L 10 10 L 0 10 Z'; // nodes A B C D closed
+
+  it('opens a closed path at its closing (wrap) segment by dropping Z', () => {
+    const cmds = parsePath(square);
+    const pieces = deleteSegment(cmds, 'cssc', 0, 3)!; // M (0) and last node (3)
+    expect(pieces).toHaveLength(1);
+    expect(isClosedPath(pieces[0].cmds)).toBe(false);
+    expect(pieces[0].cmds.map((c) => c.cmd)).toEqual(['M', 'L', 'L', 'L']);
+    expect(pieces[0].nodeTypes).toBe('cssc'); // order unchanged
+    expect(typesInSync(pieces[0].cmds, pieces[0].nodeTypes)).toBe(true);
+  });
+
+  it('opens a closed path at an interior segment, rotating so the break is the seam', () => {
+    const cmds = parsePath(square);
+    // Delete A->B (nodes 0,1). Result should traverse B C D A (the old Z becomes L to A).
+    const pieces = deleteSegment(cmds, 'cssc', 0, 1)!;
+    expect(pieces).toHaveLength(1);
+    expect(isClosedPath(pieces[0].cmds)).toBe(false);
+    expect(serializePath(pieces[0].cmds)).toBe('M 10,0 L 10,10 L 0,10 L 0,0');
+    expect(pieces[0].nodeTypes).toBe('sscc'); // types follow their nodes: s(B) s(C) c(D) c(A)
+    expect(typesInSync(pieces[0].cmds, pieces[0].nodeTypes)).toBe(true);
+  });
+
+  it('splits an open path into two pieces at the deleted segment', () => {
+    const cmds = parsePath('M 0 0 L 10 0 L 20 0 L 30 0');
+    const pieces = deleteSegment(cmds, 'cccc', 1, 2)!; // delete 10,0 -> 20,0
+    expect(pieces).toHaveLength(2);
+    expect(serializePath(pieces[0].cmds)).toBe('M 0,0 L 10,0');
+    expect(serializePath(pieces[1].cmds)).toBe('M 20,0 L 30,0');
+    expect(pieces[0].nodeTypes).toBe('cc');
+    expect(pieces[1].nodeTypes).toBe('cc');
+  });
+
+  it('discards a resulting piece with fewer than 2 nodes', () => {
+    const cmds = parsePath('M 0 0 L 10 0 L 20 0 L 30 0');
+    const pieces = deleteSegment(cmds, null, 0, 1)!; // deleting the first segment
+    expect(pieces).toHaveLength(1);
+    expect(serializePath(pieces[0].cmds)).toBe('M 10,0 L 20,0 L 30,0');
+    expect(pieces[0].nodeTypes).toBeNull(); // untyped stays untyped
+  });
+
+  it('returns null for non-adjacent nodes and compound paths', () => {
+    expect(deleteSegment(parsePath('M 0 0 L 10 0 L 20 0 L 30 0'), null, 0, 2)).toBeNull();
+    expect(deleteSegment(parsePath('M 0 0 L 5 5 M 9 9 L 8 8'), null, 0, 1)).toBeNull();
+  });
+
+  // Segment bending splices an EXPLICIT closing segment (endpoint == M point) in
+  // front of the Z, so the Z closes a zero-length gap. Opening such a path must not
+  // emit a zero-length L / phantom node stacked on node 0.
+  describe('closed path with an explicit closing segment (zero-length Z)', () => {
+    // Nodes: 0 (0,0) M · 1 (10,0) · 2 (10,10) · 3 (0,10) · 4 (0,0) explicit closing C.
+    const explicit = 'M 0 0 L 10 0 L 10 10 L 0 10 C 0 6 0 3 0 0 Z';
+
+    /** Consecutive node endpoints must all be distinct (no zero-length segment). */
+    function minSegmentLength(cmds: PathCmd[]): number {
+      let min = Infinity;
+      let prev: { x: number; y: number } | null = null;
+      for (const c of cmds) {
+        if (c.cmd === 'Z') continue;
+        const p = { x: (c as { x: number }).x, y: (c as { y: number }).y };
+        if (prev) min = Math.min(min, Math.hypot(p.x - prev.x, p.y - prev.y));
+        prev = p;
+      }
+      return min;
+    }
+
+    it('deleting the explicit closing segment drops it cleanly (no zero-length L)', () => {
+      const pieces = deleteSegment(parsePath(explicit), 'csszc', 3, 4)!; // nodes D-2, D-1
+      expect(pieces).toHaveLength(1);
+      const p = pieces[0];
+      expect(serializePath(p.cmds)).toBe('M 0,0 L 10,0 L 10,10 L 0,10');
+      expect(nodeCount(p.cmds)).toBe(4); // D-1, phantom node collapsed
+      expect(minSegmentLength(p.cmds)).toBeGreaterThan(0);
+      expect(p.nodeTypes).toBe('cssz'); // coincident node 4's 'c' survives; node 0's dropped
+      expect(typesInSync(p.cmds, p.nodeTypes)).toBe(true);
+    });
+
+    it('deleting an interior segment rotates without a zero-length seam', () => {
+      const pieces = deleteSegment(parsePath(explicit), 'csszc', 1, 2)!;
+      expect(pieces).toHaveLength(1);
+      const p = pieces[0];
+      // Traverses 2 3 4(=0-coincident, keeps its C) then wraps straight to 1 — the
+      // coincident node absorbs node 0, so no L to (0,0) is inserted.
+      expect(serializePath(p.cmds)).toBe('M 10,10 L 0,10 C 0,6 0,3 0,0 L 10,0');
+      expect(nodeCount(p.cmds)).toBe(4); // D-1
+      expect(minSegmentLength(p.cmds)).toBeGreaterThan(0);
+      expect(p.nodeTypes).toBe('szcs'); // nt[2] nt[3] nt[4] nt[1]
+      expect(typesInSync(p.cmds, p.nodeTypes)).toBe(true);
+    });
+  });
+});
+
+describe('reversePath', () => {
+  function cubicAtLocal(x0: number, y0: number, c: CubicCmd, t: number) {
+    const u = 1 - t;
+    return {
+      x: u * u * u * x0 + 3 * u * u * t * c.x1 + 3 * u * t * t * c.x2 + t * t * t * c.x,
+      y: u * u * u * y0 + 3 * u * u * t * c.y1 + 3 * u * t * t * c.y2 + t * t * t * c.y,
+    };
+  }
+
+  it('reverses a cubic path, tracing the identical curve backwards', () => {
+    const cmds = parsePath('M 0 0 C 3 10 7 10 10 0');
+    const rev = reversePath(cmds, 'zs');
+    expect(rev.cmds[0]).toEqual({ cmd: 'M', x: 10, y: 0 });
+    expect(rev.nodeTypes).toBe('sz'); // reversed
+    const orig = asC(cmds[1]);
+    const back = asC(rev.cmds[1]);
+    for (let i = 0; i <= 10; i++) {
+      const t = i / 10;
+      const a = cubicAtLocal(0, 0, orig, t);
+      const b = cubicAtLocal(10, 0, back, 1 - t);
+      expect(b.x).toBeCloseTo(a.x, 9);
+      expect(b.y).toBeCloseTo(a.y, 9);
+    }
+  });
+
+  it('reverses an arc by swapping endpoints and flipping the sweep flag', () => {
+    const cmds = parsePath('M 10 0 A 10 10 0 0 1 0 10');
+    const rev = reversePath(cmds, null);
+    expect(rev.cmds[0]).toEqual({ cmd: 'M', x: 0, y: 10 });
+    expect(rev.cmds[1]).toEqual({ cmd: 'A', rx: 10, ry: 10, rot: 0, large: 0, sweep: 0, x: 10, y: 0 });
+  });
+});
+
+describe('closePath', () => {
+  const open = 'M 0 0 L 10 0 L 10 10 L 0 10'; // 4 nodes, open
+
+  it('segment mode appends Z and leaves nodes untouched', () => {
+    const p = closePath(parsePath(open), 'cccc', 'segment')!;
+    expect(serializePath(p.cmds)).toBe('M 0,0 L 10,0 L 10,10 L 0,10 Z');
+    expect(p.nodeTypes).toBe('cccc');
+    expect(typesInSync(p.cmds, p.nodeTypes)).toBe(true);
+  });
+
+  it('weld mode merges the two ends at their midpoint and closes', () => {
+    const p = closePath(parsePath(open), 'cszc', 'weld')!;
+    // Ends (0,0) and (0,10) -> midpoint (0,5); last segment folds into Z.
+    expect(serializePath(p.cmds)).toBe('M 0,5 L 10,0 L 10,10 Z');
+    expect(p.nodeTypes).toBe('csz'); // merged node 'c', then middle nodes, last dropped
+    expect(typesInSync(p.cmds, p.nodeTypes)).toBe(true);
+  });
+
+  it('refuses an already-closed path', () => {
+    expect(closePath(parsePath('M 0 0 L 10 0 L 10 10 Z'), null, 'segment')).toBeNull();
+  });
+});
+
+describe('joinPaths', () => {
+  const a = 'M 0 0 L 10 0';
+  const b = 'M 20 0 L 30 0';
+
+  it('bridges two paths with a straight segment (segment mode)', () => {
+    const p = joinPaths(
+      { cmds: parsePath(a), nodeTypes: 'cc', end: 'end' },
+      { cmds: parsePath(b), nodeTypes: 'ss', end: 'start' },
+      'segment',
+    )!;
+    expect(serializePath(p.cmds)).toBe('M 0,0 L 10,0 L 20,0 L 30,0');
+    expect(p.nodeTypes).toBe('ccss');
+    expect(typesInSync(p.cmds, p.nodeTypes)).toBe(true);
+  });
+
+  it('welds two path ends at their midpoint (weld mode)', () => {
+    const p = joinPaths(
+      { cmds: parsePath(a), nodeTypes: 'cc', end: 'end' },
+      { cmds: parsePath(b), nodeTypes: 'ss', end: 'start' },
+      'weld',
+    )!;
+    expect(serializePath(p.cmds)).toBe('M 0,0 L 15,0 L 30,0'); // 10,0 & 20,0 -> 15,0
+    expect(p.nodeTypes).toBe('ccs'); // a(0) + merged 'c' + b(1)
+    expect(nodeCount(p.cmds)).toBe(3); // Da + Db - 1
+    expect(typesInSync(p.cmds, p.nodeTypes)).toBe(true);
+  });
+
+  it('reverses a path when needed so the chosen ends meet', () => {
+    // Join a.start to b.end: both must be reversed internally.
+    const p = joinPaths(
+      { cmds: parsePath(a), nodeTypes: null, end: 'start' },
+      { cmds: parsePath(b), nodeTypes: null, end: 'end' },
+      'segment',
+    )!;
+    // a reversed -> 10,0 then 0,0 ; b reversed -> 30,0 then 20,0.
+    expect(serializePath(p.cmds)).toBe('M 10,0 L 0,0 L 30,0 L 20,0');
+    expect(p.nodeTypes).toBeNull();
+  });
+
+  it('returns null when either path is closed', () => {
+    expect(joinPaths(
+      { cmds: parsePath('M 0 0 L 10 0 Z'), nodeTypes: null, end: 'end' },
+      { cmds: parsePath(b), nodeTypes: null, end: 'start' },
+      'weld',
+    )).toBeNull();
   });
 });

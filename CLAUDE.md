@@ -13,7 +13,9 @@ switch between **Setup mode** (edit the character itself: rest pose, pivots, par
 path nodes — never keyframed) and **Animate mode** (pose parts on a canvas and record
 **keyframes** on a timeline) → organize animations as **clips** (one clip = one "mood")
 → export a Kotlin file that replays the whole rig with Compose `InfiniteTransition`
-keyframes and `DrawScope` transforms, or a Lottie JSON file. There is also an AI
+keyframes and `DrawScope` transforms, a Lottie JSON file, or a Rive `.riv` binary
+(all clips as named animations; plays in official Rive runtimes everywhere — by
+design NOT openable in the Rive editor, which cannot import .riv). There is also an AI
 assistant panel that sends the rig + active clip (optionally with a rendered snapshot
 of the current pose) to the Claude API and applies choreography from a natural-language
 prompt, or critiques the existing clip.
@@ -46,16 +48,22 @@ from the console.
 | `transforms.ts` | SVG transform-list parser plus a small affine `Mat` toolkit (`multiply`/`invertMat`/`applyMat`/`rotationMat`); `rotationPivotOf` finds a transform list's fixed point by testing the *composed matrix* for a rigid rotation, so it recovers pivots regardless of whether Inkscape wrote `rotate(...)` or an equivalent `matrix(...)` |
 | `exportCompose.ts` | `RigDoc` → Kotlin text (mood enum, keyframe choreography with all 4 easings mapped to Compose easings, rest-pose offsets folded into emitted channels, nested parent-chain `withTransform` calls, `DrawScope` replay of SVG transforms incl. `matrix(...)`) |
 | `exportLottie.ts` | `RigDoc` + one clip → Lottie JSON (v5.7.0, 60fps): a root null layer for whole-figure translate/scale, one shape layer per part with Lottie-native `parent` layer references mirroring the bone hierarchy, geometry flattened through baked SVG transforms with arcs converted to cubics, easings converted to bezier handles |
+| `exportRiv.ts` | `RigDoc` + ALL clips → Rive `.riv` binary (format major 7): varuint/ToC writer, typeKey/propertyKey table derived from rive-runtime `dev/defs` (cited in-file), Backboard→Artboard→Node-per-part-at-pivot (geometry baked to docPoint−pivot, rest scale/skew baked in, rotation in RADIANS), Shape/PointsPath/CubicDetachedVertex geometry, Fill/Stroke/SolidColor (opacity folded into alpha), one LinearAnimation per clip with KeyedObject/KeyedProperty/KeyFrameDouble + CubicEaseInterpolators (interpolators emitted BEFORE animations — animation objects consume no component index). Deterministic bytes; playback-only (the Rive editor cannot import .riv) |
 | `ik.ts` | Analytic IK: `solveTwoBone` (law-of-cosines two-joint solve, bend-direction preserving, reach-clamped) and `solveAim`, both in degrees/root space |
 | `skin.ts` | Skinning math: `distToSegment`, `skinWeights` (normalized inverse-square distance to bind-time bone segments) |
 | `graph.ts` | Curve editor panel: value-vs-time plot per track, draggable keys, per-segment bezier handles writing `Keyframe.bezier` |
+| `align.ts` | Align & distribute math (`alignDeltas`/`distributeDeltas`, pure functions over part bboxes with selection/first/last/canvas reference options); applied through parent-chain-aware rest translation from the inspector |
+| `snap.ts` | Pure snapping math (`snapPoint`/`snapDelta`/`boxFeaturePoints`: nearest candidate within a threshold, axis-lock aware, box = center + corners + edge midpoints); view.ts collects candidates and applies it to Setup-mode node/pivot/part-translate drags |
+| `help.ts` | `SHORTCUTS` registry (single source of truth for documented bindings) and the `?`/F1 keyboard-shortcut overlay (`openHelp`/`closeHelp`/`toggleHelp`/`isHelpOpen`) |
 | `claude.ts` | Anthropic SDK calls (`claude-opus-4-8`): `animateWithClaude` (adaptive thinking, structured outputs guaranteeing a valid clip JSON, parent-aware system prompt, optional base64 pose snapshot for vision grounding) and `critiqueWithClaude` (plain-text animation review) |
-| `main.ts` | Bootstrapping, toolbar (open SVG/project, sample, save project, undo/redo, Compose/Lottie export, Setup/Animate toggle), autosave to `localStorage`, keyboard shortcuts (Tab mode toggle, Ctrl+C/V keyframe copy-paste, Delete, arrow-key nudge-or-scrub, `F` fit-view, Space play) |
+| `main.ts` | Bootstrapping, toolbar (open SVG/project, sample, save project, undo/redo, Compose/Lottie export, Setup/Animate toggle, `?` help), autosave to `localStorage`, and the single global `keydown` handler: Tab mode toggle; Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo/redo; Ctrl+S/O save/open; Ctrl+A select-all (nodes in node mode, else parts); Ctrl+D duplicate parts (Setup, skips skinned); Ctrl+G / Ctrl+Shift+G group/ungroup; Ctrl+C/V keyframe copy-paste; V/T/R/I tool keys; `%` snapping toggle; Shift+H / Shift+V flips; `+`/`-` zoom; `?`/F1 help overlay; PageUp/PageDown z-order; Delete and arrows resolve by context (animate keys → nodes → setup parts → playhead scrub); Escape tiers (help overlay → bone placement → path → group/deselect); `F` fit-view; Space play (F/Space/letter keys fire only without ctrl/meta/alt) |
 
 ## Roadmap
 
-Feature roadmap (v1 checklist + explicit v2 out-of-scope list) lives in `ROADMAP.md`.
-All v1 items are implemented and verified as of 2026-07-07.
+Feature roadmap lives in `ROADMAP.md`: v1 through v2.8 are all implemented and
+verified as of 2026-07-10; "Committed next" holds accepted-but-deferred features
+(view.ts split + interaction harness, Rive-style state machines); "v3 — Future" is
+the out-of-scope / next-up list.
 
 ## Conventions that must hold
 
@@ -64,8 +72,9 @@ All v1 items are implemented and verified as of 2026-07-07.
   translate + scale (jumps, squash-and-stretch) around `rootPivot`.
 - **Setup mode edits the character; Animate mode edits keyframes.** Setup is
   Inkscape-like: dragging a part MOVES it (`rest.tx/ty`), the selected part shows
-  corner/side scale handles, and clicking it again swaps them for corner rotate handles
-  (`rest.rotate`); double-click "enters" a part and selects the path under the cursor
+  corner/side scale handles, and clicking it again swaps them for corner rotate
+  handles (`rest.rotate`) plus side skew handles (`rest.kx/ky`); double-click
+  "enters" a part and selects the path under the cursor
   (Escape backs out). In Animate, dragging a part rotates it around its pivot
   (Shift+drag moves) and calls `setKeyframe()` at the playhead. Pivots and node editing
   are Setup-only. Toggle with the top-right buttons or `Tab`.
@@ -149,6 +158,20 @@ All v1 items are implemented and verified as of 2026-07-07.
   `PipStudioRig.kt` and shows on Dosey's debug Test tab. **This has not been re-run**
   since the parent-chain/rest-folding/new-easings changes below — do it before treating
   the exporter as shippable.
+- **Snapping is an editor preference, not document data**: `state.snapEnabled`
+  (persisted in localStorage, never serialized into projects), Setup-mode drags only
+  (node/pivot/part translate — Animate posing stays free). Pure math lives in
+  `snap.ts`; snapping adjusts drag deltas only (never adds checkpoints) and respects
+  Ctrl axis-locks (corrects the free axis only). Threshold is ~8 SCREEN px through
+  the zoom.
+- **Structural node ops (join / join-segment / delete-segment) are pure functions in
+  `paths.ts`** (`deleteSegment`/`closePath`/`joinPaths`/`reversePath`) operating on
+  single subpaths; view.ts only wires eligibility + checkpoint + DOM sync
+  (`syncPartPathDom`). They keep `nodeTypes` in exact lockstep (welded node → 'c';
+  reversal flips arc sweep flags rather than converting to cubics) and refuse
+  compound paths — buttons disable via `canJoinNodes`/`canDeleteSegment`.
+- **`help.ts`'s `SHORTCUTS` list is the user-facing shortcut documentation** — any
+  binding change in `main.ts` must update it in the same change.
 - **The canonical Pip artwork** is `Dosey/media/PIP_MASTER.svg`; `public/PIP_MASTER.svg`
   here is a bundled sample copy — re-sync it when the master changes.
 
@@ -163,6 +186,102 @@ assert numerically (px drift, cos angles) and on the DOM. Full checklist lives i
 ROADMAP.md "Testing conventions".
 
 ## Status
+
+### Tenth wave (v2.8: Rive .riv export + project-format verification) — implemented and verified
+
+Built 2026-07-10 by two parallel subagents (disjoint file ownership), orchestrator-
+audited; `npm run build` clean; **235 tests / 10 files passing**.
+
+- **Rive `.riv` exporter** (`exportRiv.ts`, "Export Rive (.riv)" toolbar button,
+  `exportRiv` on the debug hook): whole doc, all clips as named animations, one
+  binary. Schema derived from rive-runtime `dev/defs` (NOT from memory — table cited
+  in-file); traps encoded there: LinearAnimation's name is propertyKey 55 (not the
+  Component name 4), ToC backing-types pack 4 keys per uint32 word, parentId/
+  objectId/interpolatorId index the artboard's component list (Artboard = 0,
+  animation objects consume NO index, so interpolators emit before animations),
+  rotation is radians, colors 0xAARRGGBB. Mapping mirrors exportLottie: node per
+  part positioned at the effective pivot, geometry baked to docPoint−pivot incl.
+  rest scale/skew, arcs→cubics with polar (rotation/distance) tangents, paint
+  opacity folded into SolidColor alpha, stroke width scaled by baked-matrix norm,
+  skinned parts rigid (Rive Skin/Tendon deferred), loop=1. Deterministic output.
+  VERIFIED against the official `@rive-app/canvas` runtime (devDependency; harness
+  page `public/riv-check.html`): file loads with zero errors, artboard/animation
+  names correct, keyed rotations sample exactly (0→±45° with easing curvature),
+  a custom cubic-bezier matches at 6 sampled points, unkeyed channels stay static.
+  Pixel readback is impossible in the headless harness (official sample .riv files
+  also read back 0 px), so in-session verification is at the transform level.
+  DRAW-ORDER RULE (learned from the user's real rive.rip check, which caught an
+  inverted-z bug the transform-level harness could not see): Rive draws the FIRST
+  drawable in file order TOPMOST — `artboard.cpp` collects drawables in component
+  order, sets `m_FirstDrawable = lastDrawable`, and `drawInternal()` iterates
+  backward — the opposite of `doc.parts` paint order (last = topmost). The exporter
+  therefore emits all Nodes first (only Shapes are Drawables), then shape clusters
+  in fully REVERSED paint order (parts back-to-front, each part's paths
+  back-to-front); `KeyedObject.objectId` wiring reads recorded node indices so
+  reordering can't desync animation targets. Pinned by binary-order unit tests.
+  Translucent fills fold opacity into SolidColor alpha (0.3 → 0x4D) — verified
+  byte-exact.
+- **Project save/load verified lossless** (no fix needed): `serializeDoc` is a blind
+  JSON.stringify of the typed doc, all mutation sites stay within typed fields
+  (grepped), autosave shares the exact serialize/deserialize pair. NEW coverage
+  (was zero): a maximal-doc round trip (bones/boneTip, group, skin incl.
+  restWorldInv/bindSeg, nodeTypes, skew + negative-scale flip, pivotHint, 2 clips,
+  all easings + custom beziers, multi-path paints, draw order) asserting deep
+  equality, byte-stable re-serialize, and identical sampleChannel output; plus
+  normalizeDoc back-compat tests (missing kind/boneTip/skin/nodeTypes/bezier,
+  dangling refs pruned, bezier clamping). Editor prefs (snap, playback speed,
+  ping-pong, onion, selection, mode) intentionally NOT persisted — confirmed
+  structural.
+
+### Ninth wave (v2.7 vector-app parity: node ops, snapping, shortcuts, polish) — implemented and verified
+
+All ROADMAP v2.7 items, built 2026-07-10 by parallel/sequential subagents with the
+orchestrator auditing every diff; each feature live-verified with realistic gestures
+(elementFromPoint hit targets, full pointer sequences, numeric assertions);
+`npm run build` clean; **199 tests / 9 files passing**.
+
+- **Segment delete / join (Inkscape node editing)**: pure single-subpath ops in
+  `paths.ts` — `deleteSegment` (closed path opens at the break, rotating the seam and
+  turning the old Z into a straight L; open path splits into two `RigPath`s, the
+  second labeled `·2`; <2-node pieces discarded), `closePath` (weld to midpoint or
+  close with the straight Z segment), `joinPaths` (cross-path merge, reversing one
+  side as needed — cubic controls swap, arc sweep flags flip), `reversePath`.
+  `nodeTypes` stays in exact lockstep everywhere; stale Inkscape strings normalize.
+  Inspector gains join / join seg / del seg buttons that disable with requirement
+  tooltips. Audit fix included: paths with an EXPLICIT closing segment + zero-length
+  Z (what segment-bending creates) no longer grow a phantom zero-length L on delete.
+  Verified live on Pip's left_leg: open→split→weld→close round trip, byte-identical
+  undo per op.
+- **Double-click off the shape escapes node editing**: a dblclick that resolves no
+  artwork (blank or dimmed parts) clears entered path, node selection, entered
+  groups, AND part selection; dblclick on the edited part still re-scopes among its
+  paths. Verified: 19 node handles → 0, overlay emptied, all dimming cleared.
+- **Toggleable snapping** (`snap.ts` + wiring): Setup-only — node↔node (same part),
+  pivot↔nodes/other pivots, part translate pivot↔pivot + bbox features (9 points per
+  box); nearest candidate within 8 screen px; Ctrl axis-locks respected (snap
+  corrects the free axis only); one marker on the overlay while engaged
+  (non-scaling-stroke). Magnet toggle in canvas-tools + `%` key, persisted in
+  localStorage, default ON. Verified: node snap lands byte-equal coordinates; pivot
+  snap keeps artwork fixed to 0.0005 px (the compensation invariant); marker present
+  during snap, gone on pointerup; undo exact.
+- **Standard shortcuts + help overlay**: Ctrl+S/O (preventDefault, shared code path
+  with toolbar), Ctrl+A (nodes in node mode, else all parts), Ctrl+D duplicate
+  (Setup; `model.duplicateParts` — fresh part+path ids, +12/+12 offset, " copy"
+  label, tracks not copied, skinned skipped; canvas rebuilds via the undo path),
+  `+`/`-` zoom 1.25× about the canvas center (`view.zoomBy` shares the wheel-zoom
+  math), `?`/F1 help overlay (46 bindings in 7 groups, driven by `help.ts SHORTCUTS`,
+  Escape-first tier). FIXED the audit finding: `F`/Space/letter shortcuts now ignore
+  ctrl/meta/alt, so Ctrl+F no longer triggers fit-view alongside the browser find
+  bar. Verified: all of (a)-(g) in the wave brief numerically, incl. zoom ratios
+  exactly 0.8/1.25 with 0 px center drift.
+- **Visual polish (CSS/HTML only)**: design tokens (spacing scale --sp-1..5, control
+  heights --ctrl-h 28px/--ctrl-h-sm 24px, radii, layered borders replacing harsh
+  #000, restrained shadows), coherent hover/active/disabled/focus-visible states
+  (keyboard focus rings; disabled cursor not-allowed), tabular numerals on numeric
+  readouts, themed thin scrollbars, subtler checkerboard, playhead grab-head +
+  keyframe hover growth, toolbar grouped into labeled clusters with a gradient brand
+  mark, prefers-reduced-motion killswitch. No selector renamed; overlay color
+  language untouched. Verified: uniform 28 px controls, no overflow at 1100 px.
 
 ### Eighth wave (v2.6 bug fixes & small improvements) — implemented and verified
 
@@ -465,17 +584,26 @@ re-verified structurally but the two external-consumer checks below are still ow
 
 ### Unit tests — done
 
-`npm test`: **5 files, 101 tests, all passing.** `paths` (parse/serialize/arc→cubic/
-node insertion), `transforms` (matrix ops, rotation fixed points from both rotate()
-and matrix() spellings), `model` (channelValue absolute/rest-fallback semantics,
-sampling/easings, keyframe clipboard, parenting/cycles, `normalizeDoc` back-compat),
-`importSvg` (jsdom: layer unwrap, pivot seeding incl. transform-center y-flip, shape
-conversion, label/transform accumulation), `exportCompose` (pose.at rest defaults,
-rest-scale emission, parent-chain ordering, all easing suffixes). One bug found by the
+`npm test`: **10 files, 235 tests, all passing** (2026-07-10). Covered:
+`paths` (parse/serialize/arc→cubic/node insertion, segment delete/join/reverse/close
+incl. explicit-closing-segment edge cases), `snap` (nearest/threshold/axis-lock/
+box features), `exportRiv` (varuint/string/float/ToC writer primitives + a
+standalone ToC-aware .riv decoder asserting header, object order, parentId
+validity, per-clip keyframe counts/values, absolute-vs-rest semantics, bezier
+interpolator wiring, determinism), serialization round-trip + `normalizeDoc`
+back-compat (maximal doc, byte-stable), `transforms` (matrix ops, skew,
+rotation fixed points from both rotate() and matrix() spellings), `model`
+(channelValue absolute/rest-fallback semantics, sampling/easings, keyframe clipboard,
+parenting/cycles, group/ungroup absorption, structural AI changes, part
+duplication/select-all, `normalizeDoc` back-compat), `importSvg` (jsdom: layer unwrap, pivot seeding incl. transform-center
+y-flip, shape conversion, sodipodi:nodetypes), `exportCompose` (pose.at rest
+defaults, rest-scale emission, skew folding, parent-chain ordering, easing suffixes),
+`align` (align/distribute math), `ik` (reach/clamp/bend-direction, plus `skin.ts`
+weight math), `graph` (curve-editor bezier sampling). One bug found by the original
 test pass was fixed in `model.ts`: `setKeyframeAt` now applies an explicitly passed
 easing when replacing an existing key (paste carries the copied easing) while drags,
 which omit it, still preserve a hand-set easing. Not covered: the DOM-heavy modules
-(`view`/`timeline`/`panels`/`main`), `exportLottie`, `claude.ts`.
+(`view`/`timeline`/`panels`/`main`), `history.ts`, `exportLottie`, `claude.ts`.
 
 ### Not started
 
@@ -483,7 +611,8 @@ which omit it, still preserve a hand-set easing. Not covered: the DOM-heavy modu
   out in this environment even though the page is responsive); verification relies on
   DOM inspection and scripted pointer/keyboard events through `window.__rigStudio`.
   Worth a manual look in a real browser before shipping.
-- Skew (Inkscape's rotate-mode side handles) and mirror-flip through scale handles
-  (factors are clamped positive) are unimplemented.
+- Mirror-flip by dragging a scale handle through zero is unimplemented (drag factors
+  clamp positive; flips are Shift+H / Shift+V instead). Skew IS implemented (fifth
+  wave) — see the rest-skew convention above.
 - Per-part AI motion suggestions and richer critique-mode UI (currently a single
   scrollable text block) are unbuilt.

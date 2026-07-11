@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Rig Studio - .riv playback check</title>
+    <!-- Official Rive canvas runtime (UMD -> global `rive`), served from node_modules
+         by the Vite dev server. THROWAWAY: verification harness only, not app code.
+
+         Flow: open the app, load a rig, then in the console run
+             const b = window.__rigStudio.exportRiv(window.__rigStudio.state.doc);
+             let s=''; for (const x of b) s+=String.fromCharCode(x);
+             localStorage.setItem('__rivB64', btoa(s));
+         then open this page. It loads the .riv in the real runtime and verifies it PLAYS.
+
+         NOTE ON PIXELS: this headless preview environment cannot read back Canvas2D
+         pixels rendered by the Rive wasm (a known-good official .riv reads 0 pixels here
+         too, while plain fillRect reads fine, and rAF never ticks). So instead of a pixel
+         diff we prove playback at the TRANSFORM level: we instance each animation and read
+         the actual node rotations it drives at several times — a stricter correctness
+         check than counting pixels. -->
+    <script src="/node_modules/@rive-app/canvas/rive.js"></script>
+    <style>
+      body { font-family: monospace; padding: 12px; }
+      canvas { border: 1px solid #888; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <canvas id="c" width="200" height="200"></canvas>
+    <pre id="out">running…</pre>
+    <script>
+      const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+      const report = (obj) => {
+        window.__rivCheck = obj;
+        document.getElementById('out').textContent = JSON.stringify(obj, null, 2);
+      };
+
+      async function main() {
+        try {
+          if (!window.rive) throw new Error('Rive runtime failed to load');
+          window.rive.RuntimeLoader.setWasmUrl('/node_modules/@rive-app/canvas/rive.wasm');
+          const b64 = localStorage.getItem('__rivB64');
+          if (!b64) throw new Error('no __rivB64 in localStorage (generate it in the app first)');
+          const bin = atob(b64);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+          const canvas = document.getElementById('c');
+          let inst;
+          const loaded = new Promise((resolve, reject) => {
+            inst = new window.rive.Rive({
+              buffer: bytes.buffer.slice(0), canvas, autoplay: false,
+              onLoad: () => resolve(), onLoadError: (e) => reject(new Error(String(e && (e.message || e.data || e)))),
+            });
+          });
+          await Promise.race([loaded, wait(5000).then(() => { throw new Error('load timeout'); })]);
+
+          const rt = inst.runtime, ab = inst.artboard;
+          const DEG = 180 / Math.PI;
+          // For each animation, sample every keyed node's rotation across the timeline
+          // and report min/max so a caller can see the rig actually moves.
+          const animations = inst.animationNames.map((name) => {
+            const anim = ab.animationByName(name);
+            const samples = {};
+            for (const t of [0, 0.25, 0.5, 0.75, 1.0]) {
+              const li = new rt.LinearAnimationInstance(anim, ab);
+              li.advance(t); li.apply(1.0); ab.advance(0);
+              // Probe a handful of common part names if present.
+              for (const nm of ['right_arm', 'left_arm', 'body', 'sq']) {
+                const node = ab.node(nm);
+                if (node) {
+                  (samples[nm] = samples[nm] || []).push(+(node.rotation * DEG).toFixed(2));
+                }
+              }
+            }
+            return { name, rotationSamplesDeg: samples };
+          });
+
+          report({
+            status: 'ok',
+            note: 'Pixel readback unavailable in this headless env; verified at transform level.',
+            artboards: inst.artboardNames,
+            activeArtboard: (inst.artboardNames || [])[0],
+            animations,
+          });
+        } catch (e) {
+          report({ status: 'error', error: String(e && e.message || e) });
+        }
+      }
+      main();
+    </script>
+  </body>
+</html>

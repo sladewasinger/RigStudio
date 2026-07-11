@@ -25,12 +25,16 @@
 import {
   RigPart, RigPath, state, notify, setKeyframe, selectedPart, selectedParts,
   selectPart, ancestorChain, activeClip, channelValue, sampleChannel, addNullPart,
-  partById,
+  partById, freshId,
 } from './model';
-import { parsePath, serializePath, insertNodeAfter, pathToCubics, PathCmd } from './paths';
+import {
+  parsePath, serializePath, insertNodeAfter, pathToCubics, PathCmd,
+  deleteSegment, closePath, joinPaths, isSingleSubpath, isClosedPath, nodeCount,
+} from './paths';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from './transforms';
 import { solveAim, solveTwoBone } from './ik';
 import { skinWeights, Seg } from './skin';
+import { snapPoint, snapDelta, boxFeaturePoints, SnapCandidate, SnapAxis } from './snap';
 import { checkpoint } from './history';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -53,6 +57,16 @@ let handlePartId: string | null = null;
 
 // Groups the user has double-clicked into (clicks inside them select parts directly).
 const enteredGroups = new Set<string>();
+
+// The point (in SVG user/viewBox space) a live drag is currently snapped to, drawn as
+// an overlay marker. Null when no snap is engaged; cleared when the drag ends.
+let snapMarker: { x: number; y: number } | null = null;
+
+// Snapping is a SETUP-mode editing aid only (node/pivot/part-body drags line up on
+// nearby geometry). Animate posing stays free — keyed motion should never jump to art.
+function snappingActive(): boolean {
+  return state.snapEnabled && state.editorMode === 'setup';
+}
 
 /** Escape/blank-click hook: close all entered groups. */
 export function clearGroupEntry(): void {
@@ -166,6 +180,37 @@ export function resetView(): void {
 function applyViewRect(): void {
   if (!svg || !viewRect) return;
   svg.setAttribute('viewBox', `${viewRect.x} ${viewRect.y} ${viewRect.w} ${viewRect.h}`);
+}
+
+/**
+ * Core viewBox zoom: scale around the SVG-user-space point (px,py) by `factor` (>1
+ * zooms in), clamped to the same 1/60..12x document-size bounds as wheel zoom. Shared
+ * by the wheel handler (cursor-anchored) and zoomBy (keyboard, canvas-center-anchored).
+ */
+function zoomAround(px: number, py: number, factor: number): void {
+  if (!svg || !viewRect) return;
+  const doc = state.doc;
+  const minW = doc ? doc.viewBox.w / 60 : 1;
+  const maxW = doc ? doc.viewBox.w * 12 : 10000;
+  const newW = Math.min(maxW, Math.max(minW, viewRect.w / factor));
+  const applied = viewRect.w / newW;
+  viewRect.x = px - (px - viewRect.x) / applied;
+  viewRect.y = py - (py - viewRect.y) / applied;
+  viewRect.w = newW;
+  viewRect.h = viewRect.h / applied;
+  applyViewRect();
+  renderPose(); // overlay handle sizes track the zoom level
+}
+
+/** Zoom in/out by `factor` (>1 = in), centered on the canvas viewport (keyboard +/-). */
+export function zoomBy(factor: number): void {
+  if (!svg || !viewRect) return;
+  const rect = svg.getBoundingClientRect();
+  const m = svg.getScreenCTM();
+  if (!m) return;
+  const p = svgPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+    .matrixTransform(m.inverse());
+  zoomAround(p.x, p.y, factor);
 }
 
 export function buildCanvas(container: HTMLElement): void {
@@ -285,6 +330,30 @@ export function registerPart(part: RigPart): void {
 export function unregisterPart(id: string): void {
   partGroups.get(id)?.remove();
   partGroups.delete(id);
+}
+
+/**
+ * Reconcile a part's <path> DOM with its current `part.paths` after a structural edit
+ * (paths added by a split, removed by a merge). Creates missing elements, drops stale
+ * ones, refreshes attributes, and re-appends everything in paint order. renderPose()
+ * still owns transforms; undo/redo rebuilds via buildCanvas so this is forward-only.
+ */
+function syncPartPathDom(part: RigPart): void {
+  const g = partGroups.get(part.id);
+  if (!g) return;
+  const wanted = new Set(part.paths.map((p) => p.id));
+  for (const el of Array.from(g.querySelectorAll('[data-path-id]'))) {
+    if (!wanted.has((el as SVGElement).dataset.pathId!)) el.remove();
+  }
+  for (const p of part.paths) {
+    let el = g.querySelector<SVGPathElement>(`[data-path-id="${p.id}"]`);
+    if (!el) {
+      el = document.createElementNS(SVG_NS, 'path');
+      el.dataset.pathId = p.id;
+    }
+    applyPathAttrs(el, p);
+    g.appendChild(el); // re-append in order (moves existing, adds new at the right spot)
+  }
 }
 
 // ---- Vector-editing operations (Setup mode) ----
@@ -728,6 +797,7 @@ function renderOverlay(): void {
   if (state.mode === 'nodes' && setup) {
     const part = selectedPart();
     if (part) renderNodeHandles(part);
+    drawSnapMarker();
     return;
   }
 
@@ -964,20 +1034,22 @@ function renderOverlay(): void {
   // Drawn last (and in its own interactive group) so it stays on top; draggable only in
   // Setup mode — moving a joint is a rig edit, not an animation edit.
   const part = selectedPart();
-  if (!part) return;
-  const ep = effectivePivot(part, t);
-  const px = ep.x, py = ep.y;
-  const cross = document.createElementNS(SVG_NS, 'g');
-  cross.setAttribute('class', setup ? 'pivot-handle' : 'pivot-handle locked');
-  if (setup) cross.dataset.role = 'pivot';
-  if (rootTransform) cross.setAttribute('transform', rootTransform);
-  cross.innerHTML =
-    `<circle class="pivot-grab" cx="${px}" cy="${py}" r="${size * 1.6}" />` +
-    `<circle class="pivot-ring" cx="${px}" cy="${py}" r="${size * 1.1}" />` +
-    `<circle class="pivot-dot" cx="${px}" cy="${py}" r="${size * 0.3}" />` +
-    `<line x1="${px - size * 2}" y1="${py}" x2="${px + size * 2}" y2="${py}" />` +
-    `<line x1="${px}" y1="${py - size * 2}" x2="${px}" y2="${py + size * 2}" />`;
-  overlay.appendChild(cross);
+  if (part) {
+    const ep = effectivePivot(part, t);
+    const px = ep.x, py = ep.y;
+    const cross = document.createElementNS(SVG_NS, 'g');
+    cross.setAttribute('class', setup ? 'pivot-handle' : 'pivot-handle locked');
+    if (setup) cross.dataset.role = 'pivot';
+    if (rootTransform) cross.setAttribute('transform', rootTransform);
+    cross.innerHTML =
+      `<circle class="pivot-grab" cx="${px}" cy="${py}" r="${size * 1.6}" />` +
+      `<circle class="pivot-ring" cx="${px}" cy="${py}" r="${size * 1.1}" />` +
+      `<circle class="pivot-dot" cx="${px}" cy="${py}" r="${size * 0.3}" />` +
+      `<line x1="${px - size * 2}" y1="${py}" x2="${px + size * 2}" y2="${py}" />` +
+      `<line x1="${px}" y1="${py - size * 2}" x2="${px}" y2="${py + size * 2}" />`;
+    overlay.appendChild(cross);
+  }
+  drawSnapMarker();
 }
 
 /** The classic bone silhouette between two points (joint fat end, pointed tip). */
@@ -1281,6 +1353,8 @@ type DragState =
       axis: 'x' | 'y' | null;
       /** Click (no movement) on the already-primary part cycles scale↔rotate handles. */
       toggleOnClick: boolean;
+      /** Frozen snap features (start pose), computed lazily on the first snapped frame. */
+      snapFeatures?: { moving: SnapCandidate[]; targets: SnapCandidate[] } | null;
     }
   | {
       kind: 'ik';
@@ -1484,17 +1558,7 @@ function wireInteractions(): void {
     if (!m) return;
     const p = svgPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
     const factor = Math.pow(1.0015, -ev.deltaY);
-    const doc = state.doc;
-    const minW = doc ? doc.viewBox.w / 60 : 1;
-    const maxW = doc ? doc.viewBox.w * 12 : 10000;
-    const newW = Math.min(maxW, Math.max(minW, viewRect.w / factor));
-    const applied = viewRect.w / newW;
-    viewRect.x = p.x - (p.x - viewRect.x) / applied;
-    viewRect.y = p.y - (p.y - viewRect.y) / applied;
-    viewRect.w = newW;
-    viewRect.h = viewRect.h / applied;
-    applyViewRect();
-    renderPose(); // overlay handle sizes track the zoom level
+    zoomAround(p.x, p.y, factor);
   }, { passive: false });
 
   // Double-click steps INTO things, SVG-editor style: group → part → path. Escape or
@@ -1505,7 +1569,21 @@ function wireInteractions(): void {
     // grab circle — often right where the second click lands. The overlay must never
     // eat a drill-down.
     const hit = artworkUnderPointer(ev);
-    if (!hit) return;
+    if (!hit) {
+      // In node-editing mode, a dblclick that lands off the shape (blank canvas, or a
+      // dimmed/click-through part) exits the whole editing context: leave the entered
+      // path, drop the node selection, close entered groups, and deselect everything.
+      if (state.editorMode === 'setup' && state.mode === 'nodes') {
+        state.selectedPathId = null;
+        selectedNodes.clear();
+        selectedNode = null;
+        clearGroupEntry();
+        selectPart(null);
+        notify();
+        renderPose();
+      }
+      return;
+    }
     const { part, pathEl } = hit;
     // First: open the outermost still-closed group and select the next level.
     const closed = ancestorChain(part).find(
@@ -1987,12 +2065,28 @@ function wireInteractions(): void {
       const p = pointerInRoot(ev);
       let dx = p.x - drag.startX;
       let dy = p.y - drag.startY;
-      if (drag.axis === 'x') dy = 0;
-      else if (drag.axis === 'y') dx = 0;
+      // Axis lock (gizmo arrow or Ctrl) applies to the delta BEFORE snapping; the FREE
+      // axis is the one still moving, so snapping can only correct along it — the lock
+      // is never broken.
+      let freeAxis: SnapAxis = null;
+      if (drag.axis === 'x') { dy = 0; freeAxis = 'x'; }
+      else if (drag.axis === 'y') { dx = 0; freeAxis = 'y'; }
       else if (ev.ctrlKey) {
         // Ctrl constrains a free move to the dominant axis (Inkscape-style).
-        if (Math.abs(dx) >= Math.abs(dy)) dy = 0;
-        else dx = 0;
+        if (Math.abs(dx) >= Math.abs(dy)) { dy = 0; freeAxis = 'x'; }
+        else { dx = 0; freeAxis = 'y'; }
+      }
+      snapMarker = null;
+      const primary = selectedPart();
+      if (snappingActive() && primary) {
+        if (!drag.snapFeatures) drag.snapFeatures = translateSnapFeatures(primary, poseTime());
+        const snapped = snapDelta(
+          drag.snapFeatures.moving, drag.snapFeatures.targets,
+          { dx, dy }, snapThreshold(), freeAxis,
+        );
+        dx = snapped.dx;
+        dy = snapped.dy;
+        if (snapped.target) snapMarker = rootToUser(snapped.target);
       }
       // The constrained point, so the dashed line + Δ readout show the applied move.
       drag.current = { x: drag.startX + dx, y: drag.startY + dy };
@@ -2110,9 +2204,22 @@ function wireInteractions(): void {
       const p = pointerInRoot(ev);
       const part = d.part;
       const t = poseTime();
+      // Snap the target joint position (root space) onto the part's own nodes or other
+      // joints. The pivot-compensation solve below then keeps the artwork fixed, so the
+      // joint lands on the target WITHOUT moving the art.
+      let sx = p.x, sy = p.y;
+      snapMarker = null;
+      if (snappingActive()) {
+        const match = snapPoint({ x: sx, y: sy }, pivotSnapCandidates(part, t), snapThreshold());
+        if (match) {
+          sx = match.point.x;
+          sy = match.point.y;
+          snapMarker = rootToUser(match.point);
+        }
+      }
       // Un-apply the ancestors' motion so we work in the part's parent-chain frame
       // (pivot + own translate live there: effectivePivot = chain · (pivot + ot)).
-      const local = applyMat(invertMat(chainMatOf(part, t)), p.x, p.y);
+      const local = applyMat(invertMat(chainMatOf(part, t)), sx, sy);
       // Moving the joint must never move the artwork. The pivot anchors the part's
       // own rotation AND the innermost rest scale/skew, so re-anchoring it shifts
       // the rendered art unless the rest translation absorbs the difference. Solve
@@ -2276,8 +2383,9 @@ function wireInteractions(): void {
         handleMode = handleMode === 'scale' ? 'rotate' : 'scale';
       }
       drag = null;
+      snapMarker = null; // drop any snap marker before the final repaint
       notify();
-      renderPose(); // clears gizmos
+      renderPose(); // clears gizmos + snap marker
     }
   };
   svg.addEventListener('pointerup', end);
@@ -2384,6 +2492,23 @@ function moveNode(d: Extract<DragState, { kind: 'node' }>, ev: PointerEvent): vo
   const c = cmds[d.cmdIndex] as PathCmd & Record<string, number>;
   if (!c || c.cmd === 'Z') return;
 
+  // Node drags (endpoints only) snap to other visible nodes of the same part's paths.
+  snapMarker = null;
+  if (d.field === 'x' && snappingActive()) {
+    const scoped = state.selectedPathId
+      ? d.part.paths.filter((p) => p.id === state.selectedPathId)
+      : d.part.paths;
+    const moving = new Set(selectedNodes);
+    moving.add(nodeKey(d.pathId, d.cmdIndex)); // exclude the dragged node even if unselected
+    const { candidates, threshold } = nodeSnapCandidates(d.part, path, scoped, moving);
+    const match = snapPoint({ x: local.x, y: local.y }, candidates, threshold);
+    if (match) {
+      local.x = match.point.x;
+      local.y = match.point.y;
+      snapMarker = applyMat(pathHolderMat(d.part, path), local.x, local.y); // path → user
+    }
+  }
+
   if (d.field === 'x') {
     const dx = local.x - c.x;
     const dy = local.y - c.y;
@@ -2456,6 +2581,30 @@ export function hasSelectedNode(): boolean {
 }
 
 export function selectedNodeCount(): number {
+  return selectedNodes.size;
+}
+
+/**
+ * Select every node of the edited path (or every path of the current part when none is
+ * "entered") — Ctrl+A in node-editing mode. Mirrors the scoping renderNodeHandles uses
+ * so the selection always matches what's drawn. Returns the number of nodes selected.
+ */
+export function selectAllNodes(): number {
+  const part = selectedPart();
+  if (!part) return 0;
+  const paths = state.selectedPathId
+    ? part.paths.filter((p) => p.id === state.selectedPathId)
+    : part.paths;
+  selectedNodes.clear();
+  for (const path of paths) {
+    const cmds = parsePath(path.d);
+    cmds.forEach((c, i) => {
+      if (c.cmd === 'Z') return;
+      selectedNodes.add(nodeKey(path.id, i));
+    });
+  }
+  selectedNode = null;
+  renderOverlay();
   return selectedNodes.size;
 }
 
@@ -2610,6 +2759,139 @@ export function nudgeSelectedNodes(dx: number, dy: number): boolean {
   return true;
 }
 
+// ---- Structural node ops: break a segment, weld/bridge two ends (inspector buttons) ----
+
+interface SelectedNodeRef { path: RigPath; cmdIndex: number; }
+
+/** The currently selected endpoint nodes resolved to their paths (within the part). */
+function selectedNodeRefs(): SelectedNodeRef[] {
+  const part = selectedPart();
+  if (!part) return [];
+  const refs: SelectedNodeRef[] = [];
+  for (const key of selectedNodes) {
+    const { pathId, cmdIndex } = parseNodeKey(key);
+    const path = part.paths.find((p) => p.id === pathId);
+    if (path) refs.push({ path, cmdIndex });
+  }
+  return refs;
+}
+
+/** Which free end of an OPEN single subpath a node command index is, or null. */
+function endOfOpenPath(path: RigPath, cmdIndex: number): 'start' | 'end' | null {
+  const cmds = parsePath(path.d);
+  if (!isSingleSubpath(cmds) || isClosedPath(cmds)) return null;
+  const D = nodeCount(cmds);
+  if (cmdIndex === 0) return 'start';
+  if (cmdIndex === D - 1) return 'end';
+  return null;
+}
+
+/** True when exactly two selected nodes are an adjacent, deletable segment of one path. */
+export function canDeleteSegment(): boolean {
+  const refs = selectedNodeRefs();
+  if (refs.length !== 2 || refs[0].path.id !== refs[1].path.id) return false;
+  const path = refs[0].path;
+  return deleteSegment(
+    parsePath(path.d), path.nodeTypes ?? null, refs[0].cmdIndex, refs[1].cmdIndex,
+  ) != null;
+}
+
+/** True when exactly two selected nodes are joinable END nodes (same path or two paths). */
+export function canJoinNodes(): boolean {
+  const refs = selectedNodeRefs();
+  if (refs.length !== 2) return false;
+  const e0 = endOfOpenPath(refs[0].path, refs[0].cmdIndex);
+  const e1 = endOfOpenPath(refs[1].path, refs[1].cmdIndex);
+  if (!e0 || !e1) return false;
+  if (refs[0].path.id === refs[1].path.id) return e0 !== e1; // the two distinct ends
+  return true;
+}
+
+/** Break the segment between the two selected adjacent nodes (FEATURE: del seg). */
+export function deleteSelectedSegment(): boolean {
+  const part = selectedPart();
+  const refs = selectedNodeRefs();
+  if (!part || refs.length !== 2 || refs[0].path.id !== refs[1].path.id) return false;
+  const path = refs[0].path;
+  const pieces = deleteSegment(
+    parsePath(path.d), path.nodeTypes ?? null, refs[0].cmdIndex, refs[1].cmdIndex,
+  );
+  if (!pieces || pieces.length === 0) return false;
+  checkpoint();
+  const idx = part.paths.indexOf(path);
+  path.d = serializePath(pieces[0].cmds);
+  path.nodeTypes = pieces[0].nodeTypes;
+  const extra: RigPath[] = [];
+  for (let k = 1; k < pieces.length; k++) {
+    extra.push({
+      ...path,
+      id: freshId('path'),
+      label: `${path.label}·${k + 1}`,
+      d: serializePath(pieces[k].cmds),
+      nodeTypes: pieces[k].nodeTypes,
+    });
+  }
+  part.paths.splice(idx + 1, 0, ...extra);
+  selectedNodes.clear();
+  selectedNode = null;
+  state.selectedPathId = null; // un-scope so both resulting pieces stay node-selectable
+  syncPartPathDom(part);
+  renderPose();
+  notify();
+  return true;
+}
+
+/** Weld (merge) or bridge the two selected end nodes (FEATURE: join / join seg). */
+export function joinSelectedNodes(mode: 'weld' | 'segment'): boolean {
+  const part = selectedPart();
+  const refs = selectedNodeRefs();
+  if (!part || refs.length !== 2) return false;
+  const e0 = endOfOpenPath(refs[0].path, refs[0].cmdIndex);
+  const e1 = endOfOpenPath(refs[1].path, refs[1].cmdIndex);
+  if (!e0 || !e1) return false;
+
+  // Same open path → close it.
+  if (refs[0].path.id === refs[1].path.id) {
+    if (e0 === e1) return false;
+    const path = refs[0].path;
+    const piece = closePath(parsePath(path.d), path.nodeTypes ?? null, mode);
+    if (!piece) return false;
+    checkpoint();
+    path.d = serializePath(piece.cmds);
+    path.nodeTypes = piece.nodeTypes;
+    selectedNodes.clear();
+    selectedNode = null;
+    syncPartPathDom(part);
+    renderPose();
+    notify();
+    return true;
+  }
+
+  // Two different open paths in the same part → merge; the earlier path survives.
+  let first = refs[0], firstEnd = e0, second = refs[1], secondEnd = e1;
+  if (part.paths.indexOf(refs[1].path) < part.paths.indexOf(refs[0].path)) {
+    first = refs[1]; firstEnd = e1; second = refs[0]; secondEnd = e0;
+  }
+  const piece = joinPaths(
+    { cmds: parsePath(first.path.d), nodeTypes: first.path.nodeTypes ?? null, end: firstEnd },
+    { cmds: parsePath(second.path.d), nodeTypes: second.path.nodeTypes ?? null, end: secondEnd },
+    mode,
+  );
+  if (!piece) return false;
+  checkpoint();
+  const removedId = second.path.id;
+  first.path.d = serializePath(piece.cmds);
+  first.path.nodeTypes = piece.nodeTypes;
+  part.paths = part.paths.filter((p) => p.id !== removedId);
+  selectedNodes.clear();
+  selectedNode = null;
+  state.selectedPathId = null;
+  syncPartPathDom(part);
+  renderPose();
+  notify();
+  return true;
+}
+
 function editNodeStructure(d: Extract<DragState, { kind: 'node' }>, op: 'insert' | 'delete'): void {
   const path = d.part.paths.find((p) => p.id === d.pathId);
   if (!path) return;
@@ -2644,6 +2926,120 @@ function svgPoint(x: number, y: number): DOMPoint {
   const pt = svg!.createSVGPoint();
   pt.x = x; pt.y = y;
   return pt;
+}
+
+// ---- Snapping ----
+
+/** On-screen scale (user units → device px) of the current zoom. */
+function screenScaleOf(): number {
+  const ctm = svg?.getScreenCTM();
+  return ctm ? Math.hypot(ctm.a, ctm.b) : 1;
+}
+
+/** ~8 screen px expressed in root/user units (root pose is identity in Setup). */
+function snapThreshold(): number {
+  return 8 / screenScaleOf();
+}
+
+/** Map a root-space point into SVG user (viewBox) space, where overlay markers live. */
+function rootToUser(p: { x: number; y: number }): { x: number; y: number } {
+  const m = matrixOfTransform(rootGroup?.getAttribute('transform') ?? '');
+  return applyMat(m, p.x, p.y);
+}
+
+/**
+ * Candidate points (root space) a pivot drag snaps to: the part's own path nodes and
+ * every OTHER part's live joint. Landing a joint exactly on an artwork node or another
+ * joint is the whole point of snapping for rigging.
+ */
+function pivotSnapCandidates(part: RigPart, t: number | null): SnapCandidate[] {
+  const doc = state.doc;
+  if (!doc) return [];
+  const cands: SnapCandidate[] = [];
+  for (const other of doc.parts) {
+    if (other.id === part.id) continue;
+    const ep = effectivePivot(other, t);
+    cands.push({ x: ep.x, y: ep.y, kind: 'pivot' });
+  }
+  const groupMat = matrixOfTransform(groupTransformOf(part, t));
+  for (const path of part.paths) {
+    const pm = multiply(groupMat, matrixOfTransform(path.transform));
+    for (const c of parsePath(path.d)) {
+      if (c.cmd === 'Z') continue;
+      const r = applyMat(pm, (c as { x: number }).x, (c as { y: number }).y);
+      cands.push({ x: r.x, y: r.y, kind: 'node' });
+    }
+  }
+  return cands;
+}
+
+/** Moving + target feature points (root space) for a part-translate snap. */
+function translateSnapFeatures(
+  part: RigPart, t: number | null,
+): { moving: SnapCandidate[]; targets: SnapCandidate[] } {
+  const doc = state.doc!;
+  const selected = new Set(state.selectedPartIds);
+  const featuresOf = (p: RigPart): SnapCandidate[] => {
+    const out: SnapCandidate[] = [];
+    const ep = effectivePivot(p, t);
+    out.push({ x: ep.x, y: ep.y, kind: 'pivot' });
+    const box = p.paths.length > 0 ? partRootBoxes([p.id]).get(p.id) : undefined;
+    if (box) out.push(...boxFeaturePoints(box));
+    return out;
+  };
+  const moving = featuresOf(part);
+  const targets: SnapCandidate[] = [];
+  for (const other of doc.parts) {
+    if (selected.has(other.id)) continue; // never snap the moving selection to itself
+    targets.push(...featuresOf(other));
+  }
+  return { moving, targets };
+}
+
+/**
+ * Node-snap candidates in the DRAGGED path's raw coordinate space (so a same-path
+ * target snaps to an EXACT stored coordinate). Every endpoint of the part's editable
+ * paths except the ones being dragged; other paths are mapped in through their holder.
+ */
+function nodeSnapCandidates(
+  part: RigPart, draggedPath: RigPath, scoped: RigPath[], moving: Set<string>,
+): { candidates: SnapCandidate[]; threshold: number } {
+  const draggedHolder = pathHolderMat(part, draggedPath);
+  const draggedInv = invertMat(draggedHolder);
+  const candidates: SnapCandidate[] = [];
+  for (const path of scoped) {
+    const toDragged = path.id === draggedPath.id
+      ? null
+      : multiply(draggedInv, pathHolderMat(part, path));
+    const cmds = parsePath(path.d);
+    cmds.forEach((c, i) => {
+      if (c.cmd === 'Z') return;
+      if (moving.has(nodeKey(path.id, i))) return; // exclude the dragged selection
+      const raw = { x: (c as { x: number }).x, y: (c as { y: number }).y };
+      const pt = toDragged ? applyMat(toDragged, raw.x, raw.y) : raw;
+      candidates.push({ x: pt.x, y: pt.y, kind: 'node' });
+    });
+  }
+  // Threshold: ~8 screen px carried through the path's full path→screen scale.
+  const pathUserScale = Math.hypot(draggedHolder.a, draggedHolder.b) || 1;
+  const threshold = 8 / (screenScaleOf() * pathUserScale);
+  return { candidates, threshold };
+}
+
+/** Draw the snap-target marker (a small non-scaling ring + crosshair) if one is live. */
+function drawSnapMarker(): void {
+  if (!overlay || !snapMarker) return;
+  const size = handleSize();
+  const r = size * 1.3;
+  const { x, y } = snapMarker;
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', 'snap-marker');
+  g.style.pointerEvents = 'none';
+  g.innerHTML =
+    `<circle class="gizmo-line" fill="none" cx="${x}" cy="${y}" r="${r}" />` +
+    `<line class="gizmo-line" x1="${x - r}" y1="${y}" x2="${x + r}" y2="${y}" />` +
+    `<line class="gizmo-line" x1="${x}" y1="${y - r}" x2="${x}" y2="${y + r}" />`;
+  overlay.appendChild(g);
 }
 
 /** Pointer position in root (document) coordinates — where pivots and parts live. */

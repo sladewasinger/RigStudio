@@ -180,6 +180,33 @@ export interface AppState {
   /** Playback direction, flipped by ping-pong looping. */
   playDirection: 1 | -1;
   onionSkin: boolean;
+  /**
+   * Whether Setup-mode drags snap (node↔node, pivot↔pivot, bbox features). An EDITOR
+   * preference — never serialized into a project; persisted separately in localStorage.
+   */
+  snapEnabled: boolean;
+}
+
+/** localStorage key for the snapping preference (a UI setting, not project data). */
+const SNAP_STORAGE_KEY = 'rig-studio-snap-enabled';
+
+function readSnapEnabled(): boolean {
+  try {
+    const v = localStorage.getItem(SNAP_STORAGE_KEY);
+    return v === null ? true : v === 'true'; // default ON
+  } catch {
+    return true; // no localStorage (tests/node) — default ON
+  }
+}
+
+/** Toggle snapping and persist the choice. */
+export function setSnapEnabled(enabled: boolean): void {
+  state.snapEnabled = enabled;
+  try {
+    localStorage.setItem(SNAP_STORAGE_KEY, String(enabled));
+  } catch {
+    /* persistence unavailable — keep the in-memory flag */
+  }
 }
 
 export const state: AppState = {
@@ -197,6 +224,7 @@ export const state: AppState = {
   pingPong: false,
   playDirection: 1,
   onionSkin: false,
+  snapEnabled: readSnapEnabled(),
 };
 
 type Listener = () => void;
@@ -250,6 +278,17 @@ export function selectedPath(): { part: RigPart; path: RigPath } | null {
   if (!part || !state.selectedPathId) return null;
   const path = part.paths.find((p) => p.id === state.selectedPathId);
   return path ? { part, path } : null;
+}
+
+/**
+ * Select every part in the document (Ctrl+A in Setup/Animate) — the same additive
+ * selection mechanism a chain of Shift+clicks would produce, just applied at once.
+ */
+export function selectAllParts(): void {
+  if (!state.doc) return;
+  state.selectedPartIds = state.doc.parts.map((p) => p.id);
+  state.selectedPartId = state.selectedPartIds[state.selectedPartIds.length - 1] ?? null;
+  state.selectedPathId = null;
 }
 
 // ---- Part hierarchy ----
@@ -495,6 +534,36 @@ export function deleteParts(ids: string[]): string[] {
   if (state.selectedPartId && dead.has(state.selectedPartId)) selectPart(null);
   else state.selectedPartIds = state.selectedPartIds.filter((id) => !dead.has(id));
   return [...dead];
+}
+
+/**
+ * Duplicate parts (Ctrl+D, Setup only): deep-clones each part and its paths with fresh
+ * ids, keeps the same parent, and nudges the rest translation by (+12,+12) doc units so
+ * the copy is visibly offset from the source. No animation tracks are copied — a fresh
+ * id has none by construction, since clip tracks are keyed by target id. Skinned parts
+ * are skipped (their geometry is baked to a bind pose; a naive clone would double-bind
+ * the same bones). Each copy is inserted immediately after its source, so the whole
+ * duplicated set stays contiguous. Returns the new parts' ids, input order preserved.
+ */
+export function duplicateParts(ids: string[]): string[] {
+  const doc = state.doc;
+  if (!doc) return [];
+  const newIds: string[] = [];
+  for (const id of ids) {
+    const part = doc.parts.find((p) => p.id === id);
+    if (!part || part.skin) continue;
+    const clone: RigPart = structuredClone(part);
+    clone.id = freshId('part');
+    clone.label = `${part.label} copy`;
+    clone.pivotHint = null;
+    clone.rest.tx += 12;
+    clone.rest.ty += 12;
+    clone.paths = part.paths.map((p) => ({ ...structuredClone(p), id: freshId('path') }));
+    const insertAt = doc.parts.indexOf(part) + 1;
+    doc.parts.splice(insertAt, 0, clone);
+    newIds.push(clone.id);
+  }
+  return newIds;
 }
 
 // ---- Draw order (z-order) ----

@@ -1,11 +1,13 @@
 import {
   state, notify, subscribe, activeClip, serializeDoc, deserializeDoc, EditorMode,
   selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder, deleteParts,
+  setSnapEnabled, selectAllParts, duplicateParts, partById,
 } from './model';
 import { importSvg } from './importSvg';
 import {
   buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, clearGroupEntry,
   hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, nudgeSelectedParts, unregisterPart,
+  zoomBy, selectAllNodes,
 } from './view';
 import { checkpoint } from './history';
 import {
@@ -18,7 +20,9 @@ import {
 } from './timeline';
 import { exportCompose } from './exportCompose';
 import { exportLottie } from './exportLottie';
+import { exportRiv } from './exportRiv';
 import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './history';
+import { toggleHelp, closeHelp, isHelpOpen } from './help';
 
 const layersEl = document.getElementById('layers')!;
 const canvasEl = document.getElementById('canvas')!;
@@ -84,16 +88,18 @@ document.getElementById('btn-sample')!.onclick = async () => {
 
 // ---- Project save / autosave ----
 
-document.getElementById('btn-save')!.onclick = () => {
+/** Download the project as .rig.json — the toolbar Save button and Ctrl+S share this. */
+function saveProject(): void {
   if (!state.doc) {
     alert('Nothing to save yet.');
     return;
   }
   download(`${state.doc.name}.rig.json`, serializeDoc(state.doc), 'application/json');
-};
+}
+document.getElementById('btn-save')!.onclick = saveProject;
 
-function download(filename: string, content: string, type: string): void {
-  const blob = new Blob([content], { type });
+function download(filename: string, content: string | Uint8Array, type: string): void {
+  const blob = new Blob([content as BlobPart], { type });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = filename;
@@ -148,6 +154,19 @@ document.getElementById('btn-export-lottie')!.onclick = () => {
   }
 };
 
+document.getElementById('btn-export-riv')!.onclick = () => {
+  if (!state.doc) {
+    alert('Import an SVG first.');
+    return;
+  }
+  try {
+    const bytes = exportRiv(state.doc);
+    download(`${state.doc.name}.riv`, bytes, 'application/octet-stream');
+  } catch (err) {
+    alert(`Rive export failed: ${err instanceof Error ? err.message : err}`);
+  }
+};
+
 // ---- Setup / Animate mode toggle ----
 
 const setupBtn = document.getElementById('btn-mode-setup') as HTMLButtonElement;
@@ -165,6 +184,8 @@ export function setEditorMode(mode: EditorMode): void {
 
 setupBtn.onclick = () => setEditorMode('setup');
 animateBtn.onclick = () => setEditorMode('animate');
+
+document.getElementById('btn-help')!.onclick = () => toggleHelp();
 
 function syncModeToggle(): void {
   setupBtn.classList.toggle('active', state.editorMode === 'setup');
@@ -190,6 +211,15 @@ document.addEventListener('keydown', (ev) => {
   const target = ev.target as HTMLElement;
   if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
 
+  // Help overlay owns Escape while it's open — this must win over every other Escape
+  // tier below (bone placement / node exit / selection clear) so closing it never also
+  // fires one of those.
+  if (isHelpOpen() && ev.key === 'Escape') {
+    ev.preventDefault();
+    closeHelp();
+    return;
+  }
+
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z') {
     ev.preventDefault();
     if (ev.shiftKey) redo();
@@ -199,6 +229,44 @@ document.addEventListener('keydown', (ev) => {
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'y') {
     ev.preventDefault();
     redo();
+    return;
+  }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') {
+    ev.preventDefault(); // never let the browser's save-page dialog open
+    saveProject();
+    return;
+  }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'o') {
+    ev.preventDefault();
+    fileInput.click();
+    return;
+  }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'a') {
+    ev.preventDefault();
+    // Node-editing mode selects nodes; Setup/Animate select every part (same
+    // multi-selection mechanism Shift+click extends) — never keyframes.
+    if (state.editorMode === 'setup' && state.mode === 'nodes') selectAllNodes();
+    else selectAllParts();
+    notify();
+    renderPose();
+    return;
+  }
+  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'd') {
+    if (state.editorMode === 'setup' && state.selectedPartIds.length > 0) {
+      const dupable = state.selectedPartIds.filter((id) => !partById(id)?.skin);
+      if (dupable.length > 0) {
+        ev.preventDefault();
+        checkpoint();
+        const newIds = duplicateParts(dupable);
+        // Same rebuild path undo/redo uses (setRestoreHandler below) so the canvas
+        // picks up the new part groups without hand-rolling a second code path.
+        buildCanvas(canvasEl);
+        state.selectedPartIds = newIds;
+        state.selectedPartId = newIds[newIds.length - 1] ?? null;
+        state.selectedPathId = null;
+        notify();
+      }
+    }
     return;
   }
   if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'g') {
@@ -284,6 +352,28 @@ document.addEventListener('keydown', (ev) => {
     renderPose();
     return;
   }
+  // Help overlay toggle: '?' (Shift+/ on US layouts — browsers already report the
+  // shifted character in ev.key) and F1.
+  if (ev.key === '?' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    ev.preventDefault();
+    toggleHelp();
+    return;
+  }
+  if (ev.key === 'F1') {
+    ev.preventDefault();
+    toggleHelp();
+    return;
+  }
+  // Snapping toggle (%): Inkscape's binding. On US layouts % is Shift+5, so match the
+  // resulting character and allow Shift (only ctrl/meta/alt are excluded, per the tool
+  // block's guarded pattern).
+  if (ev.key === '%' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    ev.preventDefault();
+    setSnapEnabled(!state.snapEnabled);
+    notify();
+    renderPose();
+    return;
+  }
   // Tools: V select, T translate, R rotate, I inverse kinematics.
   if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
     const tool = ({ v: 'select', t: 'translate', r: 'rotate', i: 'ik' } as const)[
@@ -304,12 +394,26 @@ document.addEventListener('keydown', (ev) => {
       return;
     }
   }
-  if (ev.key.toLowerCase() === 'f') {
+  // Zoom in/out ~1.25x, centered on the canvas (guarded the same way as F/Space below —
+  // Ctrl+=/Ctrl+- are the browser's own page-zoom shortcuts and must pass through).
+  if ((ev.key === '+' || ev.key === '=') && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    ev.preventDefault();
+    zoomBy(1.25);
+    return;
+  }
+  if (ev.key === '-' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    ev.preventDefault();
+    zoomBy(1 / 1.25);
+    return;
+  }
+  // Guarded against ctrl/meta/alt (mirrors the V/T/R/I tool block's pattern) so
+  // Ctrl+F doesn't ALSO fit the view while the browser's find bar opens.
+  if (ev.key.toLowerCase() === 'f' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
     resetView();
     renderPose();
     return;
   }
-  if (ev.key === ' ') {
+  if (ev.key === ' ' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
     ev.preventDefault();
     togglePlay();
     return;
@@ -393,6 +497,7 @@ declare global {
       state: typeof state;
       exportCompose: typeof exportCompose;
       exportLottie: typeof exportLottie;
+      exportRiv: typeof exportRiv;
       renderPose: typeof renderPose;
       serializeDoc: typeof serializeDoc;
       loadProjectText: typeof loadProjectText;
@@ -401,5 +506,6 @@ declare global {
   }
 }
 window.__rigStudio = {
-  state, exportCompose, exportLottie, renderPose, serializeDoc, loadProjectText, setEditorMode,
+  state, exportCompose, exportLottie, exportRiv, renderPose, serializeDoc, loadProjectText,
+  setEditorMode,
 };

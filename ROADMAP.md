@@ -1,9 +1,9 @@
 # Rig Studio Roadmap
 
 Goal: a full-fledged 2D rigging/bones/animation tool with basic vector editing —
-modeled loosely after Rive, but simple. Two scopes: **v1** is the concrete feature set
-being built now; **v2** collects the features a mature tool would add next, so scope
-stays honest. Checkboxes track implementation status.
+modeled loosely after Rive, but simple. Everything through **v2.8 is implemented and
+verified** (checkboxes track status); **v3 — Future** at the bottom is the honest
+out-of-scope list that new work should be drawn from.
 
 ## v1 — Vector editing basics
 
@@ -151,6 +151,62 @@ stays honest. Checkboxes track implementation status.
   parent chain like a translate drag. Animate keeps arrows for keyframe nudge /
   playhead scrub; node editing keeps its node nudge.
 
+## v2.7 — vector-app parity & polish (done)
+
+- [x] **Segment delete (break path)** — select 2 adjacent nodes: a closed path opens
+  at the break (seam rotates, old Z becomes a straight segment); an open path splits
+  into two paths (second labeled `·2`, shows in Layers). Pure ops in `paths.ts`,
+  `nodeTypes` kept in lockstep, compound paths refused (buttons disable).
+- [x] **Join nodes (weld) & join with segment** — select the 2 free ends of open
+  path(s): same path closes (weld to midpoint, or straight closing segment);
+  different paths merge into one (one side auto-reverses; arcs reverse by sweep-flag
+  flip, no cubic conversion).
+- [x] **Double-click off the shape escapes node editing** — a dblclick that hits no
+  artwork exits the entered path/group context and deselects everything.
+- [x] **Snapping, toggleable** (from the v3 list, scoped small) — Setup drags only:
+  node↔node (same part), pivot↔nodes/pivots, part-translate pivot↔pivot + bbox
+  center/corners/edge-midpoints; 8 screen px threshold; respects Ctrl axis-lock; one
+  overlay marker; magnet button + `%` key; persisted preference (default ON). Pure
+  math in `snap.ts` (unit-tested).
+- [x] **Standard shortcuts** — Ctrl+S save, Ctrl+O open, Ctrl+A select-all
+  (context-aware), Ctrl+D duplicate parts (fresh ids, +12/+12, no tracks, skips
+  skinned), `+`/`-` zoom at canvas center; F/Space/letter bindings hardened against
+  held modifiers (Ctrl+F no longer double-fires with the browser find bar).
+- [x] **`?` / F1 shortcut help overlay** — data-driven from `help.ts`'s SHORTCUTS
+  registry (46 bindings, 7 groups), Escape/backdrop/✕ to close, `?` toolbar button.
+- [x] **Visual polish pass** — CSS design tokens (spacing/control-height/radius/
+  border/shadow), hover/active/disabled/focus-visible states everywhere, tabular
+  numerals, themed scrollbars, grouped toolbar + brand mark, subtler checkerboard,
+  keyframe/playhead affordances, reduced-motion support. No selector renames; canvas
+  overlay color language untouched.
+
+## v2.8 — Rive export & format confidence (done)
+
+- [x] **Rive `.riv` exporter** — the whole doc, all clips as named animations, as one
+  binary that plays in official Rive runtimes on every platform Rive supports
+  (deliberately playback-only: the Rive editor cannot import .riv — Rig Studio IS
+  the editor). Schema from rive-runtime `dev/defs`; verified live against
+  `@rive-app/canvas` (exact keyed rotations, custom-bezier curve match, static
+  unkeyed channels); unit-tested with an in-repo binary decoder.
+- [x] **Project format verified lossless** — maximal-doc serialize→deserialize deep
+  equality + byte-stable re-serialize + identical sampling, normalizeDoc back-compat
+  for pre-feature files, autosave shares the same code path. Editor preferences
+  intentionally stay out of the file.
+
+## Committed next (accepted features, implementation deferred — 2026-07-10)
+
+- [ ] **view.ts modular split + interaction-test harness** — break the ~110 KB
+  view.ts monolith into focused modules (render/camera, drag pipelines, node
+  editing, overlay chrome, snapping wiring) with zero behavior change. The headless
+  interaction-test harness (realistic-gesture helpers from "Testing conventions",
+  runnable as a script) lands FIRST so the split is regression-guarded; then the
+  split ships as its own wave.
+- [ ] **Interactivity / state machines (Rive-style)** — named inputs
+  (bool/number/trigger), states referencing clips, transitions with conditions and
+  blend durations, pointer listeners (hit areas → input changes), a graph editor
+  panel, and in-canvas playback; exported into .riv state-machine objects once the
+  base .riv exporter is stable.
+
 ## Testing conventions (hard-learned)
 
 - **Dispatch to the true hit target**: interaction tests must target
@@ -177,17 +233,14 @@ stays honest. Checkboxes track implementation status.
 - Marquee part-selection in pose mode (rubber-band over parts, not just nodes/keys).
 - Layers quality-of-life: visibility (eye) and lock toggles, per-part opacity,
   multi-row drag, rename-in-place instead of prompt().
-- Copy/paste/duplicate parts (with artwork), and paste-across-documents.
-- Canvas chrome: rulers, guides, snapping (node↔node, pivot↔pivot, bbox edges),
-  zoom percentage indicator + zoom-to-selection.
+- Copy/paste parts (with artwork) and paste-across-documents (duplicate shipped in
+  v2.7 as Ctrl+D).
+- Canvas chrome: rulers, guides, zoom percentage indicator + zoom-to-selection
+  (simple snapping shipped in v2.7; alignment guide lines while dragging remain).
 - Playback range (work area) markers on the timeline; loop a sub-range.
 - Keyframe-all-channels button ("key pose") and auto-key toggle.
 - Import: gradients, clip-paths, text-to-path fallback; better error surfacing for
   unsupported SVG features.
-- A headless interaction-test harness (drive the preview with the realistic-gesture
-  helpers from the testing conventions, run as a script) so canvas UX has regression
-  coverage beyond unit tests.
 - Text, gradients, clipping/masks in imports and exports.
-- Animation events/triggers and state-machine blending (Rive's headline feature).
 - Per-part motion-suggestion AI mode; conversational multi-turn choreography editing.
 - Skinning export parity (baked-frame export or a runtime player).

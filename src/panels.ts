@@ -15,13 +15,15 @@
 import {
   state, notify, selectedPart, selectedParts, selectedPath, sampleChannel, channelValue,
   setKeyframe, activeClip, selectPart, setParent, isAncestorOf, movePartRelativeTo,
-  groupParts, ungroupPart, applyRigChanges, ancestorChain, RigPart, Track, Channel,
+  groupParts, ungroupPart, applyRigChanges, ancestorChain, setSnapEnabled,
+  RigPart, Track, Channel,
 } from './model';
 import {
   renderPose, updatePathAttrs, reorderCanvas, flipSelected, partRootBoxes,
   applyRootDeltas, registerPart, unregisterPart, startBonePlacement, hasSelectedNode,
   applyNodeOp, NodeOp, enterGroupsFor, bindSelectedToBones, unbindSelectedSkin,
   selectedNodeCount, primaryNodeType,
+  canJoinNodes, canDeleteSegment, joinSelectedNodes, deleteSelectedSegment,
 } from './view';
 import { alignDeltas, distributeDeltas, AlignEdge, AlignReference } from './align';
 import { animateWithClaude, critiqueWithClaude } from './claude';
@@ -54,6 +56,7 @@ const ICON_PATHS: Record<string, string> = {
   alignB: '<path d="M2 14h12"/><rect x="3.5" y="4" width="3" height="8" fill="currentColor" stroke="none"/><rect x="9.5" y="7" width="3" height="5" fill="currentColor" stroke="none"/>',
   distH: '<path d="M2 2v12M14 2v12"/><rect x="6" y="5" width="4" height="6" fill="currentColor" stroke="none"/>',
   distV: '<path d="M2 2h12M2 14h12"/><rect x="5" y="6" width="6" height="4" fill="currentColor" stroke="none"/>',
+  snap: '<path d="M4 2.5v4.5a4 4 0 0 0 8 0V2.5"/><path d="M2.4 2.5h3.2M10.4 2.5h3.2"/>',
 };
 
 /** An inline 16×16 line icon; falls back to the raw name for unknown keys. */
@@ -183,6 +186,17 @@ export function buildCanvasTools(el: HTMLElement): void {
     tools.appendChild(b);
   }
   el.appendChild(tools);
+  sep();
+
+  // Snapping toggle (Setup-mode editing aid; also the % key). Persisted preference,
+  // shown in both modes; the active class follows state.snapEnabled.
+  const snapBtn = iconButton('snap', '', 'Snapping (%)', () => {
+    setSnapEnabled(!state.snapEnabled);
+    notify();
+    renderPose();
+  });
+  if (state.snapEnabled) snapBtn.classList.add('active');
+  el.appendChild(snapBtn);
   sep();
 
   if (setup) {
@@ -771,6 +785,36 @@ function buildNodeOpsSection(el: HTMLElement): void {
   op('→ curve', 'Turn the segment after this node into a curve', 'toCurve');
   op('→ line', 'Turn the segment after this node into a straight line', 'toLine');
   el.appendChild(grid);
+
+  // Structural ops: break a segment, or weld / bridge two path ends.
+  const grid2 = document.createElement('div');
+  grid2.className = 'align-grid';
+  const joinOk = canJoinNodes();
+  const delOk = canDeleteSegment();
+  const structBtn = (text: string, title: string, ok: boolean, run: () => void) => {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.title = title;
+    b.disabled = !ok;
+    b.onclick = run;
+    grid2.appendChild(b);
+  };
+  structBtn(
+    'join',
+    joinOk ? 'Weld the two selected end nodes into one' : 'Select 2 end nodes',
+    joinOk, () => joinSelectedNodes('weld'),
+  );
+  structBtn(
+    'join seg',
+    joinOk ? 'Connect the two selected end nodes with a straight segment' : 'Select 2 end nodes',
+    joinOk, () => joinSelectedNodes('segment'),
+  );
+  structBtn(
+    'del seg',
+    delOk ? 'Delete the segment between the two selected adjacent nodes' : 'Select 2 adjacent nodes',
+    delOk, () => deleteSelectedSegment(),
+  );
+  el.appendChild(grid2);
 
   const hint = document.createElement('p');
   hint.className = 'hint';
