@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run --project unit",
-    "test:interaction": "vitest run --project interaction"
+    "test:interaction": "vitest run --project interaction",
+    "pages": "vite build --outDir pages"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0"
