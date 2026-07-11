@@ -1,7 +1,7 @@
 # Rig Studio Roadmap
 
 Goal: a full-fledged 2D rigging/bones/animation tool with basic vector editing —
-modeled loosely after Rive, but simple. Everything through **v2.8 is implemented and
+modeled loosely after Rive, but simple. Everything through **v2.9 is implemented and
 verified** (checkboxes track status); **v3 — Future** at the bottom is the honest
 out-of-scope list that new work should be drawn from.
 
@@ -193,6 +193,22 @@ out-of-scope list that new work should be drawn from.
   for pre-feature files, autosave shares the same code path. Editor preferences
   intentionally stay out of the file.
 
+## v2.9 — Rive-style state machines (done)
+
+- [x] **Core model + evaluator** — inputs (bool/number/trigger), entry/any/exit/
+  animation states, transitions with AND-ed conditions and crossfade blend
+  durations, pointer listeners; pure deterministic evaluator (`stateMachine.ts`)
+  with Rive-like trigger consumption and blend retargeting; serialized in
+  `.rig.json` with back-compat.
+- [x] **Graph editor + live preview** — timeline `🔀 logic` view: draggable state
+  graph, transition arrows with condition/blend editors, inputs with live controls,
+  listeners; ▶ preview drives the canvas in real time and canvas clicks fire
+  listeners.
+- [x] **.riv state-machine export** — machines export into the same .riv and are
+  driven by name/inputs in official Rive runtimes (verified: bool-driven blend with
+  exact midpoint, trigger transitions). Android: `RiveAnimationView` +
+  `stateMachineName` + `setBooleanState`/`fireState`.
+
 ## Committed next (accepted features, implementation deferred — 2026-07-10)
 
 - [ ] **view.ts modular split + interaction-test harness** — break the ~110 KB
@@ -201,11 +217,6 @@ out-of-scope list that new work should be drawn from.
   interaction-test harness (realistic-gesture helpers from "Testing conventions",
   runnable as a script) lands FIRST so the split is regression-guarded; then the
   split ships as its own wave.
-- [ ] **Interactivity / state machines (Rive-style)** — named inputs
-  (bool/number/trigger), states referencing clips, transitions with conditions and
-  blend durations, pointer listeners (hit areas → input changes), a graph editor
-  panel, and in-canvas playback; exported into .riv state-machine objects once the
-  base .riv exporter is stable.
 
 ## Testing conventions (hard-learned)
 

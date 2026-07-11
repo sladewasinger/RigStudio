@@ -21,6 +21,7 @@ import {
 import { exportCompose } from './exportCompose';
 import { exportLottie } from './exportLottie';
 import { exportRiv } from './exportRiv';
+import { smHandleEscape, smHandleDelete } from './smPanel';
 import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './history';
 import { toggleHelp, closeHelp, isHelpOpen } from './help';
 
@@ -290,6 +291,12 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'Delete' || ev.key === 'Backspace') {
+    // State-machine editor owns Delete while the logic view is on screen (removes the
+    // selected transition/state before any keyframe/node/part handling below).
+    if (smHandleDelete()) {
+      ev.preventDefault();
+      return;
+    }
     if (state.editorMode === 'animate' && hasKeySelection()) {
       ev.preventDefault();
       deleteSelectedKeys();
@@ -336,6 +343,11 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (ev.key === 'Escape') {
+    // State-machine editor first: cancel an armed transition or stop a running preview.
+    if (smHandleEscape()) {
+      ev.preventDefault();
+      return;
+    }
     // Cancel bone placement first; then leave the "entered" path; then clear the
     // selection (and step out of any entered groups).
     if (cancelBonePlacement()) {

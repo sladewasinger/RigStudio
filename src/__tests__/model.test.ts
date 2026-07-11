@@ -21,6 +21,7 @@ import {
   groupParts,
   movePartRelativeTo,
   moveSelectedInDrawOrder,
+  newStateMachine,
   normalizeDoc,
   pasteKeysAt,
   sampleChannel,
@@ -587,6 +588,100 @@ describe('normalizeDoc', () => {
     const empty = makeDoc([], []);
     expect(normalizeDoc(empty).clips).toEqual([{ name: 'idle', duration: 2000, tracks: [] }]);
   });
+
+  it('defaults stateMachines to [] on a document written before they existed', () => {
+    const doc = makeDoc([makePart('p1')]);
+    delete (doc as { stateMachines?: unknown }).stateMachines; // pre-state-machine doc
+    const out = normalizeDoc(doc);
+    expect(out.stateMachines).toEqual([]);
+  });
+
+  it('re-establishes the entry/any invariant on a machine missing them', () => {
+    const doc = makeDoc([makePart('p1')]);
+    doc.stateMachines = [
+      { id: 'sm_1', name: 'm', inputs: [], states: [], transitions: [], listeners: [] },
+    ];
+    const out = normalizeDoc(doc);
+    const kinds = out.stateMachines![0].states.map((s) => s.kind);
+    expect(kinds).toContain('entry');
+    expect(kinds).toContain('any');
+  });
+
+  it('prunes dangling transitions, conditions, listeners, and actions, and clamps durationMs', () => {
+    const doc = makeDoc([makePart('p1')]);
+    doc.stateMachines = [
+      {
+        id: 'sm_1',
+        name: 'm',
+        inputs: [{ id: 'in_a', name: 'a', type: 'bool', default: false }],
+        states: [
+          { id: 'st_entry', name: 'Entry', kind: 'entry' },
+          { id: 'st_any', name: 'Any', kind: 'any' },
+          { id: 'st_a', name: 'A', kind: 'animation', clipName: 'idle', loop: true },
+        ],
+        transitions: [
+          // one ref resolves, one dangles (dropped); durationMs is negative (clamped)
+          {
+            id: 'tr_ok', fromId: 'st_entry', toId: 'st_a', durationMs: -50,
+            conditions: [
+              { inputId: 'in_a', op: '==', value: true }, // kept
+              { inputId: 'ghost_input', op: '==', value: true }, // dropped
+            ],
+          },
+          { id: 'tr_bad', fromId: 'st_a', toId: 'st_ghost', durationMs: 100, conditions: [] },
+        ],
+        listeners: [
+          {
+            id: 'ls_ok', targetPartId: 'p1', event: 'down',
+            actions: [
+              { inputId: 'in_a', type: 'setBool', value: true }, // kept
+              { inputId: 'ghost_input', type: 'fireTrigger' }, // dropped
+            ],
+          },
+          { id: 'ls_bad', targetPartId: 'ghost_part', event: 'up', actions: [] }, // dropped
+        ],
+      },
+    ];
+    const out = normalizeDoc(doc);
+    const sm = out.stateMachines![0];
+    expect(sm.transitions.map((t) => t.id)).toEqual(['tr_ok']); // dangling toId dropped
+    expect(sm.transitions[0].durationMs).toBe(0); // negative clamped
+    expect(sm.transitions[0].conditions.map((c) => c.inputId)).toEqual(['in_a']);
+    expect(sm.listeners.map((l) => l.id)).toEqual(['ls_ok']); // dangling targetPart dropped
+    expect(sm.listeners[0].actions.map((a) => a.inputId)).toEqual(['in_a']);
+  });
+
+  it('KEEPS a state whose clipName no longer resolves (evaluator treats it as rest)', () => {
+    const doc = makeDoc([makePart('p1')]); // clips: only the default 'idle'
+    doc.stateMachines = [
+      {
+        id: 'sm_1',
+        name: 'm',
+        inputs: [],
+        states: [
+          { id: 'st_entry', name: 'Entry', kind: 'entry' },
+          { id: 'st_any', name: 'Any', kind: 'any' },
+          { id: 'st_gone', name: 'Gone', kind: 'animation', clipName: 'deleted_clip', loop: true },
+        ],
+        transitions: [],
+        listeners: [],
+      },
+    ];
+    const out = normalizeDoc(doc);
+    const gone = out.stateMachines![0].states.find((s) => s.id === 'st_gone');
+    expect(gone).toBeDefined();
+    expect(gone!.clipName).toBe('deleted_clip'); // dangling clipName preserved
+  });
+
+  it('newStateMachine mints exactly one entry and one any node and survives normalize', () => {
+    const sm = newStateMachine('walk');
+    expect(sm.states.filter((s) => s.kind === 'entry')).toHaveLength(1);
+    expect(sm.states.filter((s) => s.kind === 'any')).toHaveLength(1);
+    const doc = makeDoc([makePart('p1')]);
+    doc.stateMachines = [sm];
+    const out = normalizeDoc(doc);
+    expect(out.stateMachines![0].states.map((s) => s.kind)).toEqual(['entry', 'any']);
+  });
 });
 
 describe('draw order (z-order)', () => {
@@ -922,6 +1017,52 @@ function maximalDoc(): RigDoc {
         ],
       },
     ],
+    // A fully-populated state machine: all 3 input types, entry/any/exit + 2 animation
+    // states, unconditional + conditional (bool/number/trigger) transitions with blend
+    // durations, and a listener with 2 actions. Every reference resolves, so normalizeDoc
+    // leaves it byte-identical on the round trip.
+    stateMachines: [
+      {
+        id: 'sm_main',
+        name: 'main',
+        inputs: [
+          { id: 'in_speed', name: 'speed', type: 'number', default: 0 },
+          { id: 'in_waving', name: 'waving', type: 'bool', default: false },
+          { id: 'in_jump', name: 'jump', type: 'trigger' },
+        ],
+        states: [
+          { id: 'st_entry', name: 'Entry', kind: 'entry' },
+          { id: 'st_any', name: 'Any', kind: 'any' },
+          { id: 'st_exit', name: 'Exit', kind: 'exit' },
+          { id: 'st_idle', name: 'Idle', kind: 'animation', clipName: 'idle', loop: true },
+          { id: 'st_wave', name: 'Wave', kind: 'animation', clipName: 'wave', loop: false },
+        ],
+        transitions: [
+          { id: 'tr_enter', fromId: 'st_entry', toId: 'st_idle', durationMs: 0, conditions: [] },
+          {
+            id: 'tr_wave', fromId: 'st_idle', toId: 'st_wave', durationMs: 200,
+            conditions: [{ inputId: 'in_waving', op: '==', value: true }],
+          },
+          {
+            id: 'tr_back', fromId: 'st_wave', toId: 'st_idle', durationMs: 300,
+            conditions: [{ inputId: 'in_jump' }], // trigger condition: just an inputId
+          },
+          {
+            id: 'tr_exit', fromId: 'st_any', toId: 'st_exit', durationMs: 0,
+            conditions: [{ inputId: 'in_speed', op: '>', value: 5 }],
+          },
+        ],
+        listeners: [
+          {
+            id: 'ls_torso', targetPartId: TORSO, event: 'down',
+            actions: [
+              { inputId: 'in_waving', type: 'setBool', value: true },
+              { inputId: 'in_jump', type: 'fireTrigger' },
+            ],
+          },
+        ],
+      },
+    ],
   };
 }
 
@@ -1018,5 +1159,22 @@ describe('serializeDoc / deserializeDoc round trip', () => {
     const after = [0, 250, 500, 750, 1000, 1500, 2000].map((t) => sampleChannel(TORSO, 'rotate', t));
 
     expect(after).toEqual(before);
+  });
+
+  it('round-trips a state machine — inputs (all 3 kinds), states, transitions, listeners', () => {
+    const doc = maximalDoc();
+    const restored = deserializeDoc(serializeDoc(doc));
+    const sm = restored.stateMachines![0];
+    expect(sm.inputs.map((i) => i.type)).toEqual(['number', 'bool', 'trigger']);
+    expect(sm.states.map((s) => s.kind)).toEqual(['entry', 'any', 'exit', 'animation', 'animation']);
+    const wave = sm.states.find((s) => s.id === 'st_wave')!;
+    expect(wave).toMatchObject({ clipName: 'wave', loop: false });
+    // Unconditional entry transition, conditional bool/trigger/number transitions, blends.
+    expect(sm.transitions.map((t) => t.durationMs)).toEqual([0, 200, 300, 0]);
+    expect(sm.transitions[0].conditions).toEqual([]); // unconditional
+    expect(sm.transitions[2].conditions).toEqual([{ inputId: 'in_jump' }]); // bare trigger
+    expect(sm.transitions[3].conditions).toEqual([{ inputId: 'in_speed', op: '>', value: 5 }]);
+    expect(sm.listeners[0].actions).toHaveLength(2);
+    expect(sm.listeners[0].targetPartId).toBe(TORSO);
   });
 });

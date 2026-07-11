@@ -23,7 +23,7 @@
  */
 
 import {
-  RigPart, RigPath, state, notify, setKeyframe, selectedPart, selectedParts,
+  RigPart, RigPath, Channel, state, notify, setKeyframe, selectedPart, selectedParts,
   selectPart, ancestorChain, activeClip, channelValue, sampleChannel, addNullPart,
   partById, freshId,
 } from './model';
@@ -548,6 +548,20 @@ export function cancelBonePlacement(): boolean {
 
 // ---- Pose evaluation helpers ----
 
+/**
+ * State-machine PREVIEW override: when set (by smPanel), renderPose samples every channel
+ * from the running SMInstance — which owns its own clocks — instead of the active clip at
+ * the current time. Null restores normal Animate/Setup sampling. This is the ONLY hook the
+ * state-machine editor needs inside the view monolith.
+ */
+let poseSampler: ((target: string, channel: Channel) => number) | null = null;
+
+/** Route renderPose's channel sampling through fn (state-machine preview), or null to restore. */
+export function setPoseSampler(fn: ((target: string, channel: Channel) => number) | null): void {
+  poseSampler = fn;
+  renderPose();
+}
+
 /** The time to sample animation at, or null when Setup mode shows the bare rest pose. */
 function poseTime(): number | null {
   return state.editorMode === 'animate' ? state.currentTime : null;
@@ -555,10 +569,10 @@ function poseTime(): number | null {
 
 function rootPoseTransform(t: number | null): string {
   const doc = state.doc!;
-  const rtx = t === null ? 0 : sampleChannel('root', 'tx', t);
-  const rty = t === null ? 0 : sampleChannel('root', 'ty', t);
-  const rsx = t === null ? 1 : sampleChannel('root', 'sx', t);
-  const rsy = t === null ? 1 : sampleChannel('root', 'sy', t);
+  const rtx = poseSampler ? poseSampler('root', 'tx') : t === null ? 0 : sampleChannel('root', 'tx', t);
+  const rty = poseSampler ? poseSampler('root', 'ty') : t === null ? 0 : sampleChannel('root', 'ty', t);
+  const rsx = poseSampler ? poseSampler('root', 'sx') : t === null ? 1 : sampleChannel('root', 'sx', t);
+  const rsy = poseSampler ? poseSampler('root', 'sy') : t === null ? 1 : sampleChannel('root', 'sy', t);
   const rp = doc.rootPivot;
   return (
     `translate(${rtx},${rty}) translate(${rp.x},${rp.y}) ` +
@@ -568,9 +582,9 @@ function rootPoseTransform(t: number | null): string {
 
 /** A part's own pose transform: keyed channels are absolute, rest fills the gaps. */
 function ownPoseTransform(part: RigPart, t: number | null): string {
-  const rot = channelValue(part, 'rotate', t);
-  const tx = channelValue(part, 'tx', t);
-  const ty = channelValue(part, 'ty', t);
+  const rot = poseSampler ? poseSampler(part.id, 'rotate') : channelValue(part, 'rotate', t);
+  const tx = poseSampler ? poseSampler(part.id, 'tx') : channelValue(part, 'tx', t);
+  const ty = poseSampler ? poseSampler(part.id, 'ty') : channelValue(part, 'ty', t);
   return `translate(${tx},${ty}) rotate(${rot},${part.pivot.x},${part.pivot.y})`;
 }
 

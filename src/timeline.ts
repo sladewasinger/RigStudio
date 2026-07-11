@@ -17,6 +17,7 @@ import {
 import { renderPose } from './view';
 import { checkpoint } from './history';
 import { buildGraphPanel, onGraphChange } from './graph';
+import { buildSMPanel, stopPreview, setLogicVisible } from './smPanel';
 
 let container: HTMLElement;
 let rafId = 0;
@@ -33,6 +34,8 @@ let trackOfKey = new WeakMap<Keyframe, Track>();
 let diamondEls: { el: HTMLElement; key: Keyframe }[] = [];
 // Whether the curve (graph) editor panel is shown beneath the lanes.
 let showGraph = false;
+// Whether the state-machine (logic) editor replaces the lanes. Mutually exclusive with curves.
+let showLogic = false;
 
 export function buildTimeline(el: HTMLElement): void {
   container = el;
@@ -128,6 +131,13 @@ export function render(): void {
   if (!container) return;
   container.innerHTML = '';
   container.classList.toggle('disabled', state.editorMode !== 'animate');
+  // The logic (state-machine) view + its live preview only exist in Animate mode with a
+  // doc. Any time it is NOT on screen, tear the preview down (restores the pose sampler).
+  const showingLogic = !!state.doc && state.editorMode === 'animate' && showLogic;
+  if (!showingLogic) {
+    stopPreview();
+    setLogicVisible(false);
+  }
   const doc = state.doc;
   if (!doc) {
     container.innerHTML = '<div class="tl-empty">Import an SVG to start animating.</div>';
@@ -259,11 +269,22 @@ export function render(): void {
 
   const graphBtn = button('📈 curves', () => {
     showGraph = !showGraph;
+    if (showGraph) { showLogic = false; stopPreview(); }
     render();
   });
   if (showGraph) graphBtn.classList.add('active');
   graphBtn.title = 'Edit the selected track\'s value curve and per-segment bezier easing';
   bar.appendChild(graphBtn);
+
+  const logicBtn = button('🔀 logic', () => {
+    showLogic = !showLogic;
+    if (showLogic) showGraph = false;
+    else stopPreview();
+    render();
+  });
+  if (showLogic) logicBtn.classList.add('active');
+  logicBtn.title = 'Build interactive state machines that blend your clips';
+  bar.appendChild(logicBtn);
 
   if (clip) {
     const durLabel = document.createElement('label');
@@ -289,6 +310,16 @@ export function render(): void {
   timeLabel.textContent = `${Math.round(state.currentTime)} ms`;
   bar.appendChild(timeLabel);
   container.appendChild(bar);
+
+  // Logic view swaps the whole lanes area for the state-machine editor (mutually
+  // exclusive with curves; needs no clip, so it precedes the no-clip bail-out).
+  if (showLogic) {
+    setLogicVisible(true);
+    const smHost = div('sm-panel-host');
+    container.appendChild(smHost);
+    buildSMPanel(smHost);
+    return;
+  }
 
   if (!clip) return;
 

@@ -95,9 +95,73 @@
  *   inDistance       = 85  [D]    | shapes/cubic_detached_vertex.json
  *   outRotation      = 86  [D]    | shapes/cubic_detached_vertex.json (RADIANS)
  *   outDistance      = 87  [D]    | shapes/cubic_detached_vertex.json
+ *
+ * STATE-MACHINE TYPE/PROPERTY KEYS (animation/*.json; pinned from rive-runtime dev/defs
+ * + src). State-machine objects, like animation objects, do NOT consume artboard
+ * component indices — the artboard importer files them in a separate state-machine list
+ * (src/importers/artboard_importer.cpp addStateMachine vs addComponent). References
+ * WITHIN a machine are positional indices computed from emission order; targetId reaches
+ * OUT into the shared component index space.
+ *
+ *   Object (typeKey)             | def
+ *   -----------------------------|-------------------------------------------------
+ *   StateMachine          =  53  | state_machine.json
+ *   StateMachineLayer     =  57  | state_machine_layer.json
+ *   StateMachineBool      =  59  | state_machine_bool.json
+ *   StateMachineNumber    =  56  | state_machine_number.json
+ *   StateMachineTrigger   =  58  | state_machine_trigger.json
+ *   EntryState            =  63  | entry_state.json
+ *   AnyState              =  62  | any_state.json
+ *   ExitState             =  64  | exit_state.json
+ *   AnimationState        =  61  | animation_state.json
+ *   StateTransition       =  65  | state_transition.json
+ *   TransitionTriggerCondition = 68 | transition_trigger_condition.json
+ *   TransitionNumberCondition  = 70 | transition_number_condition.json
+ *   TransitionBoolCondition    = 71 | transition_bool_condition.json
+ *   StateMachineListenerSingle = 114| state_machine_listener_single.json
+ *   ListenerTriggerChange = 115  | listener_trigger_change.json
+ *   ListenerBoolChange    = 117  | listener_bool_change.json
+ *   ListenerNumberChange  = 118  | listener_number_change.json
+ *
+ *   Property (propertyKey)        | owner def                       | type
+ *   ------------------------------|---------------------------------|-----
+ *   animation name   =  55 [S]    | animation.json                  | StateMachine name (it
+ *                                 |                                 | extends Animation, NOT
+ *                                 |                                 | StateMachineComponent)
+ *   name (SM comp)   = 138 [S]    | state_machine_component.json    | input + listener names
+ *   number value     = 140 [D]    | state_machine_number.json       | input default
+ *   bool value       = 141 [U]    | state_machine_bool.json         | input default (0/1)
+ *   animationId      = 149 [U]    | animation_state.json            | index into LinearAnimations
+ *   stateToId        = 151 [U]    | state_transition.json           | index into layer states
+ *   condInputId      = 155 [U]    | transition_input_condition.json | index into machine inputs
+ *   opValue          = 156 [U]    | transition_value_condition.json | TransitionConditionOp enum
+ *   condValue        = 157 [D]    | transition_number_condition.json| number RHS
+ *   duration         = 158 [U]    | state_transition.json           | MS (flags omits bit 2)
+ *   targetId         = 224 [U]    | state_machine_listener.json      | artboard component index
+ *   listenerTypeValue= 225 [U]    | state_machine_listener_single.json| ListenerType enum
+ *   listenerInputId  = 227 [U]    | listener_input_change.json      | index into machine inputs
+ *   listenerBoolVal  = 228 [U]    | listener_bool_change.json       | 0/1
+ *   listenerNumberVal= 229 [D]    | listener_number_change.json     | number
+ *
+ *   TransitionConditionOp (transition_condition_op.hpp): equal 0, notEqual 1,
+ *     lessThanOrEqual 2, greaterThanOrEqual 3, lessThan 4, greaterThan 5.
+ *   ListenerType (listener_type.hpp): enter 0, exit 1, down 2, up 3.
+ *   StateTransitionFlags (state_transition_flags.hpp): DurationIsPercentage = 2 (we
+ *     leave it clear => ms); EnableExitTime = 4 (clear => immediate).
  */
 
-import { Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from './model';
+import {
+  Channel,
+  Easing,
+  Keyframe,
+  RigDoc,
+  RigPart,
+  RigPath,
+  SMConditionOp,
+  SMListener,
+  SMState,
+  Track,
+} from './model';
 import { parsePath, pathToCubics } from './paths';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from './transforms';
 
@@ -125,6 +189,28 @@ const T_LINEAR_ANIM = 31;
 const T_KEYED_OBJECT = 25;
 const T_KEYED_PROPERTY = 26;
 const T_KEYFRAME_DOUBLE = 30;
+
+// State-machine typeKeys (animation/*.json). None of these consume an artboard
+// component index: like animations, they are added to the artboard's separate
+// state-machine list (src/importers/artboard_importer.cpp addStateMachine), NOT to the
+// component object list that id references resolve against (addObject/addComponent).
+const T_STATE_MACHINE = 53; // state_machine.json (name from state_machine_component 138)
+const T_SM_BOOL = 59; // state_machine_bool.json (value 141)
+const T_SM_NUMBER = 56; // state_machine_number.json (value 140)
+const T_SM_TRIGGER = 58; // state_machine_trigger.json (no value)
+const T_SM_LAYER = 57; // state_machine_layer.json
+const T_ENTRY_STATE = 63; // entry_state.json
+const T_ANY_STATE = 62; // any_state.json
+const T_EXIT_STATE = 64; // exit_state.json
+const T_ANIMATION_STATE = 61; // animation_state.json (animationId 149)
+const T_STATE_TRANSITION = 65; // state_transition.json (stateToId 151, duration 158, flags 152)
+const T_TRANS_TRIGGER_COND = 68; // transition_trigger_condition.json (inputId 155)
+const T_TRANS_NUMBER_COND = 70; // transition_number_condition.json (inputId 155, opValue 156, value 157)
+const T_TRANS_BOOL_COND = 71; // transition_bool_condition.json (inputId 155, opValue 156)
+const T_SM_LISTENER = 114; // state_machine_listener_single.json (targetId 224, listenerTypeValue 225)
+const T_LISTENER_TRIGGER_CHANGE = 115; // listener_trigger_change.json (inputId 227)
+const T_LISTENER_BOOL_CHANGE = 117; // listener_bool_change.json (inputId 227, value 228)
+const T_LISTENER_NUMBER_CHANGE = 118; // listener_number_change.json (inputId 227, value 229)
 
 // propertyKeys
 const P_NAME = 4;
@@ -159,6 +245,22 @@ const P_IN_ROTATION = 84;
 const P_IN_DISTANCE = 85;
 const P_OUT_ROTATION = 86;
 const P_OUT_DISTANCE = 87;
+
+// State-machine propertyKeys.
+const P_SM_NAME = 138; // [S] StateMachineComponent.name — machine/input names (addressed by name at runtime)
+const P_SM_NUMBER_VALUE = 140; // [D] StateMachineNumber.value (default)
+const P_SM_BOOL_VALUE = 141; // [U/bool] StateMachineBool.value (default)
+const P_ANIMATION_ID = 149; // [U] AnimationState.animationId (index into artboard LinearAnimations)
+const P_STATE_TO_ID = 151; // [U] StateTransition.stateToId (index into the layer's states)
+const P_COND_INPUT_ID = 155; // [U] TransitionInputCondition.inputId (index into machine inputs)
+const P_COND_OP = 156; // [U] TransitionValueCondition.opValue (TransitionConditionOp enum)
+const P_COND_VALUE = 157; // [D] TransitionNumberCondition.value
+const P_TRANS_DURATION = 158; // [U] StateTransition.duration (ms; flags default 0 => ms, not percentage)
+const P_LISTENER_TARGET_ID = 224; // [U] StateMachineListener.targetId (artboard component index)
+const P_LISTENER_TYPE = 225; // [U] StateMachineListenerSingle.listenerTypeValue (ListenerType enum)
+const P_LISTENER_INPUT_ID = 227; // [U] ListenerInputChange.inputId (index into machine inputs)
+const P_LISTENER_BOOL_VALUE = 228; // [U] ListenerBoolChange.value
+const P_LISTENER_NUMBER_VALUE = 229; // [D] ListenerNumberChange.value
 
 // ToC backing-type indices.
 const F_UINT = 0;
@@ -200,6 +302,39 @@ const FIELD_TYPE: Record<number, number> = {
   [P_IN_DISTANCE]: F_DOUBLE,
   [P_OUT_ROTATION]: F_DOUBLE,
   [P_OUT_DISTANCE]: F_DOUBLE,
+  [P_SM_NAME]: F_STRING,
+  [P_SM_NUMBER_VALUE]: F_DOUBLE,
+  [P_SM_BOOL_VALUE]: F_UINT,
+  [P_ANIMATION_ID]: F_UINT,
+  [P_STATE_TO_ID]: F_UINT,
+  [P_COND_INPUT_ID]: F_UINT,
+  [P_COND_OP]: F_UINT,
+  [P_COND_VALUE]: F_DOUBLE,
+  [P_TRANS_DURATION]: F_UINT,
+  [P_LISTENER_TARGET_ID]: F_UINT,
+  [P_LISTENER_TYPE]: F_UINT,
+  [P_LISTENER_INPUT_ID]: F_UINT,
+  [P_LISTENER_BOOL_VALUE]: F_UINT,
+  [P_LISTENER_NUMBER_VALUE]: F_DOUBLE,
+};
+
+// TransitionConditionOp enum (include/rive/animation/transition_condition_op.hpp).
+// NOTE the non-obvious ordering: <= and >= come BEFORE < and >.
+const COND_OP: Record<SMConditionOp, number> = {
+  '==': 0, // equal
+  '!=': 1, // notEqual
+  '<=': 2, // lessThanOrEqual
+  '>=': 3, // greaterThanOrEqual
+  '<': 4, // lessThan
+  '>': 5, // greaterThan
+};
+
+// ListenerType enum (include/rive/listener_type.hpp): enter 0, exit 1, down 2, up 3.
+const LISTENER_TYPE: Record<SMListener['event'], number> = {
+  enter: 0,
+  exit: 1,
+  down: 2,
+  up: 3,
 };
 
 // Rive keyframe interpolation enum (interpolationType). Linear needs no interpolator;
@@ -530,7 +665,223 @@ export function exportRiv(doc: RigDoc): Uint8Array {
     }
   }
 
+  // ---- State machines ----
+  // Emitted AFTER the animations (animationId is a positional index into the artboard's
+  // LinearAnimation list, so file position relative to the animations is irrelevant).
+  // A doc with no stateMachines (field absent OR []) emits nothing here, so its bytes
+  // stay byte-identical to the pre-state-machine exporter.
+  emitStateMachines(scene, doc, partIndex);
+
   return assemble(scene);
+}
+
+/**
+ * Emit each app StateMachine as one StateMachine object + one StateMachineLayer, mapping
+ * 1:1 to Rive's own state-machine core objects. Nesting is purely by EMISSION ORDER:
+ * Rive's import stack (src/importers/import_stack.cpp — a map keyed by importer typeKey)
+ * attaches each child to the most-recently-emitted parent of the required type, exactly
+ * like the KeyedObject/KeyedProperty/KeyFrame chain the animation exporter already relies
+ * on. Per machine we emit, in order:
+ *
+ *   StateMachine
+ *     StateMachineInput* (bool/number/trigger — addInput, index = array position)
+ *     StateMachineLayer
+ *       LayerState* (Entry/Any/Exit/AnimationState — addState; stateToId indexes these)
+ *         StateTransition* (each nested under its FROM state; stateFromId is runtime:false
+ *                           and recovered from nesting, so we never emit it)
+ *           TransitionCondition* (addCondition; ANDed)
+ *     StateMachineListener* (addListener; children of the MACHINE, emitted after the
+ *                            layer — safe because the listener looks up the still-latest
+ *                            StateMachine importer in the map)
+ *       ListenerInputChange* (addAction)
+ *
+ * None of these consume artboard component indices (they go to the artboard's separate
+ * state-machine list), so partIndex/rootIndex references from the drawing tree are
+ * untouched.
+ *
+ * Index/enum ground truth (rive-runtime/dev/defs + src):
+ *  - AnimationState.animationId = positional index into the artboard's LinearAnimations
+ *    (= doc.clips order); a state whose clipName no longer resolves is DROPPED along with
+ *    any transition touching it (an AnimationState with a missing animationId fails
+ *    import — layer_state_importer resolve() returns MissingObject).
+ *  - StateTransition.stateToId = index into the layer's emitted states.
+ *  - Condition inputId / listener-action inputId = index into the machine's inputs.
+ *  - StateTransition.duration is milliseconds because flags omits DurationIsPercentage
+ *    (bit value 2, state_transition_flags.hpp); flags default 0 also leaves exit-time
+ *    disabled so a satisfied transition fires immediately.
+ *  - Bool conditions: Rive's TransitionBoolCondition::evaluate passes when
+ *    (value && op==equal) || (!value && op==notEqual), so opValue ENCODES the expected
+ *    boolean (equal=expect true, notEqual=expect false) rather than a comparison; the app
+ *    (op,value) pair is reduced to that expected boolean here.
+ *  - StateMachineListener.targetId = the target part's Node component index. Rive's hit
+ *    test (state_machine_instance.cpp addToHitLookup) walks a ContainerComponent's
+ *    descendants, so pointing at the part's Node picks up its child Shapes.
+ *  - Every layer MUST contain an Entry, an Any, AND an Exit state or the runtime rejects
+ *    it as corrupt (state_machine_layer.cpp onAddedDirty). The app guarantees entry+any
+ *    but not exit, so a bare Exit is synthesized when absent.
+ *
+ * Documented limitations:
+ *  - Per-state loop (SMState.loop) is NOT independently expressible: looping is a property
+ *    of the LinearAnimation (loopValue), and the animation exporter emits every animation
+ *    as looped. A state's loop flag is therefore ignored; the shared clip's loop governs.
+ *  - Listener event type is carried on StateMachineListenerSingle.listenerTypeValue (the
+ *    classic representation). Very new runtimes that read the type only from separate
+ *    ListenerInputType child objects may not fire pointer listeners; the rest of the
+ *    machine (inputs/states/transitions) is unaffected.
+ */
+function emitStateMachines(scene: Scene, doc: RigDoc, partIndex: Map<string, number>): void {
+  const machines = doc.stateMachines;
+  if (!machines || machines.length === 0) return;
+
+  // clipName -> positional index among the emitted LinearAnimations (doc.clips order).
+  const clipIndexByName = new Map<string, number>();
+  doc.clips.forEach((c, i) => {
+    if (!clipIndexByName.has(c.name)) clipIndexByName.set(c.name, i);
+  });
+
+  for (const sm of machines) {
+    // --- StateMachine (named so the runtime can address it by name) ---
+    // StateMachine extends Animation (via StateMachineResolver), NOT
+    // StateMachineComponent, so its name is Animation.name (key 55) — the SAME key the
+    // LinearAnimations use — not the component name (138) that inputs/listeners carry.
+    scene.begin(T_STATE_MACHINE, false);
+    scene.propString(P_ANIM_NAME, sm.name);
+    scene.end();
+
+    // --- Inputs (index = array position; name so setInput-by-name works) ---
+    const inputIndex = new Map<string, number>();
+    const inputType = new Map<string, SMInputKind>();
+    sm.inputs.forEach((inp, i) => {
+      inputIndex.set(inp.id, i);
+      inputType.set(inp.id, inp.type);
+      if (inp.type === 'bool') {
+        scene.begin(T_SM_BOOL, false);
+        scene.propString(P_SM_NAME, inp.name);
+        scene.propBool(P_SM_BOOL_VALUE, inp.default === true);
+        scene.end();
+      } else if (inp.type === 'number') {
+        scene.begin(T_SM_NUMBER, false);
+        scene.propString(P_SM_NAME, inp.name);
+        scene.propDouble(P_SM_NUMBER_VALUE, typeof inp.default === 'number' ? inp.default : 0);
+        scene.end();
+      } else {
+        scene.begin(T_SM_TRIGGER, false);
+        scene.propString(P_SM_NAME, inp.name);
+        scene.end();
+      }
+    });
+
+    // --- Layer ---
+    scene.begin(T_SM_LAYER, false);
+    scene.end();
+
+    // --- States (drop dangling animation states; entry/any/exit never dangle) ---
+    const kept: SMState[] = sm.states.filter(
+      (st) => st.kind !== 'animation' || resolveClipIndex(st, clipIndexByName) !== undefined,
+    );
+    // Rive rejects a layer that lacks ANY of Entry/Any/Exit as "corrupt"
+    // (state_machine_layer.cpp onAddedDirty). The app guarantees one entry + one any but
+    // NOT an exit, so synthesize the missing mandatory states (unreferenced — nothing
+    // transitions to a synthetic exit, which is legal).
+    const synthetic: SMState[] = [];
+    const hasKind = (k: SMState['kind']) => kept.some((s) => s.kind === k);
+    if (!hasKind('entry')) synthetic.push({ id: '__sm_entry__', name: 'Entry', kind: 'entry' });
+    if (!hasKind('any')) synthetic.push({ id: '__sm_any__', name: 'Any', kind: 'any' });
+    if (!hasKind('exit')) synthetic.push({ id: '__sm_exit__', name: 'Exit', kind: 'exit' });
+    const emitted: SMState[] = [...kept, ...synthetic];
+    const stateIndex = new Map<string, number>();
+    emitted.forEach((st, i) => stateIndex.set(st.id, i));
+
+    for (const st of emitted) {
+      const typeKey =
+        st.kind === 'entry' ? T_ENTRY_STATE
+        : st.kind === 'any' ? T_ANY_STATE
+        : st.kind === 'exit' ? T_EXIT_STATE
+        : T_ANIMATION_STATE;
+      scene.begin(typeKey, false);
+      if (st.kind === 'animation') {
+        scene.propUint(P_ANIMATION_ID, resolveClipIndex(st, clipIndexByName)!);
+      }
+      scene.end();
+
+      // Outgoing transitions nested under this (their FROM) state.
+      for (const tr of sm.transitions) {
+        if (tr.fromId !== st.id) continue;
+        const to = stateIndex.get(tr.toId);
+        if (to === undefined) continue; // target state was dropped
+        scene.begin(T_STATE_TRANSITION, false);
+        scene.propUint(P_STATE_TO_ID, to);
+        // flags omitted (=> 0 => duration in ms, exit-time disabled).
+        if (tr.durationMs > 0) scene.propUint(P_TRANS_DURATION, Math.round(tr.durationMs));
+        scene.end();
+
+        for (const cond of tr.conditions) {
+          const iidx = inputIndex.get(cond.inputId);
+          const itype = inputType.get(cond.inputId);
+          if (iidx === undefined || itype === undefined) continue; // dangling input
+          if (itype === 'trigger') {
+            scene.begin(T_TRANS_TRIGGER_COND, false);
+            scene.propUint(P_COND_INPUT_ID, iidx);
+            scene.end();
+          } else if (itype === 'bool') {
+            const op: SMConditionOp = cond.op ?? '==';
+            const rhs = cond.value === true;
+            const expected = op === '!=' ? !rhs : rhs; // input == expected
+            scene.begin(T_TRANS_BOOL_COND, false);
+            scene.propUint(P_COND_INPUT_ID, iidx);
+            scene.propUint(P_COND_OP, expected ? 0 : 1); // equal / notEqual
+            scene.end();
+          } else {
+            const op: SMConditionOp = cond.op ?? '==';
+            scene.begin(T_TRANS_NUMBER_COND, false);
+            scene.propUint(P_COND_INPUT_ID, iidx);
+            scene.propUint(P_COND_OP, COND_OP[op]);
+            scene.propDouble(P_COND_VALUE, typeof cond.value === 'number' ? cond.value : 0);
+            scene.end();
+          }
+        }
+      }
+    }
+
+    // --- Listeners (machine-level; after the layer) ---
+    for (const ln of sm.listeners) {
+      const target = partIndex.get(ln.targetPartId);
+      if (target === undefined) continue; // target part missing/deleted
+      scene.begin(T_SM_LISTENER, false);
+      scene.propUint(P_LISTENER_TARGET_ID, target);
+      scene.propUint(P_LISTENER_TYPE, LISTENER_TYPE[ln.event]);
+      scene.end();
+
+      for (const act of ln.actions) {
+        const iidx = inputIndex.get(act.inputId);
+        const itype = inputType.get(act.inputId);
+        if (iidx === undefined || itype === undefined) continue;
+        if (act.type === 'fireTrigger') {
+          scene.begin(T_LISTENER_TRIGGER_CHANGE, false);
+          scene.propUint(P_LISTENER_INPUT_ID, iidx);
+          scene.end();
+        } else if (act.type === 'setBool') {
+          scene.begin(T_LISTENER_BOOL_CHANGE, false);
+          scene.propUint(P_LISTENER_INPUT_ID, iidx);
+          scene.propUint(P_LISTENER_BOOL_VALUE, act.value === true ? 1 : 0);
+          scene.end();
+        } else {
+          scene.begin(T_LISTENER_NUMBER_CHANGE, false);
+          scene.propUint(P_LISTENER_INPUT_ID, iidx);
+          scene.propDouble(P_LISTENER_NUMBER_VALUE, typeof act.value === 'number' ? act.value : 0);
+          scene.end();
+        }
+      }
+    }
+  }
+}
+
+type SMInputKind = 'bool' | 'number' | 'trigger';
+
+/** Index of the clip a state plays, or undefined when the clipName no longer resolves. */
+function resolveClipIndex(st: SMState, clipIndexByName: Map<string, number>): number | undefined {
+  if (st.clipName === undefined) return undefined;
+  return clipIndexByName.get(st.clipName);
 }
 
 /** Assemble the header + ToC + object body into the final byte array. */
@@ -781,4 +1132,4 @@ function argb(value: string, opacity: number): number {
 }
 
 /** @internal Exposed for unit tests only — not part of the public export surface. */
-export const __riv = { ByteWriter, argb, toFrame, cubicFor, FIELD_TYPE, EASING_CUBIC };
+export const __riv = { ByteWriter, argb, toFrame, cubicFor, FIELD_TYPE, EASING_CUBIC, COND_OP, LISTENER_TYPE };

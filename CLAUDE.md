@@ -55,15 +55,17 @@ from the console.
 | `align.ts` | Align & distribute math (`alignDeltas`/`distributeDeltas`, pure functions over part bboxes with selection/first/last/canvas reference options); applied through parent-chain-aware rest translation from the inspector |
 | `snap.ts` | Pure snapping math (`snapPoint`/`snapDelta`/`boxFeaturePoints`: nearest candidate within a threshold, axis-lock aware, box = center + corners + edge midpoints); view.ts collects candidates and applies it to Setup-mode node/pivot/part-translate drags |
 | `help.ts` | `SHORTCUTS` registry (single source of truth for documented bindings) and the `?`/F1 keyboard-shortcut overlay (`openHelp`/`closeHelp`/`toggleHelp`/`isHelpOpen`) |
+| `stateMachine.ts` | Pure state-machine evaluator (`createSMInstance`): entry resolution, any-then-current transition evaluation (array order, at most one per advance), bool/number/trigger conditions (triggers arm until consumed at end of an advance's evaluation), crossfade blending running both clip clocks with the absolute-keys/rest-fallback rule, exit-freeze, rest pseudo-state (`SM_REST_STATE_ID`); deterministic — time flows only through `advance(dtMs)` |
+| `smPanel.ts` | State-machine editor UI (the timeline's `🔀 logic` view): machine CRUD, draggable state graph (positions persist on `SMState.x/y`), armed click-click transition creation, condition/duration editors, inputs list (live controls during preview), listeners editor; ▶ preview drives the canvas via view's `setPoseSampler` hook + rAF, capture-phase pointer listeners map canvas hits (ancestor-inclusive) to listener actions; `window.__smPanel` debug hook with deterministic `tick(dtMs)` |
 | `claude.ts` | Anthropic SDK calls (`claude-opus-4-8`): `animateWithClaude` (adaptive thinking, structured outputs guaranteeing a valid clip JSON, parent-aware system prompt, optional base64 pose snapshot for vision grounding) and `critiqueWithClaude` (plain-text animation review) |
 | `main.ts` | Bootstrapping, toolbar (open SVG/project, sample, save project, undo/redo, Compose/Lottie export, Setup/Animate toggle, `?` help), autosave to `localStorage`, and the single global `keydown` handler: Tab mode toggle; Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo/redo; Ctrl+S/O save/open; Ctrl+A select-all (nodes in node mode, else parts); Ctrl+D duplicate parts (Setup, skips skinned); Ctrl+G / Ctrl+Shift+G group/ungroup; Ctrl+C/V keyframe copy-paste; V/T/R/I tool keys; `%` snapping toggle; Shift+H / Shift+V flips; `+`/`-` zoom; `?`/F1 help overlay; PageUp/PageDown z-order; Delete and arrows resolve by context (animate keys → nodes → setup parts → playhead scrub); Escape tiers (help overlay → bone placement → path → group/deselect); `F` fit-view; Space play (F/Space/letter keys fire only without ctrl/meta/alt) |
 
 ## Roadmap
 
-Feature roadmap lives in `ROADMAP.md`: v1 through v2.8 are all implemented and
-verified as of 2026-07-10; "Committed next" holds accepted-but-deferred features
-(view.ts split + interaction harness, Rive-style state machines); "v3 — Future" is
-the out-of-scope / next-up list.
+Feature roadmap lives in `ROADMAP.md`: v1 through v2.9 are all implemented and
+verified as of 2026-07-10; "Committed next" holds the accepted-but-deferred
+view.ts split + interaction harness; "v3 — Future" is the out-of-scope / next-up
+list.
 
 ## Conventions that must hold
 
@@ -172,6 +174,18 @@ the out-of-scope / next-up list.
   compound paths — buttons disable via `canJoinNodes`/`canDeleteSegment`.
 - **`help.ts`'s `SHORTCUTS` list is the user-facing shortcut documentation** — any
   binding change in `main.ts` must update it in the same change.
+- **State machines mirror Rive's semantics deliberately** (`model.ts` SM types →
+  `exportRiv.ts` maps 1:1): inputs addressed by NAME at runtime, conditions AND,
+  easing crossfades, any-state priority. The app's `newStateMachine` creates only
+  entry+any; **the exporter synthesizes the Exit state Rive requires** (a layer
+  without entry+any+exit is rejected as "corrupt" by `state_machine_layer.cpp`) —
+  keep that synthesis if the model ever changes. Deleting a clip must NOT destroy a
+  graph: normalizeDoc keeps dangling-clipName states (evaluator samples rest), but
+  the .riv export DROPS them (the runtime rejects unresolved animationIds).
+- **SM preview is app-state, never doc-state**: `smPanel.ts` owns the instance and
+  the rAF loop; the ONLY view.ts hook is `setPoseSampler(fn|null)` (renderPose
+  samples through it when set). Canvas pointer events during preview are consumed
+  by capture-phase listeners on `#canvas` — selection/drag never fire.
 - **The canonical Pip artwork** is `Dosey/media/PIP_MASTER.svg`; `public/PIP_MASTER.svg`
   here is a bundled sample copy — re-sync it when the master changes.
 
@@ -186,6 +200,44 @@ assert numerically (px drift, cos angles) and on the DOM. Full checklist lives i
 ROADMAP.md "Testing conventions".
 
 ## Status
+
+### Eleventh wave (v2.9: Rive-style state machines) — implemented and verified
+
+Built 2026-07-10 in three orchestrated waves (core → UI + .riv export in parallel,
+disjoint files), each audited; `npm run build` clean; **284 tests / 11 files
+passing**.
+
+- **Core (`stateMachine.ts` + model types)**: inputs (bool/number/trigger with
+  defaults), states (entry/any/exit/animation with clipName + loop), transitions
+  (AND-ed conditions, ==/!=/</<=/>/>= ops, blend durationMs), listeners
+  (part + down/up/enter/exit + setBool/setNumber/fireTrigger actions).
+  `RigDoc.stateMachines` serializes for free; normalizeDoc defaults/prunes (keeps
+  dangling-clipName states). Evaluator decisions documented in the file header:
+  evaluate→consume-triggers→integrate ordering, one transition per advance
+  (termination), blend retarget-from-incoming, exit-freeze, rest pseudo-state.
+- **Editor UI (`smPanel.ts`, timeline `🔀 logic` toggle mirroring the curves
+  pattern)**: machine CRUD, draggable graph (x/y persisted), click-click transition
+  arming, condition/duration editors, inputs with live preview controls, listeners
+  editor. ▶ preview: rAF-driven SMInstance poses the canvas through view's single
+  `setPoseSampler` hook; canvas clicks dispatch to listeners (ancestor-inclusive
+  hit matching) with selection suppressed. Verified live with realistic gestures:
+  UI-built machine → 400ms blend passes exact midpoint (30 between 0/60), listener
+  pointerdown fires a trigger transition without touching selection, undo/redo
+  single-steps each graph edit.
+- **.riv export**: StateMachine/Layer/inputs/states/transitions/conditions/listeners
+  emitted with keys pinned from dev/defs + runtime source (nesting via the
+  import-stack pattern; SM objects consume no component indices; op enum ordering
+  is NON-OBVIOUS: eq 0, ne 1, le 2, ge 3, lt 4, gt 5; listener types enter 0 /
+  exit 1 / down 2 / up 3; duration in ms with the percentage flag clear; bool
+  conditions reduce (op,value) into opValue). TWO runtime-found traps encoded:
+  a layer missing entry/any/EXIT is rejected as corrupt (exporter synthesizes a
+  bare Exit), and dangling-clip states must be dropped (unresolved animationId
+  fails import). Live-verified in @rive-app/canvas: stateMachineInputs enumerate,
+  bool input drives A→B with exact 30° blend midpoint at 200ms/400ms, trigger
+  drives B→A. Non-SM docs export byte-identically to before (pinned by test).
+- Limitations (documented in-code): per-state loop can't map (looping is
+  per-LinearAnimation); pointer listeners use the classic listenerTypeValue
+  representation.
 
 ### Tenth wave (v2.8: Rive .riv export + project-format verification) — implemented and verified
 
@@ -584,7 +636,8 @@ re-verified structurally but the two external-consumer checks below are still ow
 
 ### Unit tests — done
 
-`npm test`: **10 files, 235 tests, all passing** (2026-07-10). Covered:
+`npm test`: **11 files, 284 tests, all passing** (2026-07-10). Covered:
+`stateMachine` (entry/ops/trigger timing/any-priority/blend math/exit/reset),
 `paths` (parse/serialize/arc→cubic/node insertion, segment delete/join/reverse/close
 incl. explicit-closing-segment edge cases), `snap` (nearest/threshold/axis-lock/
 box features), `exportRiv` (varuint/string/float/ToC writer primitives + a

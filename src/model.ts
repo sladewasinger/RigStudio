@@ -130,6 +130,86 @@ export interface Clip {
   tracks: Track[];
 }
 
+// ---- State machines ----
+//
+// Rive-style interactive animation graphs. A machine wires named INPUTS (bool/number/
+// trigger) into STATES (each an animation clip, plus the special entry/any/exit nodes)
+// connected by TRANSITIONS whose CONDITIONS gate them. LISTENERS map canvas pointer
+// events on a part to input mutations. Shapes mirror Rive's own semantics so the .riv
+// exporter can map 1:1. The runtime evaluator lives in stateMachine.ts (pure, no DOM).
+
+export type SMInputType = 'bool' | 'number' | 'trigger';
+
+export interface SMInput {
+  id: string;
+  name: string;
+  type: SMInputType;
+  /** Initial value (bool/number). Triggers start disarmed and take no default. */
+  default?: boolean | number;
+}
+
+/**
+ * 'entry' is the graph's start node (resolved once at create/reset); 'any' is a
+ * source-only node whose transitions may fire from any state; 'exit' ends the machine
+ * (done); 'animation' plays a clip by name.
+ */
+export type SMStateKind = 'entry' | 'any' | 'exit' | 'animation';
+
+export interface SMState {
+  id: string;
+  name: string;
+  kind: SMStateKind;
+  /** The clip this state plays (kind 'animation' only). A dangling name samples rest. */
+  clipName?: string;
+  /** Loop the clip (kind 'animation'); defaults true — false clamps at the clip end. */
+  loop?: boolean;
+  /** Cosmetic graph-editor position (smPanel). Persisted for free; never affects runtime. */
+  x?: number;
+  y?: number;
+}
+
+export type SMConditionOp = '==' | '!=' | '<' | '<=' | '>' | '>=';
+
+export interface SMCondition {
+  inputId: string;
+  /** Comparison operator. Bool inputs accept only ==/!= (missing = ==); triggers ignore it. */
+  op?: SMConditionOp;
+  /** Right-hand value (bool/number). Trigger conditions omit it — they fire when armed. */
+  value?: boolean | number;
+}
+
+export interface SMTransition {
+  id: string;
+  fromId: string;
+  toId: string;
+  /** Crossfade length into the target state, ms. 0 = instant. */
+  durationMs: number;
+  /** ANDed together; an empty list is an unconditional transition. */
+  conditions: SMCondition[];
+}
+
+export interface SMListenerAction {
+  inputId: string;
+  type: 'setBool' | 'setNumber' | 'fireTrigger';
+  value?: boolean | number;
+}
+
+export interface SMListener {
+  id: string;
+  targetPartId: string;
+  event: 'down' | 'up' | 'enter' | 'exit';
+  actions: SMListenerAction[];
+}
+
+export interface StateMachine {
+  id: string;
+  name: string;
+  inputs: SMInput[];
+  states: SMState[];
+  transitions: SMTransition[];
+  listeners: SMListener[];
+}
+
 export interface RigDoc {
   name: string;
   viewBox: { x: number; y: number; w: number; h: number };
@@ -137,6 +217,27 @@ export interface RigDoc {
   /** Pivot for root-level scale (e.g. squash-and-stretch around the ground). */
   rootPivot: Vec2;
   clips: Clip[];
+  /** Rive-style interactive graphs over the clips. Optional (absent on older docs). */
+  stateMachines?: StateMachine[];
+}
+
+/**
+ * A fresh state machine with exactly the mandatory 'entry' and 'any' nodes and no
+ * clips wired yet. The one place machines are minted, so the entry/any invariant holds
+ * from birth (normalizeDoc re-establishes it on load).
+ */
+export function newStateMachine(name: string): StateMachine {
+  return {
+    id: freshId('sm'),
+    name,
+    inputs: [],
+    states: [
+      { id: freshId('state'), name: 'Entry', kind: 'entry' },
+      { id: freshId('state'), name: 'Any', kind: 'any' },
+    ],
+    transitions: [],
+    listeners: [],
+  };
 }
 
 export const CHANNEL_DEFAULTS: Record<Channel, number> = {
@@ -888,6 +989,48 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
           }
         }
       }
+    }
+  }
+  // State machines: default to none on old files; per machine re-establish the
+  // entry/any invariant and prune dangling references, but KEEP a state whose
+  // clipName no longer resolves — the evaluator treats it as rest pose, so deleting a
+  // clip must not silently destroy a graph.
+  doc.stateMachines = Array.isArray(doc.stateMachines) ? doc.stateMachines : [];
+  for (const sm of doc.stateMachines) {
+    trackId(sm.id);
+    for (const inp of sm.inputs ?? []) trackId(inp.id);
+    for (const st of sm.states ?? []) trackId(st.id);
+    for (const tr of sm.transitions ?? []) trackId(tr.id);
+    for (const ls of sm.listeners ?? []) trackId(ls.id);
+  }
+  // Get idCounter past every loaded id before minting any fresh entry/any nodes.
+  bumpIdCounter(maxId);
+  const partIds = new Set(doc.parts.map((p) => p.id));
+  for (const sm of doc.stateMachines) {
+    sm.inputs = Array.isArray(sm.inputs) ? sm.inputs : [];
+    sm.states = Array.isArray(sm.states) ? sm.states : [];
+    sm.transitions = Array.isArray(sm.transitions) ? sm.transitions : [];
+    sm.listeners = Array.isArray(sm.listeners) ? sm.listeners : [];
+    if (!sm.states.some((s) => s.kind === 'entry')) {
+      sm.states.unshift({ id: freshId('state'), name: 'Entry', kind: 'entry' });
+    }
+    if (!sm.states.some((s) => s.kind === 'any')) {
+      sm.states.push({ id: freshId('state'), name: 'Any', kind: 'any' });
+    }
+    const stateIds = new Set(sm.states.map((s) => s.id));
+    const inputIds = new Set(sm.inputs.map((i) => i.id));
+    sm.transitions = sm.transitions.filter((t) => stateIds.has(t.fromId) && stateIds.has(t.toId));
+    for (const t of sm.transitions) {
+      t.durationMs = Math.max(0, Number.isFinite(t.durationMs) ? t.durationMs : 0);
+      t.conditions = Array.isArray(t.conditions)
+        ? t.conditions.filter((c) => inputIds.has(c.inputId))
+        : [];
+    }
+    sm.listeners = sm.listeners.filter((l) => partIds.has(l.targetPartId));
+    for (const l of sm.listeners) {
+      l.actions = Array.isArray(l.actions)
+        ? l.actions.filter((a) => inputIds.has(a.inputId))
+        : [];
     }
   }
   bumpIdCounter(maxId);

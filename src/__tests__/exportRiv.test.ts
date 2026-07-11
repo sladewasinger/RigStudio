@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { exportRiv, __riv } from '../exportRiv';
-import { Clip, RigDoc, RigPart, RigPath } from '../model';
+import { Clip, RigDoc, RigPart, RigPath, StateMachine } from '../model';
 
 const DEG2RAD = Math.PI / 180;
 
@@ -19,6 +19,11 @@ const TYPE = {
   BACKBOARD: 23, ARTBOARD: 1, NODE: 2, SHAPE: 3, POINTS_PATH: 16, CUBIC_VERTEX: 6,
   FILL: 20, STROKE: 24, SOLID_COLOR: 18, CUBIC_INTERP: 28,
   LINEAR_ANIM: 31, KEYED_OBJECT: 25, KEYED_PROPERTY: 26, KEYFRAME_DOUBLE: 30,
+  // State machine family (none consume an artboard index).
+  STATE_MACHINE: 53, SM_LAYER: 57, SM_BOOL: 59, SM_NUMBER: 56, SM_TRIGGER: 58,
+  ENTRY_STATE: 63, ANY_STATE: 62, EXIT_STATE: 64, ANIMATION_STATE: 61,
+  STATE_TRANSITION: 65, TRANS_TRIGGER_COND: 68, TRANS_NUMBER_COND: 70, TRANS_BOOL_COND: 71,
+  SM_LISTENER: 114, LISTENER_TRIGGER_CHANGE: 115, LISTENER_BOOL_CHANGE: 117, LISTENER_NUMBER_CHANGE: 118,
 };
 const PROP = {
   NAME: 4, PARENT_ID: 5, WIDTH: 7, HEIGHT: 8, X: 13, Y: 14, ROTATION: 15,
@@ -26,9 +31,14 @@ const PROP = {
   THICKNESS: 47, OBJECT_ID: 51, PROPERTY_KEY: 53, ANIM_NAME: 55, FPS: 56, DURATION: 57, LOOP: 59,
   X1: 63, Y1: 64, X2: 65, Y2: 66, FRAME: 67, INTERP_TYPE: 68, INTERPOLATOR_ID: 69,
   VALUE: 70, IN_ROT: 84, IN_DIST: 85, OUT_ROT: 86, OUT_DIST: 87,
+  // State machine family.
+  SM_NAME: 138, SM_NUMBER_VALUE: 140, SM_BOOL_VALUE: 141, ANIMATION_ID: 149, STATE_TO_ID: 151,
+  COND_INPUT_ID: 155, COND_OP: 156, COND_VALUE: 157, TRANS_DURATION: 158, TRANS_FLAGS: 152,
+  LISTENER_TARGET_ID: 224, LISTENER_TYPE: 225, LISTENER_INPUT_ID: 227,
+  LISTENER_BOOL_VALUE: 228, LISTENER_NUMBER_VALUE: 229,
 };
-// Component object typeKeys consume an artboard index (in read order); animation
-// objects and the backboard do not.
+// Component object typeKeys consume an artboard index (in read order); animation and
+// state-machine objects and the backboard do not.
 const CONSUMES_INDEX = new Set([
   TYPE.ARTBOARD, TYPE.NODE, TYPE.SHAPE, TYPE.POINTS_PATH, TYPE.CUBIC_VERTEX,
   TYPE.FILL, TYPE.STROKE, TYPE.SOLID_COLOR, TYPE.CUBIC_INTERP,
@@ -44,11 +54,23 @@ interface DecodedObject {
 interface DecodedProp { propertyKey: number; keyframes: { frame: number; value: number; interpType: number; interpId: number }[] }
 interface DecodedKeyedObject { objectId: number; props: DecodedProp[] }
 interface DecodedAnim { name: string; fps: number; duration: number; loop: number; objects: DecodedKeyedObject[] }
+
+// State-machine tree (walked by context, mirroring the runtime import stack: each child
+// attaches to the most-recently-seen parent of the required type).
+interface DecodedSMInput { typeKey: number; name: string; value: number | undefined }
+interface DecodedCond { typeKey: number; inputId: number; op: number | undefined; value: number | undefined }
+interface DecodedTransition { typeKey: number; stateToId: number; duration: number; flags: number | undefined; conditions: DecodedCond[] }
+interface DecodedState { typeKey: number; animationId: number | undefined; transitions: DecodedTransition[] }
+interface DecodedAction { typeKey: number; inputId: number; value: number | undefined }
+interface DecodedListener { targetId: number; listenerType: number; actions: DecodedAction[] }
+interface DecodedSM { name: string; inputs: DecodedSMInput[]; states: DecodedState[]; listeners: DecodedListener[] }
+
 interface Decoded {
   major: number; minor: number; fileId: number;
   tocKeys: number[]; tocTypes: Map<number, number>;
   objects: DecodedObject[];
   animations: DecodedAnim[];
+  stateMachines: DecodedSM[];
 }
 
 class Reader {
@@ -103,10 +125,15 @@ function decodeRiv(bytes: Uint8Array): Decoded {
 
   const objects: DecodedObject[] = [];
   const animations: DecodedAnim[] = [];
+  const stateMachines: DecodedSM[] = [];
   let nextIndex = 0;
   let curAnim: DecodedAnim | null = null;
   let curKeyed: DecodedKeyedObject | null = null;
   let curProp: DecodedProp | null = null;
+  let curSM: DecodedSM | null = null;
+  let curState: DecodedState | null = null;
+  let curTransition: DecodedTransition | null = null;
+  let curListener: DecodedListener | null = null;
 
   while (!r.eof()) {
     const typeKey = r.varuint();
@@ -147,9 +174,70 @@ function decodeRiv(bytes: Uint8Array): Decoded {
         interpType: Number(props[PROP.INTERP_TYPE] ?? 0),
         interpId: props[PROP.INTERPOLATOR_ID] === undefined ? -1 : Number(props[PROP.INTERPOLATOR_ID]),
       });
+    } else if (typeKey === TYPE.STATE_MACHINE) {
+      // StateMachine extends Animation, so its name is Animation.name (55), not 138.
+      curSM = { name: String(props[PROP.ANIM_NAME] ?? ''), inputs: [], states: [], listeners: [] };
+      stateMachines.push(curSM);
+      curState = null; curTransition = null; curListener = null;
+    } else if (typeKey === TYPE.SM_BOOL || typeKey === TYPE.SM_NUMBER || typeKey === TYPE.SM_TRIGGER) {
+      const value = typeKey === TYPE.SM_BOOL ? props[PROP.SM_BOOL_VALUE]
+        : typeKey === TYPE.SM_NUMBER ? props[PROP.SM_NUMBER_VALUE] : undefined;
+      curSM!.inputs.push({
+        typeKey, name: String(props[PROP.SM_NAME] ?? ''),
+        value: value === undefined ? undefined : Number(value),
+      });
+    } else if (typeKey === TYPE.SM_LAYER) {
+      curState = null; curTransition = null;
+    } else if (
+      typeKey === TYPE.ENTRY_STATE || typeKey === TYPE.ANY_STATE ||
+      typeKey === TYPE.EXIT_STATE || typeKey === TYPE.ANIMATION_STATE
+    ) {
+      curState = {
+        typeKey,
+        animationId: props[PROP.ANIMATION_ID] === undefined ? undefined : Number(props[PROP.ANIMATION_ID]),
+        transitions: [],
+      };
+      curSM!.states.push(curState);
+      curTransition = null;
+    } else if (typeKey === TYPE.STATE_TRANSITION) {
+      curTransition = {
+        typeKey,
+        stateToId: Number(props[PROP.STATE_TO_ID] ?? -1),
+        duration: Number(props[PROP.TRANS_DURATION] ?? 0),
+        flags: props[PROP.TRANS_FLAGS] === undefined ? undefined : Number(props[PROP.TRANS_FLAGS]),
+        conditions: [],
+      };
+      curState!.transitions.push(curTransition);
+    } else if (
+      typeKey === TYPE.TRANS_TRIGGER_COND || typeKey === TYPE.TRANS_NUMBER_COND ||
+      typeKey === TYPE.TRANS_BOOL_COND
+    ) {
+      curTransition!.conditions.push({
+        typeKey,
+        inputId: Number(props[PROP.COND_INPUT_ID] ?? -1),
+        op: props[PROP.COND_OP] === undefined ? undefined : Number(props[PROP.COND_OP]),
+        value: props[PROP.COND_VALUE] === undefined ? undefined : Number(props[PROP.COND_VALUE]),
+      });
+    } else if (typeKey === TYPE.SM_LISTENER) {
+      curListener = {
+        targetId: Number(props[PROP.LISTENER_TARGET_ID] ?? -1),
+        listenerType: Number(props[PROP.LISTENER_TYPE] ?? -1),
+        actions: [],
+      };
+      curSM!.listeners.push(curListener);
+    } else if (
+      typeKey === TYPE.LISTENER_TRIGGER_CHANGE || typeKey === TYPE.LISTENER_BOOL_CHANGE ||
+      typeKey === TYPE.LISTENER_NUMBER_CHANGE
+    ) {
+      const value = typeKey === TYPE.LISTENER_BOOL_CHANGE ? props[PROP.LISTENER_BOOL_VALUE]
+        : typeKey === TYPE.LISTENER_NUMBER_CHANGE ? props[PROP.LISTENER_NUMBER_VALUE] : undefined;
+      curListener!.actions.push({
+        typeKey, inputId: Number(props[PROP.LISTENER_INPUT_ID] ?? -1),
+        value: value === undefined ? undefined : Number(value),
+      });
     }
   }
-  return { major, minor, fileId, tocKeys, tocTypes, objects, animations };
+  return { major, minor, fileId, tocKeys, tocTypes, objects, animations, stateMachines };
 }
 
 // ---- Fixtures ----
@@ -527,5 +615,273 @@ describe('exportRiv draw order', () => {
         expect(p).toBe(o.index);
       }
     }
+  });
+});
+
+// ---- State machines ----
+//
+// Nesting is by emission order (Rive's import stack is a typeKey-keyed map — each child
+// attaches to the most-recent parent of the needed type). Index/enum ground truth pinned
+// from rive-runtime dev/defs + src (see the exportRiv.ts header table).
+
+/**
+ * A doc with two parts (body + arm), two clips (A rotates the arm to 0, B to 60), and one
+ * full state machine: 3 input types with defaults, entry/any/exit + 2 animation states,
+ * transitions covering unconditional + a 400ms bool blend + every number op + a trigger
+ * condition, and one listener firing two actions off the arm.
+ */
+function smDoc(): RigDoc {
+  const body = part('p_body', { label: 'body', pivot: { x: 50, y: 50 }, paths: [path('body_path')] });
+  const arm = part('p_arm', {
+    label: 'arm', pivot: { x: 70, y: 40 }, parentId: 'p_body', paths: [path('arm_path')],
+  });
+  const clipA: Clip = {
+    name: 'A', duration: 1000,
+    tracks: [{ target: 'p_arm', channel: 'rotate', keyframes: [{ time: 0, value: 0, easing: 'linear' }] }],
+  };
+  const clipB: Clip = {
+    name: 'B', duration: 1000,
+    tracks: [{ target: 'p_arm', channel: 'rotate', keyframes: [{ time: 0, value: 60, easing: 'linear' }] }],
+  };
+  const machine: StateMachine = {
+    id: 'sm1', name: 'Machine',
+    inputs: [
+      { id: 'i_b', name: 'b', type: 'bool', default: true },
+      { id: 'i_n', name: 'n', type: 'number', default: 5 },
+      { id: 'i_t', name: 't', type: 'trigger' },
+    ],
+    states: [
+      { id: 's_entry', name: 'Entry', kind: 'entry' },
+      { id: 's_any', name: 'Any', kind: 'any' },
+      { id: 's_a', name: 'A', kind: 'animation', clipName: 'A' },
+      { id: 's_b', name: 'B', kind: 'animation', clipName: 'B' },
+      { id: 's_exit', name: 'Exit', kind: 'exit' },
+    ],
+    transitions: [
+      // Unconditional entry -> A.
+      { id: 't1', fromId: 's_entry', toId: 's_a', durationMs: 0, conditions: [] },
+      // A -> B with a 400ms blend, gated on the bool being true.
+      { id: 't2', fromId: 's_a', toId: 's_b', durationMs: 400, conditions: [{ inputId: 'i_b', op: '==', value: true }] },
+      // B -> exit gated on every number op (ANDed) plus a bool notEqual (reduce test).
+      {
+        id: 't3', fromId: 's_b', toId: 's_exit', durationMs: 0,
+        conditions: [
+          { inputId: 'i_n', op: '==', value: 5 },
+          { inputId: 'i_n', op: '!=', value: 0 },
+          { inputId: 'i_n', op: '<=', value: 10 },
+          { inputId: 'i_n', op: '>=', value: 1 },
+          { inputId: 'i_n', op: '<', value: 100 },
+          { inputId: 'i_n', op: '>', value: 0 },
+          { inputId: 'i_b', op: '!=', value: true },
+        ],
+      },
+      // Any -> A on a trigger (bare condition).
+      { id: 't4', fromId: 's_any', toId: 's_a', durationMs: 0, conditions: [{ inputId: 'i_t' }] },
+    ],
+    listeners: [
+      {
+        id: 'l1', targetPartId: 'p_arm', event: 'down',
+        actions: [
+          { inputId: 'i_b', type: 'setBool', value: true },
+          { inputId: 'i_t', type: 'fireTrigger' },
+        ],
+      },
+    ],
+  };
+  return {
+    name: 'sm', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+    parts: [body, arm], rootPivot: { x: 50, y: 80 }, clips: [clipA, clipB],
+    stateMachines: [machine],
+  };
+}
+
+describe('exportRiv state machines', () => {
+  const d = decodeRiv(exportRiv(smDoc()));
+  const sm = d.stateMachines[0];
+
+  it('emits exactly one named StateMachine', () => {
+    expect(d.stateMachines.length).toBe(1);
+    expect(sm.name).toBe('Machine');
+  });
+
+  it('does not consume artboard component indices for SM objects', () => {
+    const smTypes = new Set([
+      TYPE.STATE_MACHINE, TYPE.SM_LAYER, TYPE.SM_BOOL, TYPE.SM_NUMBER, TYPE.SM_TRIGGER,
+      TYPE.ENTRY_STATE, TYPE.ANY_STATE, TYPE.EXIT_STATE, TYPE.ANIMATION_STATE,
+      TYPE.STATE_TRANSITION, TYPE.TRANS_TRIGGER_COND, TYPE.TRANS_NUMBER_COND, TYPE.TRANS_BOOL_COND,
+      TYPE.SM_LISTENER, TYPE.LISTENER_TRIGGER_CHANGE, TYPE.LISTENER_BOOL_CHANGE, TYPE.LISTENER_NUMBER_CHANGE,
+    ]);
+    for (const o of d.objects) {
+      if (smTypes.has(o.typeKey)) expect(o.index).toBe(-1);
+    }
+  });
+
+  it('emits the whole machine after all animations (component tree untouched)', () => {
+    const firstSMPos = d.objects.findIndex((o) => o.typeKey === TYPE.STATE_MACHINE);
+    const lastAnimPos = d.objects.map((o) => o.typeKey).lastIndexOf(TYPE.LINEAR_ANIM);
+    expect(firstSMPos).toBeGreaterThan(lastAnimPos);
+  });
+
+  it('emits inputs in order with the right types and defaults', () => {
+    expect(sm.inputs.map((i) => i.name)).toEqual(['b', 'n', 't']);
+    expect(sm.inputs[0].typeKey).toBe(TYPE.SM_BOOL);
+    expect(sm.inputs[0].value).toBe(1); // default true
+    expect(sm.inputs[1].typeKey).toBe(TYPE.SM_NUMBER);
+    expect(sm.inputs[1].value).toBeCloseTo(5, 5); // default 5
+    expect(sm.inputs[2].typeKey).toBe(TYPE.SM_TRIGGER);
+    expect(sm.inputs[2].value).toBeUndefined(); // triggers carry no value
+  });
+
+  it('emits entry/any/exit + 2 animation states in order', () => {
+    expect(sm.states.map((s) => s.typeKey)).toEqual([
+      TYPE.ENTRY_STATE, TYPE.ANY_STATE, TYPE.ANIMATION_STATE, TYPE.ANIMATION_STATE, TYPE.EXIT_STATE,
+    ]);
+  });
+
+  it('resolves animationId to the right LinearAnimation (clip order)', () => {
+    const sA = sm.states[2]; // plays clip 'A'
+    const sB = sm.states[3]; // plays clip 'B'
+    expect(sA.animationId).toBe(0);
+    expect(sB.animationId).toBe(1);
+    expect(d.animations[sA.animationId!].name).toBe('A');
+    expect(d.animations[sB.animationId!].name).toBe('B');
+    // Non-animation states carry no animationId.
+    expect(sm.states[0].animationId).toBeUndefined();
+    expect(sm.states[1].animationId).toBeUndefined();
+    expect(sm.states[4].animationId).toBeUndefined();
+  });
+
+  it('nests each transition under its FROM state and targets the right state index', () => {
+    const [entry, any, sA, sB, exit] = sm.states;
+    // stateToId indices: entry0 any1 A2 B3 exit4.
+    expect(entry.transitions.map((t) => t.stateToId)).toEqual([2]); // -> A
+    expect(any.transitions.map((t) => t.stateToId)).toEqual([2]); // -> A
+    expect(sA.transitions.map((t) => t.stateToId)).toEqual([3]); // -> B
+    expect(sB.transitions.map((t) => t.stateToId)).toEqual([4]); // -> exit
+    expect(exit.transitions.length).toBe(0);
+  });
+
+  it('emits duration in milliseconds with no percentage flag', () => {
+    const aToB = sm.states[2].transitions[0];
+    expect(aToB.duration).toBe(400); // literal ms, not a frame count or percentage
+    // flags is never emitted (default 0 => DurationIsPercentage clear, exit-time off).
+    for (const o of d.objects) {
+      if (o.typeKey === TYPE.STATE_TRANSITION) expect(o.props[PROP.TRANS_FLAGS]).toBeUndefined();
+    }
+    // Unconditional / instant transitions omit duration entirely (default 0).
+    expect(sm.states[0].transitions[0].duration).toBe(0);
+  });
+
+  it('emits an unconditional entry transition (no conditions)', () => {
+    expect(sm.states[0].transitions[0].conditions).toEqual([]);
+  });
+
+  it('maps a bool == condition to the equal opValue via the expected-boolean reduce', () => {
+    const cond = sm.states[2].transitions[0].conditions[0]; // b == true
+    expect(cond.typeKey).toBe(TYPE.TRANS_BOOL_COND);
+    expect(cond.inputId).toBe(0); // 'b' is input index 0
+    expect(cond.op).toBe(0); // equal => expect true
+    expect(cond.value).toBeUndefined(); // bool conditions store no compared value
+  });
+
+  it('maps every number op to its TransitionConditionOp enum value', () => {
+    const conds = sm.states[3].transitions[0].conditions; // B -> exit
+    const numberConds = conds.filter((c) => c.typeKey === TYPE.TRANS_NUMBER_COND);
+    // Order: ==,!=,<=,>=,<,> => 0,1,2,3,4,5.
+    expect(numberConds.map((c) => c.op)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(numberConds.every((c) => c.inputId === 1)).toBe(true); // 'n' is index 1
+    expect(numberConds.map((c) => c.value)).toEqual([5, 0, 10, 1, 100, 0]);
+    // The trailing bool `!= true` reduces to notEqual (expect false) => opValue 1.
+    const boolCond = conds.find((c) => c.typeKey === TYPE.TRANS_BOOL_COND)!;
+    expect(boolCond.op).toBe(1);
+  });
+
+  it('emits a bare trigger condition (inputId only)', () => {
+    const cond = sm.states[1].transitions[0].conditions[0]; // any -> A on trigger t
+    expect(cond.typeKey).toBe(TYPE.TRANS_TRIGGER_COND);
+    expect(cond.inputId).toBe(2); // 't' is input index 2
+    expect(cond.op).toBeUndefined();
+    expect(cond.value).toBeUndefined();
+  });
+
+  it('exposes the op/listener enum maps the exporter uses', () => {
+    expect(__riv.COND_OP).toEqual({ '==': 0, '!=': 1, '<=': 2, '>=': 3, '<': 4, '>': 5 });
+    expect(__riv.LISTENER_TYPE).toEqual({ enter: 0, exit: 1, down: 2, up: 3 });
+  });
+
+  it('targets the listener at the part Node index and encodes the event type', () => {
+    expect(sm.listeners.length).toBe(1);
+    const listener = sm.listeners[0];
+    const armNode = d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'arm')!;
+    expect(listener.targetId).toBe(armNode.index); // targetId = arm's Node component index
+    expect(listener.listenerType).toBe(2); // 'down'
+  });
+
+  it('emits listener actions (setBool + fireTrigger) referencing inputs by index', () => {
+    const actions = sm.listeners[0].actions;
+    expect(actions.length).toBe(2);
+    expect(actions[0].typeKey).toBe(TYPE.LISTENER_BOOL_CHANGE);
+    expect(actions[0].inputId).toBe(0); // 'b'
+    expect(actions[0].value).toBe(1); // set true
+    expect(actions[1].typeKey).toBe(TYPE.LISTENER_TRIGGER_CHANGE);
+    expect(actions[1].inputId).toBe(2); // 't'
+    expect(actions[1].value).toBeUndefined();
+  });
+
+  it('every new SM property key is present in the ToC with the right backing type', () => {
+    // A missing key would have made decoding throw; assert the backing types too.
+    expect(d.tocTypes.get(PROP.SM_NAME)).toBe(1); // string
+    expect(d.tocTypes.get(PROP.SM_BOOL_VALUE)).toBe(0); // uint
+    expect(d.tocTypes.get(PROP.SM_NUMBER_VALUE)).toBe(2); // double
+    expect(d.tocTypes.get(PROP.ANIMATION_ID)).toBe(0);
+    expect(d.tocTypes.get(PROP.STATE_TO_ID)).toBe(0);
+    expect(d.tocTypes.get(PROP.COND_OP)).toBe(0);
+    expect(d.tocTypes.get(PROP.COND_VALUE)).toBe(2);
+    expect(d.tocTypes.get(PROP.TRANS_DURATION)).toBe(0);
+    expect(d.tocTypes.get(PROP.LISTENER_TARGET_ID)).toBe(0);
+    expect(d.tocTypes.get(PROP.LISTENER_TYPE)).toBe(0); // uint
+    expect(d.tocTypes.get(PROP.LISTENER_INPUT_ID)).toBe(0); // uint
+    expect(d.tocTypes.get(PROP.LISTENER_BOOL_VALUE)).toBe(0); // uint
+    expect(d.tocTypes.get(PROP.COND_INPUT_ID)).toBe(0); // uint
+  });
+
+  it('is deterministic (identical input -> identical bytes)', () => {
+    expect(Array.from(exportRiv(smDoc()))).toEqual(Array.from(exportRiv(smDoc())));
+  });
+});
+
+describe('exportRiv state machines: edge cases', () => {
+  it('drops animation states with a dangling clipName and any transition touching them', () => {
+    const base = smDoc();
+    // Repoint state B at a clip that no longer exists.
+    const machine = base.stateMachines![0];
+    machine.states[3].clipName = 'GHOST';
+    const d = decodeRiv(exportRiv(base));
+    const sm = d.stateMachines[0];
+    // Only entry/any/A/exit survive; the ghost B state is gone.
+    expect(sm.states.map((s) => s.typeKey)).toEqual([
+      TYPE.ENTRY_STATE, TYPE.ANY_STATE, TYPE.ANIMATION_STATE, TYPE.EXIT_STATE,
+    ]);
+    // A -> B (t2) is dropped because its target vanished; A has no outgoing transitions.
+    expect(sm.states[2].transitions.length).toBe(0);
+    // exit is now state index 3, and entry -> A still points at index 2.
+    expect(sm.states[0].transitions[0].stateToId).toBe(2);
+  });
+
+  it('produces byte-identical output whether stateMachines is [] or absent', () => {
+    const withEmpty = pipDoc();
+    withEmpty.stateMachines = [];
+    const withAbsent = pipDoc();
+    delete withAbsent.stateMachines;
+    expect(Array.from(exportRiv(withEmpty))).toEqual(Array.from(exportRiv(withAbsent)));
+    // ...and identical to the canonical pipDoc() (which never sets the field).
+    expect(Array.from(exportRiv(withEmpty))).toEqual(Array.from(exportRiv(pipDoc())));
+  });
+
+  it('skips a listener whose target part does not exist', () => {
+    const base = smDoc();
+    base.stateMachines![0].listeners[0].targetPartId = 'p_missing';
+    const d = decodeRiv(exportRiv(base));
+    expect(d.stateMachines[0].listeners.length).toBe(0);
   });
 });
