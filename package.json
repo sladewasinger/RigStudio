@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run --project unit",
     "test:interaction": "vitest run --project interaction",
-    "pages": "vite build --outDir pages"
+    "pages": "vite build --outDir docs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0"
