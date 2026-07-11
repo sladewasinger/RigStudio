@@ -648,7 +648,28 @@ export function dropSkinOverridesForPath(part: RigPart, pathId: string): void {
 
 /** Structural edits the AI assistant may request (opt-in). */
 export interface RigChanges {
-  addBones: { label: string; pivot: Vec2; parent: string | null }[];
+  addBones: {
+    label: string;
+    pivot: Vec2;
+    parent: string | null;
+    /**
+     * Bone tip (Bones 2.0), in the same frame as `pivot` — mirrors how interactive
+     * placement stores `RigPart.boneTip` (see `view/interactions.ts`'s placeBone end()):
+     * both fields go through the identical parent-chain conversion, so passing `pivot`
+     * and `tip` straight through here (as this function already did for `pivot`) keeps
+     * them consistent with each other. Omitted/null = a partless joint with no visible
+     * length (fine for a plain reparent target; auto-bind needs a real tip to form a
+     * segment).
+     */
+    tip?: Vec2 | null;
+    /**
+     * Part LABELS to auto-bind (LBS skin) to this bone's full chain once created. Model
+     * layer only carries the request through — binding needs the live canvas (baking
+     * geometry into the bind pose), so it is applied by the caller (panels/ai.ts) via
+     * the view facade's bindPartsToBones, not here.
+     */
+    bindParts?: string[];
+  }[];
   reparent: { part: string; parent: string | null }[];
   movePivots: { part: string; x: number; y: number }[];
 }
@@ -656,7 +677,9 @@ export interface RigChanges {
 /**
  * Apply AI structural edits by part LABEL (the AI never sees ids). Returns the
  * label → id map including newly created bones, for resolving clip targets after.
- * Invalid references and cycle-creating reparents are skipped, not fatal.
+ * Invalid references and cycle-creating reparents are skipped, not fatal. Does NOT
+ * apply `addBones[].bindParts` — see the RigChanges doc comment; the caller binds
+ * separately once the canvas can bake geometry.
  */
 export function applyRigChanges(changes: RigChanges): Map<string, string> {
   const doc = state.doc!;
@@ -666,6 +689,7 @@ export function applyRigChanges(changes: RigChanges): Map<string, string> {
     if (byLabel.has(b.label)) continue; // labels must stay unique
     const parentId = b.parent ? (byLabel.get(b.parent) ?? null) : null;
     const bone = addNullPart('bone', b.pivot, parentId, b.label.replace(/\s+/g, '_'));
+    if (b.tip) bone.boneTip = { x: b.tip.x, y: b.tip.y };
     byLabel.set(bone.label, bone.id);
   }
   for (const r of changes.reparent ?? []) {
@@ -933,6 +957,32 @@ export function deleteKeyframe(track: Track, keyframe: Keyframe): void {
   if (track.keyframes.length === 0) {
     clip.tracks = clip.tracks.filter((t) => t !== track);
   }
+}
+
+/**
+ * The keyframe on a channel at (approximately) a time, or null. Tolerance matches
+ * `setKeyframeAt`'s replace-in-place window and the timeline's playhead-key match
+ * (both `< 5`/`<= 5` ms, half the 10ms grid keys snap to) — a key created at the
+ * playhead by one code path is found "at the playhead" by the other.
+ */
+export function keyAt(target: string, channel: Channel, time: number): Keyframe | null {
+  const track = activeClip()?.tracks.find((t) => t.target === target && t.channel === channel);
+  if (!track) return null;
+  return track.keyframes.find((k) => Math.abs(k.time - time) <= 5) ?? null;
+}
+
+/**
+ * Remove the keyframe at (approximately) a time — the inspector's keyframe-toggle-
+ * circle "un-key" action. Reuses `deleteKeyframe`, so an emptied track is dropped from
+ * the clip exactly like the timeline's key-delete button. Returns whether a keyframe
+ * was actually removed.
+ */
+export function removeKeyAt(target: string, channel: Channel, time: number): boolean {
+  const track = activeClip()?.tracks.find((t) => t.target === target && t.channel === channel);
+  const key = track?.keyframes.find((k) => Math.abs(k.time - time) <= 5);
+  if (!track || !key) return false;
+  deleteKeyframe(track, key);
+  return true;
 }
 
 // ---- Keyframe clipboard ----

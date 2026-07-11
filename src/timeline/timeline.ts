@@ -8,6 +8,14 @@
  * and paste keyframes at the playhead (wired from main.ts), arrow keys nudge them.
  *
  * The whole panel is disabled in Setup mode — keyframes only exist in Animate mode.
+ *
+ * Panel shell: #timeline has a FIXED height (splitter-adjustable, localStorage-
+ * persisted) set via inline style in applyPanelHeight — never CSS min/max-content
+ * sizing. This is a P3 bug fix: a lane appearing mid-drag used to grow #timeline's
+ * intrinsic height, shrinking #layout/#canvas in the same flex column and shifting
+ * the canvas's screen CTM under an in-flight gesture (a 30° rotate recorded ~12°).
+ * render() only ever touches `bodyEl` (an internally-scrolling child) — the chip
+ * header and splitter live outside it, built once in setupShell().
  */
 
 import {
@@ -19,8 +27,12 @@ import { checkpoint } from '../core/history';
 import { buildGraphPanel, onGraphChange } from './graph';
 import { buildSMPanel, stopPreview, setLogicVisible } from '../panels/smPanel';
 import { dialog } from '../ui/dialogs';
+import './timeline.css';
 
 let container: HTMLElement;
+// The scrolling content region inside the fixed-height shell — render() rebuilds
+// only this, never `container` itself, so panel height never depends on content.
+let bodyEl: HTMLElement;
 let rafId = 0;
 let lastTick = 0;
 let fpsFrames = 0;
@@ -33,13 +45,106 @@ let selectedKeys = new Set<Keyframe>();
 let trackOfKey = new WeakMap<Keyframe, Track>();
 // Diamond elements of the current render, for box-select hit testing.
 let diamondEls: { el: HTMLElement; key: Keyframe }[] = [];
-// Whether the curve (graph) editor panel is shown beneath the lanes.
-let showGraph = false;
-// Whether the state-machine (logic) editor replaces the lanes. Mutually exclusive with curves.
-let showLogic = false;
+// Which content replaces the lanes area — mutually exclusive by construction (a
+// single field, not two booleans that could disagree). Onion is a separate toggle.
+type PanelMode = 'keys' | 'curves' | 'logic';
+let panelMode: PanelMode = 'keys';
+
+// ---- Panel height (splitter, item 2) ----
+
+export const TIMELINE_HEIGHT_KEY = 'rig-studio-timeline-height';
+const MIN_HEIGHT = 120;
+const MAX_HEIGHT_VH = 0.7;
+// "...the current typical height" (the spec's fallback phrasing): the OLD min-height
+// floor. Setup mode's auto-sized content (just a note) always hit that floor, and
+// Setup is the default/reset state, so this is the footprint most of the app's screen
+// real estate was already tuned around. A 30vh default (~240px at a typical 800px
+// viewport) was tried first and rejected: it shrank #canvas to roughly half its old
+// boot-time height, silently invalidating pixel-based interaction-test gestures
+// (including ones outside this file's ownership) that assumed the old geometry.
+const DEFAULT_HEIGHT = MIN_HEIGHT;
+
+function maxHeightPx(): number {
+  return Math.max(MIN_HEIGHT, window.innerHeight * MAX_HEIGHT_VH);
+}
+
+function clampHeight(px: number): number {
+  return Math.min(maxHeightPx(), Math.max(MIN_HEIGHT, px));
+}
+
+/** Sets every box-model property that could let content dictate the panel's height,
+ *  overriding style.css's #timeline min/max-height block via inline style (which wins
+ *  over any external stylesheet rule regardless of load order — the one thing this
+ *  fix cannot afford to lose to a cascade-order accident). */
+function applyPanelHeight(px: number): void {
+  const h = clampHeight(px);
+  container.style.flex = '0 0 auto';
+  container.style.height = `${h}px`;
+  container.style.minHeight = '0';
+  container.style.maxHeight = 'none';
+  container.style.display = 'flex';
+  container.style.flexDirection = 'column';
+  container.style.overflow = 'hidden'; // .tl-body scrolls internally instead
+}
+
+function loadStoredHeight(): number {
+  const raw = Number(localStorage.getItem(TIMELINE_HEIGHT_KEY));
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_HEIGHT;
+}
+
+function saveHeight(px: number): void {
+  localStorage.setItem(TIMELINE_HEIGHT_KEY, String(Math.round(px)));
+}
+
+function wireSplitter(): void {
+  const splitter = document.getElementById('timeline-splitter');
+  if (!splitter) return;
+  splitter.addEventListener('pointerdown', (ev) => {
+    const pev = ev as PointerEvent;
+    pev.preventDefault();
+    const startY = pev.clientY;
+    const startHeight = container.getBoundingClientRect().height;
+    splitter.classList.add('dragging');
+    document.body.style.cursor = 'row-resize';
+    try { splitter.setPointerCapture(pev.pointerId); } catch { /* synthetic/pen events */ }
+    const move = (e: PointerEvent) => {
+      // The panel sits at the bottom: dragging UP (negative dy) must GROW it.
+      applyPanelHeight(startHeight - (e.clientY - startY));
+    };
+    const up = () => {
+      splitter.removeEventListener('pointermove', move);
+      splitter.removeEventListener('pointerup', up);
+      splitter.classList.remove('dragging');
+      document.body.style.cursor = '';
+      saveHeight(container.getBoundingClientRect().height);
+    };
+    splitter.addEventListener('pointermove', move);
+    splitter.addEventListener('pointerup', up);
+  });
+}
+
+/** Built once (not by render()): the fixed-height shell, the "Timeline" chip, the
+ *  scrolling body, and the splitter. */
+function setupShell(): void {
+  applyPanelHeight(loadStoredHeight());
+  wireSplitter();
+  window.addEventListener('resize', () => {
+    const current = container.getBoundingClientRect().height;
+    const clamped = clampHeight(current);
+    if (Math.abs(clamped - current) > 0.5) applyPanelHeight(clamped);
+  });
+
+  const chip = div('tl-chip');
+  chip.textContent = 'Timeline';
+  container.appendChild(chip);
+
+  bodyEl = div('tl-body');
+  container.appendChild(bodyEl);
+}
 
 export function buildTimeline(el: HTMLElement): void {
   container = el;
+  setupShell();
   document.addEventListener('rig-keys-changed', render);
   // Curve-editor mutations preview live on the canvas.
   onGraphChange(() => {
@@ -129,19 +234,19 @@ export function selectColumnAtPlayhead(): void {
 }
 
 export function render(): void {
-  if (!container) return;
-  container.innerHTML = '';
+  if (!container || !bodyEl) return;
+  bodyEl.innerHTML = '';
   container.classList.toggle('disabled', state.editorMode !== 'animate');
   // The logic (state-machine) view + its live preview only exist in Animate mode with a
   // doc. Any time it is NOT on screen, tear the preview down (restores the pose sampler).
-  const showingLogic = !!state.doc && state.editorMode === 'animate' && showLogic;
+  const showingLogic = !!state.doc && state.editorMode === 'animate' && panelMode === 'logic';
   if (!showingLogic) {
     stopPreview();
     setLogicVisible(false);
   }
   const doc = state.doc;
   if (!doc) {
-    container.innerHTML = '<div class="tl-empty">Import an SVG to start animating.</div>';
+    bodyEl.innerHTML = '<div class="tl-empty">Import an SVG to start animating.</div>';
     return;
   }
   if (state.editorMode !== 'animate') {
@@ -149,7 +254,7 @@ export function render(): void {
     note.innerHTML =
       'Edit mode — you are editing the character\'s rest pose, pivots, and paths. ' +
       'Switch to <b>Animate</b> (top right) to record keyframes.';
-    container.appendChild(note);
+    bodyEl.appendChild(note);
     return;
   }
   const clip = activeClip();
@@ -170,8 +275,73 @@ export function render(): void {
   }
   diamondEls = [];
 
-  // --- Transport bar ---
+  // --- Transport bar: transport | clip management | modes | toggles clusters ---
   const bar = div('tl-bar');
+
+  // Cluster: transport (jump/step/play + speed + fps/time readouts).
+  const transportCluster = div('tl-cluster tl-transport');
+  transportCluster.setAttribute('role', 'group');
+  transportCluster.setAttribute('aria-label', 'Transport');
+
+  const jumpStartBtn = button('⏮', () => clip && movePlayheadTo(0, clip.duration));
+  jumpStartBtn.title = 'Jump to start';
+  jumpStartBtn.dataset.tlAction = 'jump-start';
+  jumpStartBtn.disabled = !clip;
+  transportCluster.appendChild(jumpStartBtn);
+
+  const stepBackBtn = button('◀', () => clip && movePlayheadTo(Math.max(0, state.currentTime - 10), clip.duration));
+  stepBackBtn.title = 'Step back 10 ms';
+  stepBackBtn.dataset.tlAction = 'step-back';
+  stepBackBtn.disabled = !clip;
+  transportCluster.appendChild(stepBackBtn);
+
+  const playBtn = button(state.playing ? '⏸' : '▶', togglePlay);
+  playBtn.classList.add('tl-play');
+  playBtn.title = 'Space';
+  playBtn.dataset.tlAction = 'play';
+  transportCluster.appendChild(playBtn);
+
+  const stepFwdBtn = button('▶|', () => clip && movePlayheadTo(Math.min(clip.duration, state.currentTime + 10), clip.duration));
+  stepFwdBtn.title = 'Step forward 10 ms';
+  stepFwdBtn.dataset.tlAction = 'step-fwd';
+  stepFwdBtn.disabled = !clip;
+  transportCluster.appendChild(stepFwdBtn);
+
+  const jumpEndBtn = button('⏭', () => clip && movePlayheadTo(clip.duration, clip.duration));
+  jumpEndBtn.title = 'Jump to end';
+  jumpEndBtn.dataset.tlAction = 'jump-end';
+  jumpEndBtn.disabled = !clip;
+  transportCluster.appendChild(jumpEndBtn);
+
+  const speed = document.createElement('select');
+  speed.className = 'tl-speed';
+  for (const s of [0.1, 0.25, 0.5, 1, 1.5, 2, 4]) {
+    const opt = document.createElement('option');
+    opt.value = String(s);
+    opt.textContent = `${s}×`;
+    if (s === state.playbackSpeed) opt.selected = true;
+    speed.appendChild(opt);
+  }
+  speed.onchange = () => {
+    state.playbackSpeed = Number(speed.value);
+  };
+  speed.title = 'Playback speed';
+  transportCluster.appendChild(speed);
+
+  const fpsEl = div('tl-fps');
+  fpsEl.textContent = state.playing && fpsValue > 0 ? `${fpsValue} fps` : '';
+  transportCluster.appendChild(fpsEl);
+
+  const timeLabel = div('tl-time');
+  timeLabel.textContent = `${Math.round(state.currentTime)} ms`;
+  transportCluster.appendChild(timeLabel);
+
+  bar.appendChild(transportCluster);
+
+  // Cluster: clip management.
+  const clipCluster = div('tl-cluster tl-clip-mgmt');
+  clipCluster.setAttribute('role', 'group');
+  clipCluster.setAttribute('aria-label', 'Animation clip');
 
   const clipSelect = document.createElement('select');
   doc.clips.forEach((c, i) => {
@@ -188,9 +358,9 @@ export function render(): void {
     notify();
     renderPose();
   };
-  bar.appendChild(clipSelect);
+  clipCluster.appendChild(clipSelect);
 
-  bar.appendChild(button('+ animation', async () => {
+  clipCluster.appendChild(button('+ animation', async () => {
     const name = await dialog.prompt('Animation name?', `clip_${doc.clips.length + 1}`);
     if (!name) return;
     checkpoint();
@@ -200,7 +370,7 @@ export function render(): void {
     notify();
   }));
 
-  bar.appendChild(button('duplicate', () => {
+  clipCluster.appendChild(button('duplicate', () => {
     if (!clip) return;
     checkpoint();
     const copy = structuredClone(clip);
@@ -210,7 +380,7 @@ export function render(): void {
     notify();
   }));
 
-  bar.appendChild(button('rename', async () => {
+  clipCluster.appendChild(button('rename', async () => {
     if (!clip) return;
     const name = await dialog.prompt('New clip name?', clip.name);
     if (name) {
@@ -220,7 +390,7 @@ export function render(): void {
     }
   }));
 
-  bar.appendChild(button('delete', async () => {
+  clipCluster.appendChild(button('delete', async () => {
     if (!clip || doc.clips.length <= 1) return;
     if (!await dialog.confirm(`Delete animation "${clip.name}"?`)) return;
     checkpoint();
@@ -228,64 +398,6 @@ export function render(): void {
     state.activeClipIndex = 0;
     notify();
   }));
-
-  const playBtn = button(state.playing ? '⏸' : '▶', togglePlay);
-  playBtn.classList.add('tl-play');
-  playBtn.title = 'Space';
-  bar.appendChild(playBtn);
-
-  // Playback speed
-  const speed = document.createElement('select');
-  speed.className = 'tl-speed';
-  for (const s of [0.1, 0.25, 0.5, 1, 1.5, 2, 4]) {
-    const opt = document.createElement('option');
-    opt.value = String(s);
-    opt.textContent = `${s}×`;
-    if (s === state.playbackSpeed) opt.selected = true;
-    speed.appendChild(opt);
-  }
-  speed.onchange = () => {
-    state.playbackSpeed = Number(speed.value);
-  };
-  speed.title = 'Playback speed';
-  bar.appendChild(speed);
-
-  const pingPongBtn = button('⇄ ping-pong', () => {
-    state.pingPong = !state.pingPong;
-    state.playDirection = 1;
-    render();
-  });
-  if (state.pingPong) pingPongBtn.classList.add('active');
-  pingPongBtn.title = 'Bounce playback back and forth instead of looping';
-  bar.appendChild(pingPongBtn);
-
-  const onionBtn = button('🧅 onion', () => {
-    state.onionSkin = !state.onionSkin;
-    render();
-    renderPose();
-  });
-  if (state.onionSkin) onionBtn.classList.add('active');
-  onionBtn.title = 'Ghost the previous (red) and next (blue) keyed poses';
-  bar.appendChild(onionBtn);
-
-  const graphBtn = button('📈 curves', () => {
-    showGraph = !showGraph;
-    if (showGraph) { showLogic = false; stopPreview(); }
-    render();
-  });
-  if (showGraph) graphBtn.classList.add('active');
-  graphBtn.title = 'Edit the selected track\'s value curve and per-segment bezier easing';
-  bar.appendChild(graphBtn);
-
-  const logicBtn = button('🔀 logic', () => {
-    showLogic = !showLogic;
-    if (showLogic) showGraph = false;
-    else stopPreview();
-    render();
-  });
-  if (showLogic) logicBtn.classList.add('active');
-  logicBtn.title = 'Build interactive state machines that blend your clips';
-  bar.appendChild(logicBtn);
 
   if (clip) {
     const durLabel = document.createElement('label');
@@ -300,24 +412,69 @@ export function render(): void {
       notify();
     };
     durLabel.appendChild(dur);
-    bar.appendChild(durLabel);
+    clipCluster.appendChild(durLabel);
   }
 
-  const fpsEl = div('tl-fps');
-  fpsEl.textContent = state.playing && fpsValue > 0 ? `${fpsValue} fps` : '';
-  bar.appendChild(fpsEl);
+  bar.appendChild(clipCluster);
 
-  const timeLabel = div('tl-time');
-  timeLabel.textContent = `${Math.round(state.currentTime)} ms`;
-  bar.appendChild(timeLabel);
-  container.appendChild(bar);
+  // Cluster: modes — Keys / Curves / Logic, mutually exclusive by construction.
+  const modeCluster = div('tl-cluster tl-modes');
+  modeCluster.setAttribute('role', 'group');
+  modeCluster.setAttribute('aria-label', 'Panel mode');
+  const modePicker = div('tl-mode-picker');
+  modePicker.setAttribute('role', 'radiogroup');
+  modePicker.setAttribute('aria-label', 'Timeline mode');
+  const modeDefs: { key: PanelMode; label: string; title: string }[] = [
+    { key: 'keys', label: '⏱ keys', title: 'Keyframe lanes' },
+    { key: 'curves', label: '📈 curves', title: "Edit the selected track's value curve and per-segment bezier easing" },
+    { key: 'logic', label: '🔀 logic', title: 'Build interactive state machines that blend your clips' },
+  ];
+  for (const m of modeDefs) {
+    const b = button(m.label, () => setMode(m.key));
+    b.title = m.title;
+    b.dataset.tlAction = `mode-${m.key}`;
+    b.setAttribute('role', 'radio');
+    b.setAttribute('aria-checked', String(panelMode === m.key));
+    if (panelMode === m.key) b.classList.add('active');
+    modePicker.appendChild(b);
+  }
+  modeCluster.appendChild(modePicker);
+  bar.appendChild(modeCluster);
+
+  // Cluster: toggles (ping-pong, onion — independent of panelMode).
+  const togglesCluster = div('tl-cluster tl-toggles');
+  togglesCluster.setAttribute('role', 'group');
+  togglesCluster.setAttribute('aria-label', 'Playback toggles');
+
+  const pingPongBtn = button('⇄ ping-pong', () => {
+    state.pingPong = !state.pingPong;
+    state.playDirection = 1;
+    render();
+  });
+  if (state.pingPong) pingPongBtn.classList.add('active');
+  pingPongBtn.title = 'Bounce playback back and forth instead of looping';
+  togglesCluster.appendChild(pingPongBtn);
+
+  const onionBtn = button('🧅 onion', () => {
+    state.onionSkin = !state.onionSkin;
+    render();
+    renderPose();
+  });
+  if (state.onionSkin) onionBtn.classList.add('active');
+  onionBtn.title = 'Ghost the previous (red) and next (blue) keyed poses';
+  togglesCluster.appendChild(onionBtn);
+
+  bar.appendChild(togglesCluster);
+
+  bodyEl.appendChild(bar);
+  bodyEl.appendChild(divider());
 
   // Logic view swaps the whole lanes area for the state-machine editor (mutually
   // exclusive with curves; needs no clip, so it precedes the no-clip bail-out).
-  if (showLogic) {
+  if (panelMode === 'logic') {
     setLogicVisible(true);
     const smHost = div('sm-panel-host');
-    container.appendChild(smHost);
+    bodyEl.appendChild(smHost);
     buildSMPanel(smHost);
     return;
   }
@@ -408,7 +565,8 @@ export function render(): void {
       'Click a diamond to select · drag empty lane space to box-select · Ctrl+C/V copy/paste';
     keyBar.appendChild(hint);
   }
-  container.appendChild(keyBar);
+  bodyEl.appendChild(keyBar);
+  bodyEl.appendChild(divider());
 
   // --- Ruler + lanes ---
   const lanes = div('tl-lanes');
@@ -440,34 +598,65 @@ export function render(): void {
   });
   lanes.appendChild(ruler);
 
-  for (const track of clip.tracks) {
-    lanes.appendChild(buildLane(track, clip.duration));
-  }
+  // Generous padding ABOVE the lane block: a marquee can start here (dataset.boxTarget)
+  // without touching the ruler above it, so a loose drag from just under the scrubber
+  // still box-selects instead of missing entirely.
+  lanes.appendChild(padRow());
+
+  clip.tracks.forEach((track, i) => lanes.appendChild(buildLane(track, clip.duration, i)));
   if (clip.tracks.length === 0) {
     const hint = div('tl-empty');
     hint.textContent = 'Pose a part on the canvas to record keyframes at the playhead.';
     lanes.appendChild(hint);
   }
-  wireBoxSelect(lanes);
-  container.appendChild(lanes);
 
-  if (showGraph) {
+  // ...and generous padding BELOW it, so a marquee can end past the last lane.
+  lanes.appendChild(padRow());
+
+  wireBoxSelect(lanes);
+  bodyEl.appendChild(lanes);
+
+  if (panelMode === 'curves') {
+    bodyEl.appendChild(divider());
     const graphHost = div('graph-panel');
     const first = [...selectedKeys][0];
     const track = (first && trackOfKey.get(first)) ?? clip.tracks[0] ?? null;
     buildGraphPanel(graphHost, track, clip.duration);
-    container.appendChild(graphHost);
+    bodyEl.appendChild(graphHost);
   }
 }
 
-function buildLane(track: Track, duration: number): HTMLElement {
+function setMode(next: PanelMode): void {
+  if (panelMode === next) return;
+  if (panelMode === 'logic') stopPreview();
+  panelMode = next;
+  render();
+}
+
+function padRow(): HTMLElement {
+  const pad = div('tl-lanes-pad');
+  pad.dataset.boxTarget = '1';
+  return pad;
+}
+
+function buildLane(track: Track, duration: number, index: number): HTMLElement {
   const doc = state.doc!;
   const lane = div('tl-lane');
+  if (index % 2 === 1) lane.classList.add('tl-lane-alt');
+  // The row itself is marquee territory too (not just the thin strip), so a loosely
+  // aimed drag inside the row's own vertical padding still starts a box-select.
+  lane.dataset.boxTarget = '1';
   const label = div('tl-lane-label');
   const partLabel =
     track.target === 'root' ? 'root' : (doc.parts.find((p) => p.id === track.target)?.label ?? '?');
   label.textContent = `${partLabel}.${track.channel}`;
   lane.appendChild(label);
+
+  // Gap between the label gutter and the strip: generous padding so a marquee can
+  // start slightly left of time 0 without landing on the label text.
+  const gap = div('tl-lane-gap');
+  gap.dataset.boxTarget = '1';
+  lane.appendChild(gap);
 
   const strip = div('tl-strip');
   strip.dataset.boxTarget = '1';
@@ -550,7 +739,9 @@ function buildLane(track: Track, duration: number): HTMLElement {
 function wireBoxSelect(lanes: HTMLElement): void {
   lanes.addEventListener('pointerdown', (ev) => {
     const target = ev.target as HTMLElement;
-    // Only from empty strip background — diamonds and the ruler handle their own drags.
+    // Only from marquee territory (row padding, the label↔strip gap, the strip itself,
+    // or the padding rows above/below the block) — diamonds and the ruler handle their
+    // own drags and are never marked boxTarget.
     if (!target.dataset.boxTarget) return;
     ev.preventDefault();
     const origin = { x: ev.clientX, y: ev.clientY };
@@ -663,6 +854,10 @@ function div(className: string): HTMLDivElement {
   const el = document.createElement('div');
   el.className = className;
   return el;
+}
+
+function divider(): HTMLElement {
+  return div('tl-divider');
 }
 
 function button(text: string, onClick: () => void): HTMLButtonElement {

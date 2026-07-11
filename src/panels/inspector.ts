@@ -7,7 +7,8 @@
 
 import {
   state, notify, selectedPart, selectedPath, sampleChannel, channelValue,
-  setKeyframe, isAncestorOf, setParent, RigPart, ensureArtboard,
+  setKeyframe, isAncestorOf, setParent, RigPart, Channel, ensureArtboard,
+  keyAt, removeKeyAt,
 } from '../core/model';
 import {
   renderPose, updatePathAttrs, partRootBoxes, applyRootDeltas, hasSelectedNode,
@@ -134,22 +135,29 @@ export function buildInspector(el: HTMLElement): void {
       el.appendChild(row);
     } else {
       // Displayed values are absolute (rest fills unkeyed channels); editing keys.
+      // Each field gets a keyframe-toggle circle (filled = keyed at the playhead).
       const t = state.currentTime;
-      el.appendChild(numberField('rotate (deg)', channelValue(part, 'rotate', t), (v) => {
-        checkpoint();
-        setKeyframe(part.id, 'rotate', v);
-        poseEdited();
-      }));
-      el.appendChild(numberField('translate x', channelValue(part, 'tx', t), (v) => {
-        checkpoint();
-        setKeyframe(part.id, 'tx', v);
-        poseEdited();
-      }));
-      el.appendChild(numberField('translate y', channelValue(part, 'ty', t), (v) => {
-        checkpoint();
-        setKeyframe(part.id, 'ty', v);
-        poseEdited();
-      }));
+      el.appendChild(keyableField(
+        'rotate (deg)', part.id, 'rotate', () => channelValue(part, 'rotate', t), (v) => {
+          checkpoint();
+          setKeyframe(part.id, 'rotate', v);
+          poseEdited();
+        },
+      ));
+      el.appendChild(keyableField(
+        'translate x', part.id, 'tx', () => channelValue(part, 'tx', t), (v) => {
+          checkpoint();
+          setKeyframe(part.id, 'tx', v);
+          poseEdited();
+        },
+      ));
+      el.appendChild(keyableField(
+        'translate y', part.id, 'ty', () => channelValue(part, 'ty', t), (v) => {
+          checkpoint();
+          setKeyframe(part.id, 'ty', v);
+          poseEdited();
+        },
+      ));
     }
 
     if (part.skin) buildSkinSection(el, part);
@@ -192,21 +200,27 @@ export function buildInspector(el: HTMLElement): void {
     }));
   } else {
     const t = state.currentTime;
-    el.appendChild(numberField('jump y', sampleChannel('root', 'ty', t), (v) => {
-      checkpoint();
-      setKeyframe('root', 'ty', v);
-      poseEdited();
-    }));
-    el.appendChild(numberField('scale x', sampleChannel('root', 'sx', t), (v) => {
-      checkpoint();
-      setKeyframe('root', 'sx', v);
-      poseEdited();
-    }, 0.01));
-    el.appendChild(numberField('scale y', sampleChannel('root', 'sy', t), (v) => {
-      checkpoint();
-      setKeyframe('root', 'sy', v);
-      poseEdited();
-    }, 0.01));
+    el.appendChild(keyableField(
+      'jump y', 'root', 'ty', () => sampleChannel('root', 'ty', t), (v) => {
+        checkpoint();
+        setKeyframe('root', 'ty', v);
+        poseEdited();
+      },
+    ));
+    el.appendChild(keyableField(
+      'scale x', 'root', 'sx', () => sampleChannel('root', 'sx', t), (v) => {
+        checkpoint();
+        setKeyframe('root', 'sx', v);
+        poseEdited();
+      }, 0.01,
+    ));
+    el.appendChild(keyableField(
+      'scale y', 'root', 'sy', () => sampleChannel('root', 'sy', t), (v) => {
+        checkpoint();
+        setKeyframe('root', 'sy', v);
+        poseEdited();
+      }, 0.01,
+    ));
   }
 
   buildAiPanel(el);
@@ -767,6 +781,73 @@ function numberField(
   input.value = String(Math.round(value * 100) / 100);
   input.onchange = () => onChange(Number(input.value));
   row.appendChild(span);
+  row.appendChild(input);
+  return row;
+}
+
+/**
+ * A numeric field for a keyable Animate-mode channel (part rotate/tx/ty, root
+ * ty/sx/sy): a small toggle circle before the label — FILLED when the channel has a
+ * keyframe exactly at the playhead (click removes it, emptying the track if it was
+ * the last key, same as the timeline's key-delete), HOLLOW otherwise (click creates
+ * one at the playhead using the field's current displayed value). `displayValue` is
+ * re-read after a toggle so the field reflects whatever the channel falls back to
+ * (rest, if the removed key was the only one). One checkpoint per click; the canvas/
+ * timeline repaint via the existing poseEdited() pattern — this does NOT call
+ * notify(), so it doesn't rebuild the rest of the inspector (matching every other
+ * Animate-mode field here).
+ */
+function keyableField(
+  label: string, target: string, channel: Channel, displayValue: () => number,
+  onChange: (v: number) => void, step = 1,
+): HTMLElement {
+  const row = document.createElement('label');
+  row.className = 'field';
+
+  const labelWrap = document.createElement('span');
+  labelWrap.className = 'key-field-label';
+
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'key-toggle';
+
+  const span = document.createElement('span');
+  span.textContent = label;
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.step = String(step);
+  input.value = String(Math.round(displayValue() * 100) / 100);
+  input.onchange = () => onChange(Number(input.value));
+
+  const t = state.currentTime;
+  const syncToggle = () => {
+    const keyed = !!keyAt(target, channel, t);
+    toggle.classList.toggle('is-keyed', keyed);
+    toggle.title = keyed
+      ? 'Keyframed at the playhead — click to remove'
+      : 'Not keyed at the playhead — click to add';
+  };
+  syncToggle();
+
+  toggle.onclick = (ev) => {
+    ev.preventDefault();
+    checkpoint();
+    if (keyAt(target, channel, t)) {
+      removeKeyAt(target, channel, t);
+      input.value = String(Math.round(displayValue() * 100) / 100);
+    } else {
+      // "current displayed value" — whatever the field shows right now, including an
+      // uncommitted edit the user typed but hasn't blurred off yet.
+      setKeyframe(target, channel, Number(input.value));
+    }
+    poseEdited();
+    syncToggle();
+  };
+
+  labelWrap.appendChild(toggle);
+  labelWrap.appendChild(span);
+  row.appendChild(labelWrap);
   row.appendChild(input);
   return row;
 }

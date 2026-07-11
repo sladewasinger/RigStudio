@@ -259,15 +259,25 @@ describe('scenario 12 — unified select gizmo (circle rotates, cross translates
     const id = partByLabel('right_arm').id;
     selectByLabel('right_arm');
     repaint();
-    // Direction + magnitude only: an Animate rotate creates a keyframe, whose first
-    // appearance re-renders the timeline and resizes the canvas mid-drag (shifting the
-    // screen CTM) — a harness layout artifact, so the suite never asserts Animate-rotate
-    // geometry exactly (the old scenario 5 only checked track existence). The gizmo
-    // circle clearly keys a positive rotation.
+
+    // P5a fix: #timeline now has a FIXED height (splitter-only; see timeline.ts's
+    // applyPanelHeight), so the first keyframe lane appearing mid-drag no longer
+    // resizes #canvas / shifts its screen CTM — the P3-era harness artifact this
+    // scenario used to work around by only checking direction+magnitude. Confirm the
+    // canvas geometry really is stable across the very drag that creates the part's
+    // first track, then assert the recorded angle near-exactly like the Edit-mode
+    // scenario above (same tolerance — the pipeline is otherwise identical).
+    const canvasEl = document.getElementById('canvas')!;
+    const heightBefore = canvasEl.clientHeight;
+    expect(clipTrack(id, 'rotate'), 'no rotate track yet — this drag creates the first lane').toBeFalsy();
+
     const dRot = ringDrag(() => channelOf(id, 'rotate'));
-    expect(dRot, 'circle keys a positive rotation in Animate').toBeGreaterThan(3);
-    expect(dRot).toBeLessThan(90);
+    expectClose(Math.cos(((dRot - 30) * Math.PI) / 180), 1, 5e-3, 'circle keys ~30° in Animate');
     expect(clipTrack(id, 'rotate'), 'rotate keyed by the gizmo circle').toBeTruthy();
+    expect(
+      canvasEl.clientHeight,
+      '#canvas height unchanged by the first lane appearing mid-drag',
+    ).toBe(heightBefore);
 
     selectByLabel('right_arm');
     repaint();

@@ -9,6 +9,12 @@
  * custom bezier starting from those values. Every mutation notifies the callback
  * registered via onGraphChange (live pose preview); pointerup re-sorts the track and
  * dispatches 'rig-keys-changed' so the timeline rebuilds.
+ *
+ * Pan/zoom: the plot's pixel viewBox (0 0 width HEIGHT) never changes — instead a
+ * per-track "view rect" (visible time/value window) is panned/zoomed and remapped
+ * into the fixed PAD-inset drawing rectangle, mirroring smPanel.ts's graph pan/zoom
+ * (wheel = zoom at cursor, middle-drag = pan, clamped multiplicative zoom, session
+ * state keyed per track, never persisted/checkpointed).
  */
 
 import { Easing, Keyframe, Track, sampleKeyList } from '../core/model';
@@ -34,7 +40,9 @@ export function onGraphChange(fn: () => void): void {
   changeCallback = fn;
 }
 
-/** Value range of a track's keys with ~10% padding (±1 around flat/empty tracks). */
+/** Value range of a track's keys with ~10% padding (±1 around flat/empty tracks).
+ *  Pure key-value range only — see plotValueRange for the draw-time range, which
+ *  also expands to cover bezier-handle overshoot plus extra headroom. */
 export function valueRange(keys: Keyframe[]): { min: number; max: number } {
   if (keys.length === 0) return { min: -1, max: 1 };
   let min = Infinity;
@@ -45,6 +53,32 @@ export function valueRange(keys: Keyframe[]): { min: number; max: number } {
   }
   if (max - min < 1e-9) return { min: min - 1, max: max + 1 };
   const pad = (max - min) * 0.1;
+  return { min: min - pad, max: max + pad };
+}
+
+/**
+ * Draw-time value range: starts from valueRange's key-value span, EXPANDS to cover
+ * every segment's current bezier-handle value (handles can overshoot 0..1 on the y
+ * axis — that's intentional, CSS cubic-bezier allows it), then adds 15% headroom on
+ * top so handles sitting right at the current extreme stay comfortably grabbable
+ * instead of clipping against the plot edge (the item this fixes: dragging a handle
+ * to the top/bottom of the chart used to make it nearly impossible to grab again).
+ */
+function plotValueRange(track: Track): { min: number; max: number } {
+  let { min, max } = valueRange(track.keyframes);
+  for (let i = 0; i < track.keyframes.length - 1; i++) {
+    const k0 = track.keyframes[i];
+    const k1 = track.keyframes[i + 1];
+    const b = k1.bezier ?? PRESET_BEZIER[k1.easing];
+    const dv = k1.value - k0.value;
+    for (const h of [0, 1] as const) {
+      const v = k0.value + b[h * 2 + 1] * dv;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+  }
+  if (max - min < 1e-9) return { min: min - 1, max: max + 1 };
+  const pad = (max - min) * 0.15;
   return { min: min - pad, max: max + pad };
 }
 
@@ -59,16 +93,140 @@ export function niceStep(span: number, maxTicks: number): number {
   return pow * 10;
 }
 
-/** Time/value ↔ pixel mapping plus the plot extents, shared by every draw helper. */
+// ---- Pan/zoom view state (session-only, keyed per track, mirrors smPanel.ts) ----
+
+interface ViewRect { t0: number; tSpan: number; v0: number; vSpan: number }
+
+const graphViewRects = new Map<string, ViewRect>();
+const GRAPH_ZOOM_MIN = 0.2; // matches smPanel's graph 0.2x-5x range, relative to fit
+const GRAPH_ZOOM_MAX = 5;
+
+function trackKey(track: Track): string {
+  return `${track.target}::${track.channel}`;
+}
+
+function fitViewRect(track: Track, duration: number): ViewRect {
+  const { min, max } = plotValueRange(track);
+  return { t0: 0, tSpan: Math.max(1, duration), v0: min, vSpan: Math.max(1e-6, max - min) };
+}
+
+/** This track's current view rect, fitting it once the first time it's shown. */
+function getViewRect(track: Track, duration: number): ViewRect {
+  const key = trackKey(track);
+  let vr = graphViewRects.get(key);
+  if (!vr) {
+    vr = fitViewRect(track, duration);
+    graphViewRects.set(key, vr);
+  }
+  return vr;
+}
+
+function fitView(track: Track, duration: number): void {
+  graphViewRects.set(trackKey(track), fitViewRect(track, duration));
+}
+
+/** Time/value ↔ pixel mapping for the CURRENT view rect, within the fixed PAD-inset
+ *  drawing rectangle (the svg's own viewBox never changes — only this mapping does). */
 interface Plot {
   width: number;
-  duration: number;
-  min: number;
-  max: number;
+  plotW: number;
+  plotH: number;
+  t0: number; t1: number; v0: number; v1: number;
   xOf(t: number): number;
   yOf(v: number): number;
   tOf(x: number): number;
   vOf(y: number): number;
+}
+
+function makePlot(width: number, vr: ViewRect): Plot {
+  const plotW = width - PAD.left - PAD.right;
+  const plotH = HEIGHT - PAD.top - PAD.bottom;
+  const t0 = vr.t0, t1 = vr.t0 + vr.tSpan;
+  const v0 = vr.v0, v1 = vr.v0 + vr.vSpan;
+  return {
+    width, plotW, plotH, t0, t1, v0, v1,
+    xOf: (t) => PAD.left + ((t - t0) / (t1 - t0)) * plotW,
+    yOf: (v) => PAD.top + ((v1 - v) / (v1 - v0)) * plotH,
+    tOf: (x) => t0 + ((x - PAD.left) / plotW) * (t1 - t0),
+    vOf: (y) => v1 - ((y - PAD.top) / plotH) * (v1 - v0),
+  };
+}
+
+/**
+ * Core view-rect zoom: scale around the graph-space point (px,py) — in the FIXED
+ * pixel viewBox, same space svgPoint() returns — by `factor` (>1 zooms in), clamped
+ * to 0.2x-5x of the fit span on each axis independently.
+ */
+function zoomViewRect(vr: ViewRect, fit: ViewRect, plot: Plot, px: number, py: number, factor: number): void {
+  const minT = fit.tSpan / GRAPH_ZOOM_MAX, maxT = fit.tSpan / GRAPH_ZOOM_MIN;
+  const minV = fit.vSpan / GRAPH_ZOOM_MAX, maxV = fit.vSpan / GRAPH_ZOOM_MIN;
+  const dataT = plot.tOf(px);
+  const dataV = plot.vOf(py);
+  const newTSpan = Math.min(maxT, Math.max(minT, vr.tSpan / factor));
+  const newVSpan = Math.min(maxV, Math.max(minV, vr.vSpan / factor));
+  const v1Old = vr.v0 + vr.vSpan;
+  const v1New = dataV + (v1Old - dataV) * (newVSpan / vr.vSpan);
+  vr.t0 = dataT - (dataT - vr.t0) * (newTSpan / vr.tSpan);
+  vr.v0 = v1New - newVSpan;
+  vr.tSpan = newTSpan;
+  vr.vSpan = newVSpan;
+}
+
+/** Middle-button drag pan (navigation, not editing — no checkpoints). */
+function startPan(svg: SVGSVGElement, track: Track, duration: number, ev: PointerEvent, paint: () => void): void {
+  const vr = getViewRect(track, duration);
+  const width = Math.max(320, svg.clientWidth || 800);
+  const plot = makePlot(width, vr);
+  const rect = svg.getBoundingClientRect();
+  const scale = rect.width / width || 1;
+  const startClient = { x: ev.clientX, y: ev.clientY };
+  const startRect = { ...vr };
+  svg.style.cursor = 'grabbing';
+  try { svg.setPointerCapture(ev.pointerId); } catch { /* synthetic/pen events */ }
+  const move = (e: PointerEvent) => {
+    const dxPx = (e.clientX - startClient.x) / scale;
+    const dyPx = (e.clientY - startClient.y) / scale;
+    vr.t0 = startRect.t0 - (dxPx / plot.plotW) * startRect.tSpan;
+    vr.v0 = startRect.v0 + (dyPx / plot.plotH) * startRect.vSpan;
+    paint();
+  };
+  const up = () => {
+    svg.removeEventListener('pointermove', move);
+    svg.removeEventListener('pointerup', up);
+    svg.style.cursor = '';
+  };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerup', up);
+}
+
+/** Wired exactly once per svg element (buildGraphPanel creates a fresh one on every
+ *  panel rebuild) — `paint` just redraws content, it never re-wires listeners. */
+function wireGraphInteractions(svg: SVGSVGElement, track: Track, duration: number, paint: () => void): void {
+  svg.addEventListener('wheel', (ev) => {
+    ev.preventDefault(); // never scroll the timeline body the graph sits in
+    const width = Math.max(320, svg.clientWidth || 800);
+    const vr = getViewRect(track, duration);
+    const plot = makePlot(width, vr);
+    // NOT svgPoint(svg, ev): that reads the svg's CURRENT viewBox attribute, which is
+    // only refreshed by the next drawGraph() call — it can be stale relative to the
+    // `width` just measured above (clientWidth can settle a frame before the viewBox
+    // attribute catches up), corrupting the anchor. Convert through `width` directly so
+    // the cursor point is always in the SAME coordinate space as `plot`.
+    const rect = svg.getBoundingClientRect();
+    const p = {
+      x: ((ev.clientX - rect.left) / rect.width) * width,
+      y: ((ev.clientY - rect.top) / rect.height) * HEIGHT,
+    };
+    const factor = Math.pow(1.0015, -ev.deltaY);
+    zoomViewRect(vr, fitViewRect(track, duration), plot, p.x, p.y, factor);
+    paint();
+  }, { passive: false });
+
+  svg.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 1) return;
+    ev.preventDefault(); // no middle-click autoscroll
+    startPan(svg, track, duration, ev, paint);
+  });
 }
 
 /** Render the curve editor for one track (or a hint when there is nothing to edit). */
@@ -83,24 +241,34 @@ export function buildGraphPanel(
     container.appendChild(empty);
     return;
   }
-  container.appendChild(buildHeader(track));
   const svg = document.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
   svg.setAttribute('class', 'graph-svg');
+  const paint = () => drawGraph(svg, track, duration);
+
+  container.appendChild(buildHeader(track, () => { fitView(track, duration); paint(); }));
   container.appendChild(svg);
+
+  wireGraphInteractions(svg, track, duration, paint);
   // Draw immediately (fallback width — the container may not be laid out yet), then
   // redraw at the real width on the next frame. Never rely on rAF alone: headless
   // environments may not produce frames at all.
-  drawGraph(svg, track, duration);
-  requestAnimationFrame(() => drawGraph(svg, track, duration));
+  paint();
+  requestAnimationFrame(paint);
 }
 
-function buildHeader(track: Track): HTMLElement {
+function buildHeader(track: Track, onFit: () => void): HTMLElement {
   const header = document.createElement('div');
   header.className = 'graph-header';
   const name = document.createElement('span');
   name.className = 'graph-track-name';
   name.textContent = track.channel;
   header.appendChild(name);
+
+  const fitBtn = document.createElement('button');
+  fitBtn.textContent = '⌂ fit';
+  fitBtn.title = 'Reset pan/zoom to fit this track';
+  fitBtn.onclick = onFit;
+  header.appendChild(fitBtn);
 
   const reset = document.createElement('button');
   reset.textContent = 'reset to preset';
@@ -117,7 +285,8 @@ function buildHeader(track: Track): HTMLElement {
   const hint = document.createElement('span');
   hint.className = 'hint';
   hint.textContent =
-    'drag dots to retime/re-value · drag handles to shape the curve (dim = preset easing)';
+    'drag dots to retime/re-value (snaps back to the pre-drag value near it — Alt overrides) · ' +
+    'drag handles to shape the curve (dim = preset easing) · wheel zoom · middle-drag pan';
   header.appendChild(hint);
   return header;
 }
@@ -125,41 +294,32 @@ function buildHeader(track: Track): HTMLElement {
 function drawGraph(svg: SVGSVGElement, track: Track, duration: number): void {
   const width = Math.max(320, svg.clientWidth || 800);
   svg.setAttribute('viewBox', `0 0 ${width} ${HEIGHT}`);
-  const { min, max } = valueRange(track.keyframes);
-  const plotW = width - PAD.left - PAD.right;
-  const plotH = HEIGHT - PAD.top - PAD.bottom;
-  const plot: Plot = {
-    width, duration, min, max,
-    xOf: (t) => PAD.left + (t / duration) * plotW,
-    yOf: (v) => PAD.top + ((max - v) / (max - min)) * plotH,
-    tOf: (x) => ((x - PAD.left) / plotW) * duration,
-    vOf: (y) => max - ((y - PAD.top) / plotH) * (max - min),
-  };
-  const redraw = () => {
-    svg.replaceChildren();
-    drawGrid(svg, plot);
-    drawCurve(svg, track, plot);
-    for (let i = 0; i < track.keyframes.length - 1; i++) {
-      drawSegmentHandles(svg, track.keyframes[i], track.keyframes[i + 1], plot, redraw);
-    }
-    drawKeys(svg, track, plot, redraw);
-  };
-  redraw();
+  const vr = getViewRect(track, duration);
+  const plot = makePlot(width, vr);
+  const redraw = () => drawGraph(svg, track, duration);
+  svg.replaceChildren();
+  drawGrid(svg, plot);
+  drawCurve(svg, track, plot);
+  for (let i = 0; i < track.keyframes.length - 1; i++) {
+    drawSegmentHandles(svg, track.keyframes[i], track.keyframes[i + 1], plot, redraw);
+  }
+  drawKeys(svg, track, plot, duration, redraw);
 }
 
 function drawGrid(svg: SVGSVGElement, plot: Plot): void {
-  const vStep = niceStep(plot.max - plot.min, 5);
-  const v0 = Math.ceil(plot.min / vStep - 1e-6);
-  const v1 = Math.floor(plot.max / vStep + 1e-6);
-  for (let i = v0; i <= v1; i++) {
+  const vStep = niceStep(plot.v1 - plot.v0, 5);
+  const v0i = Math.ceil(plot.v0 / vStep - 1e-6);
+  const v1i = Math.floor(plot.v1 / vStep + 1e-6);
+  for (let i = v0i; i <= v1i; i++) {
     const v = i * vStep;
     const y = plot.yOf(v);
     svg.appendChild(line(PAD.left, y, plot.width - PAD.right, y, 'graph-grid-line'));
     svg.appendChild(text(PAD.left - 6, y + 3, fmt(v), 'end'));
   }
-  const tStep = niceStep(plot.duration, 8);
-  const n = Math.floor(plot.duration / tStep + 1e-6);
-  for (let i = 0; i <= n; i++) {
+  const tStep = niceStep(plot.t1 - plot.t0, 8);
+  const t0i = Math.ceil(plot.t0 / tStep - 1e-6);
+  const t1i = Math.floor(plot.t1 / tStep + 1e-6);
+  for (let i = t0i; i <= t1i; i++) {
     const t = i * tStep;
     const x = plot.xOf(t);
     svg.appendChild(line(x, PAD.top, x, HEIGHT - PAD.bottom, 'graph-grid-line'));
@@ -173,7 +333,7 @@ function drawCurve(svg: SVGSVGElement, track: Track, plot: Plot): void {
   const fallback = keys[0]?.value ?? 0;
   const pts: string[] = [];
   for (let i = 0; i <= CURVE_SAMPLES; i++) {
-    const t = (i / CURVE_SAMPLES) * plot.duration;
+    const t = plot.t0 + (i / CURVE_SAMPLES) * (plot.t1 - plot.t0);
     const v = sampleKeyList(keys, t, fallback);
     pts.push(`${plot.xOf(t).toFixed(1)},${plot.yOf(v).toFixed(1)}`);
   }
@@ -211,7 +371,7 @@ function drawSegmentHandles(
   }
 }
 
-function drawKeys(svg: SVGSVGElement, track: Track, plot: Plot, redraw: () => void): void {
+function drawKeys(svg: SVGSVGElement, track: Track, plot: Plot, duration: number, redraw: () => void): void {
   for (const key of track.keyframes) {
     const dot = el('circle', 'graph-key');
     dot.setAttribute('cx', String(plot.xOf(key.time)));
@@ -220,18 +380,28 @@ function drawKeys(svg: SVGSVGElement, track: Track, plot: Plot, redraw: () => vo
     const tip = document.createElementNS(SVG_NS, 'title');
     tip.textContent = `${key.time} ms = ${fmt(key.value)} · drag to retime/re-value`;
     dot.appendChild(tip);
-    dot.addEventListener('pointerdown', (ev) => startKeyDrag(ev, svg, track, key, plot, redraw));
+    dot.addEventListener('pointerdown', (ev) => startKeyDrag(ev, svg, track, key, plot, duration, redraw));
     svg.appendChild(dot);
   }
 }
 
-/** Drag a keyframe dot: horizontal retimes (10 ms snap, clamped), vertical re-values. */
+/**
+ * Drag a keyframe dot: horizontal retimes (10 ms snap, clamped to the clip's actual
+ * duration — NOT the current pan/zoom window). Vertical re-values, but SNAPS BACK to
+ * the value the key had before this drag whenever the pointer is within a small
+ * threshold of that value's height — so nudging a dot mostly sideways (a very common
+ * gesture: retiming without meaning to touch the value) doesn't silently drop the
+ * authored value. Hold Alt to disable the snap and re-value freely near that point.
+ */
 function startKeyDrag(
   ev: PointerEvent, svg: SVGSVGElement, track: Track, key: Keyframe,
-  plot: Plot, redraw: () => void,
+  plot: Plot, duration: number, redraw: () => void,
 ): void {
   ev.preventDefault();
   ev.stopPropagation();
+  const startValue = key.value;
+  const startY = plot.yOf(startValue);
+  const SNAP_PX = 6;
   let pendingCheckpoint = true; // defer until real movement, not a plain click
   // Capture on the svg, which survives redraw() replacing the dragged circle.
   try { svg.setPointerCapture(ev.pointerId); } catch { /* synthetic/pen events */ }
@@ -241,8 +411,10 @@ function startKeyDrag(
       pendingCheckpoint = false;
     }
     const p = svgPoint(svg, e);
-    key.time = Math.min(plot.duration, Math.max(0, Math.round(plot.tOf(p.x) / 10) * 10));
-    key.value = round3(plot.vOf(p.y));
+    key.time = Math.min(duration, Math.max(0, Math.round(plot.tOf(p.x) / 10) * 10));
+    key.value = (!e.altKey && Math.abs(p.y - startY) <= SNAP_PX)
+      ? startValue
+      : round3(plot.vOf(p.y));
     redraw();
     changeCallback?.();
   };
@@ -300,8 +472,8 @@ function startHandleDrag(
 
 // ---- SVG helpers ----
 
-/** Pointer event → viewBox coordinates (normalizes any post-draw CSS resize). */
-function svgPoint(svg: SVGSVGElement, ev: PointerEvent): { x: number; y: number } {
+/** Pointer/wheel event → viewBox coordinates (normalizes any post-draw CSS resize). */
+function svgPoint(svg: SVGSVGElement, ev: { clientX: number; clientY: number }): { x: number; y: number } {
   const rect = svg.getBoundingClientRect();
   const vb = svg.viewBox.baseVal;
   return {

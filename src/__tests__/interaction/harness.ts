@@ -58,14 +58,20 @@ export const INDEX_BODY = `
     <input id="file-input" type="file" accept=".svg,.json" hidden />
   </header>
   <main id="layout">
-    <aside id="layers"></aside>
+    <aside id="layers" aria-label="Layers"></aside>
     <div id="canvas-col">
       <div id="canvas-tools"></div>
-      <section id="canvas"></section>
+      <section id="canvas" aria-label="Canvas"></section>
     </div>
-    <aside id="inspector"></aside>
+    <aside id="inspector" aria-label="Inspector"></aside>
   </main>
-  <footer id="timeline"></footer>
+  <div
+    id="timeline-splitter"
+    role="separator"
+    aria-orientation="horizontal"
+    aria-label="Resize timeline panel"
+  ></div>
+  <footer id="timeline" aria-label="Timeline"></footer>
 `;
 
 interface RigStudioHook {
@@ -315,6 +321,30 @@ export function gestureDrag(
   }
   opts.beforeUp?.();
   svg.dispatchEvent(pointer('pointerup', to.x, to.y, button, 0, mods));
+}
+
+/**
+ * A drag confined to ONE element (e.g. the timeline splitter): down/move×/up all
+ * dispatch at `el` itself, relying on setPointerCapture in REAL headless Chromium
+ * (unlike gestureDrag, which routes move/up through the svg because the canvas's own
+ * pipelines are wired there — non-canvas elements that call setPointerCapture on
+ * themselves, like timeline diamonds or the splitter, retarget correctly here since
+ * Vitest Browser Mode is a genuine browser engine, not jsdom).
+ */
+export function dragOnElement(
+  el: Element,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  steps = 6,
+): void {
+  el.dispatchEvent(pointer('pointerdown', from.x, from.y, 0, 1, {}));
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x = from.x + (to.x - from.x) * t;
+    const y = from.y + (to.y - from.y) * t;
+    el.dispatchEvent(pointer('pointermove', x, y, 0, 1, {}));
+  }
+  el.dispatchEvent(pointer('pointerup', to.x, to.y, 0, 0, {}));
 }
 
 /** A single down/up click at a client point (no movement → no drag, no checkpoint). */

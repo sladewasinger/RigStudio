@@ -112,3 +112,74 @@
   min-width: 0;
   flex: 1 1 auto;
 }
+
+/* ============================================================================
+   Keyframe toggle circles (src/panels/inspector.ts) — one before every keyable
+   Animate-mode field's label: filled when the channel has a keyframe at the
+   playhead (click removes it), hollow otherwise (click creates one). Sits inside a
+   small wrapper alongside the label text so the row keeps its normal two-slot
+   (label / input) flex layout — see `.field` in style.css.
+   ============================================================================ */
+.key-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.key-toggle {
+  width: 10px;
+  height: 10px;
+  min-width: 10px;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  border: 1.5px solid var(--muted);
+  flex: none;
+}
+.key-toggle:hover:not(:disabled) { border-color: var(--accent); background: transparent; }
+.key-toggle.is-keyed { background: var(--accent); border-color: var(--accent); }
+.key-toggle.is-keyed:hover:not(:disabled) { filter: brightness(1.15); }
+
+/* ============================================================================
+   AI assistant panel (src/panels/ai.ts) — busy state during an in-flight Claude
+   request: the panel's own controls disable individually (see ai.ts), and
+   SEPARATELY the rest of the editor goes inert behind a dimmed overlay so nothing
+   else can be edited mid-request. `.ai-panel` opts back into pointer events so its
+   own Cancel button stays clickable through the overlay.
+   ============================================================================ */
+#layout.ai-busy {
+  position: relative;
+  pointer-events: none;
+}
+#layout.ai-busy::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 10, 14, 0.45);
+  z-index: 40;
+}
+#layout.ai-busy .ai-panel {
+  position: relative;
+  z-index: 41;
+  pointer-events: auto;
+}
+.ai-busy-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.ai-busy-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  animation: ai-busy-pulse 1s ease-in-out infinite;
+}
+@keyframes ai-busy-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+.ai-info {
+  color: var(--muted);
+  cursor: help;
+  font-size: 11px;
+}

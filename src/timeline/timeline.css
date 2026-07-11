@@ -1,0 +1,142 @@
+/* ============================================================================
+   Timeline panel (src/timeline/timeline.ts) — P5a overhaul.
+   ============================================================================
+   #timeline's HEIGHT/overflow are controlled from JS (applyPanelHeight in
+   timeline.ts), not here — inline styles win over stylesheet rules regardless of
+   load order, which matters because the fixed-height fix (a P3 bug: the first
+   keyframe lane appearing mid-drag used to grow #timeline's intrinsic height,
+   shrinking the canvas and shifting its screen CTM under an in-flight gesture)
+   must never be undone by a cascade-order accident. Rules below only style
+   things NOT already governed by style.css, or override existing #timeline
+   descendant rules using #timeline-prefixed selectors so they win on specificity
+   regardless of <style>/<link> ordering between style.css and this file. */
+
+/* ---- Resize splitter (sibling of #timeline, between it and #layout) ---- */
+#timeline-splitter {
+  flex: 0 0 auto;
+  height: 6px;
+  position: relative;
+  cursor: row-resize;
+  background: var(--divider);
+  touch-action: none;
+}
+#timeline-splitter:hover,
+#timeline-splitter.dragging {
+  background: var(--accent-2);
+}
+#timeline-splitter::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+/* ---- Fixed chrome (built once in setupShell, never rebuilt by render()) ---- */
+.tl-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  padding-bottom: 4px;
+}
+
+/* The scrolling content region — everything render() rebuilds lives in here, one
+   level below the fixed-height #timeline shell, so lane growth scrolls instead of
+   resizing the panel (and never the canvas beside it). */
+.tl-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.tl-body::-webkit-scrollbar { width: 11px; height: 11px; }
+.tl-body::-webkit-scrollbar-track { background: transparent; }
+.tl-body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+.tl-body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+  background-clip: padding-box;
+}
+
+/* ---- Transport bar clusters ---- */
+.tl-cluster {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding-right: var(--sp-2);
+  margin-right: var(--sp-1);
+  border-right: 1px solid var(--border);
+}
+.tl-cluster:last-child { border-right: none; margin-right: 0; padding-right: 0; }
+
+/* Segmented Keys / Curves / Logic mode picker — same visual language as
+   #mode-toggle and .tool-switch in style.css, scoped to a new class. */
+.tl-mode-picker {
+  display: flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.2);
+}
+.tl-mode-picker button {
+  border: none;
+  border-radius: 0;
+  padding: 0 var(--sp-2);
+  font-size: 12px;
+  height: var(--ctrl-h-sm);
+}
+.tl-mode-picker button + button { border-left: 1px solid var(--border-strong); }
+.tl-mode-picker button:hover:not(.active):not(:disabled) { background: var(--surface-hover); }
+.tl-mode-picker button.active { background: var(--accent-2); color: #101018; font-weight: 600; }
+
+/* Section separators between the bar / keybar / lanes / graph / logic blocks. */
+.tl-divider { height: 1px; background: var(--border); margin: var(--sp-2) 0; }
+
+/* ---- Lanes: gutter, alternating rows, marquee-friendly padding ----
+   #timeline-prefixed to out-specificity style.css's bare .tl-lane/.tl-strip rules
+   regardless of stylesheet order. */
+#timeline .tl-lane {
+  height: 30px;
+  border-radius: var(--r-sm);
+}
+#timeline .tl-lane.tl-lane-alt { background: rgba(255, 255, 255, 0.025); }
+#timeline .tl-lane.tl-lane-alt .tl-strip { background: rgba(255, 255, 255, 0.05); }
+#timeline .tl-lane-label {
+  background: rgba(0, 0, 0, 0.16);
+  border-right: 1px solid var(--border);
+  padding: 0 10px;
+  margin-right: 0;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+/* Gutter spacer between the label column and the strip — widens the "generous
+   padding" the spec asks for and doubles as marquee-start territory (below). */
+.tl-lane-gap { flex: none; width: 14px; }
+#timeline .tl-ruler { margin-left: 174px; } /* 160px label + 14px gap, kept in sync */
+.tl-lanes-pad { margin-left: 174px; height: 14px; }
+
+.tl-lane-block {
+  padding-top: var(--sp-1);
+  padding-bottom: var(--sp-1);
+}
+
+/* Section separation between the transport bar / keybar / lanes / graph / logic
+   blocks (item 5): explicit elements inserted by render(), not a cascade-order-
+   dependent override of style.css's existing box-model rules on those blocks. */
+.sm-panel-host { margin-top: var(--sp-1); }

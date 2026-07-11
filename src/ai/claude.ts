@@ -86,6 +86,7 @@ const CLIP_WITH_RIG_SCHEMA = {
               label: { type: 'string', description: 'New unique snake_case name' },
               pivot: {
                 type: 'object',
+                description: "The bone's origin (joint).",
                 properties: { x: { type: 'number' }, y: { type: 'number' } },
                 required: ['x', 'y'],
                 additionalProperties: false,
@@ -93,6 +94,25 @@ const CLIP_WITH_RIG_SCHEMA = {
               parent: {
                 type: ['string', 'null'],
                 description: 'Existing part label, an earlier new bone, or null',
+              },
+              tip: {
+                type: ['object', 'null'],
+                description:
+                  "The bone's far end, same coordinate space as pivot. Gives the bone a " +
+                  'visible length and lets it form a segment for auto-binding — set this ' +
+                  'whenever bindParts is used.',
+                properties: { x: { type: 'number' }, y: { type: 'number' } },
+                required: ['x', 'y'],
+                additionalProperties: false,
+              },
+              bindParts: {
+                type: 'array',
+                items: { type: 'string' },
+                description:
+                  'Art part labels to auto-bind (skin) to this bone and every bone it chains ' +
+                  'with (bones parented to bones, or parenting later bones to this one). Only ' +
+                  'existing ART parts with drawable geometry — never bone/group labels. Empty ' +
+                  'array when this bone is a plain joint with nothing bound to it.',
               },
             },
             required: ['label', 'pivot', 'parent'],
@@ -135,14 +155,28 @@ const CLIP_WITH_RIG_SCHEMA = {
 
 const RIG_EDIT_NOTES = `
 Structural edits (the user has enabled them): alongside the clip you may return "rig"
-changes — addBones creates partless JOINTS (a bone is a pivot other parts can parent
-to; it does NOT split or deform existing artwork), reparent attaches parts to bones or
-other parts (children then ride the parent's motion), movePivots relocates a joint.
-Use them sparingly and only when the requested motion genuinely needs articulation the
-current rig lacks (e.g. a wave needs a wrist joint: add a bone at the wrist, parent it
-to the arm, and key the bone — the hand artwork must already be a separate part to
-follow it). New bone labels must be unique snake_case; keyframe tracks may target
-them. Bones may parent to bones added earlier in the same list.`;
+changes — addBones creates JOINTS (a bone is a pivot other parts can parent to or that
+can auto-bind artwork — see below), reparent attaches parts to bones or other parts
+(children then ride the parent's motion), movePivots relocates a joint. Use them
+sparingly and only when the requested motion genuinely needs articulation the current
+rig lacks. New bone labels must be unique snake_case; keyframe tracks may target them.
+Bones may parent to bones added earlier in the same list, forming a CHAIN (e.g. a
+shoulder→elbow→wrist arm).
+
+Bones and binding (mirrors the editor's "Bones 2.0" system): give a bone both "pivot"
+(its origin/joint) and "tip" (its far end, same coordinate space as pivot) to make it a
+real segment, not just a bare joint. When a chain of bones (via "parent") overlaps a
+piece of existing artwork, that artwork can be BOUND to the chain — this deforms the
+artwork so it bends smoothly at each joint (like a real limb), which is how you split a
+single rigid shape into an articulated one WITHOUT the user hand-drawing separate parts.
+List the art part labels to bind on "bindParts" (only on the bones that should carry
+that binding — binding a chain member binds the whole chain it belongs to). Only use
+bindParts on existing ART parts that already have drawable geometry (never bone/group
+labels), and only when the motion genuinely needs the limb to bend, not just pivot as a
+whole (e.g. a wave that only needs the whole forearm to swing needs no binding — parent
+a wrist bone to the arm and key rotation; a wave that needs the forearm ITSELF to bend
+along its length needs bindParts on the bone chain running through it). A bone with no
+bindParts is a plain joint, as before.`;
 
 const RIG_SEMANTICS = `The rig is an SVG-space skeleton. Coordinate system: x grows right, y grows DOWN.
 Rotations are in degrees, POSITIVE = CLOCKWISE on screen, and each part rotates around
@@ -240,27 +274,31 @@ export async function animateWithClaude(
   instruction: string,
   imageBase64?: string | null,
   allowRigChanges = false,
+  signal?: AbortSignal,
 ): Promise<AnimateResult> {
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 16000,
-    thinking: { type: 'adaptive' },
-    output_config: {
-      format: {
-        type: 'json_schema',
-        schema: allowRigChanges ? CLIP_WITH_RIG_SCHEMA : CLIP_SCHEMA,
+  const response = await client.messages.create(
+    {
+      model: MODEL,
+      max_tokens: 16000,
+      thinking: { type: 'adaptive' },
+      output_config: {
+        format: {
+          type: 'json_schema',
+          schema: allowRigChanges ? CLIP_WITH_RIG_SCHEMA : CLIP_SCHEMA,
+        },
       },
+      system: allowRigChanges ? SYSTEM + RIG_EDIT_NOTES : SYSTEM,
+      messages: [
+        {
+          role: 'user',
+          content: userContent(sceneJson(doc, clip), `Direction: ${instruction}`, imageBase64),
+        },
+      ],
     },
-    system: allowRigChanges ? SYSTEM + RIG_EDIT_NOTES : SYSTEM,
-    messages: [
-      {
-        role: 'user',
-        content: userContent(sceneJson(doc, clip), `Direction: ${instruction}`, imageBase64),
-      },
-    ],
-  });
+    { signal },
+  );
 
   if (response.stop_reason === 'refusal') {
     throw new Error('Claude declined this request.');
@@ -290,24 +328,28 @@ export async function critiqueWithClaude(
   doc: RigDoc,
   clip: Clip,
   imageBase64?: string | null,
+  signal?: AbortSignal,
 ): Promise<string> {
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 2000,
-    system: CRITIQUE_SYSTEM,
-    messages: [
-      {
-        role: 'user',
-        content: userContent(
-          sceneJson(doc, clip),
-          'Critique this clip. What works, what reads poorly, and what specific keyframe changes would improve it?',
-          imageBase64,
-        ),
-      },
-    ],
-  });
+  const response = await client.messages.create(
+    {
+      model: MODEL,
+      max_tokens: 2000,
+      system: CRITIQUE_SYSTEM,
+      messages: [
+        {
+          role: 'user',
+          content: userContent(
+            sceneJson(doc, clip),
+            'Critique this clip. What works, what reads poorly, and what specific keyframe changes would improve it?',
+            imageBase64,
+          ),
+        },
+      ],
+    },
+    { signal },
+  );
 
   if (response.stop_reason === 'refusal') {
     throw new Error('Claude declined this request.');

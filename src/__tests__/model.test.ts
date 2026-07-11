@@ -19,16 +19,19 @@ import {
   deserializeDoc,
   duplicateParts,
   groupParts,
+  keyAt,
   movePartRelativeTo,
   moveSelectedInDrawOrder,
   newStateMachine,
   normalizeDoc,
   pasteKeysAt,
+  removeKeyAt,
   sampleChannel,
   selectAllParts,
   selectPart,
   selectedParts,
   serializeDoc,
+  setKeyframe,
   setKeyframeAt,
   setParent,
   state,
@@ -174,6 +177,55 @@ describe('deleteKeyframe', () => {
     // A value-equal clone is not the same keyframe.
     deleteKeyframe(track, { time: 0, value: 1, easing: 'easeInOut' });
     expect(track.keyframes).toHaveLength(2);
+  });
+});
+
+describe('keyAt / removeKeyAt (inspector keyframe-toggle circles)', () => {
+  beforeEach(() => {
+    resetState(makeDoc([makePart('p1')]));
+  });
+
+  it('keyAt finds a keyframe within the 5ms tolerance, and misses outside it', () => {
+    setKeyframeAt('p1', 'rotate', 500, 30);
+    expect(keyAt('p1', 'rotate', 500)).toMatchObject({ time: 500, value: 30 });
+    expect(keyAt('p1', 'rotate', 503)).toMatchObject({ time: 500, value: 30 }); // within 5ms
+    expect(keyAt('p1', 'rotate', 497)).toMatchObject({ time: 500, value: 30 }); // within 5ms
+    expect(keyAt('p1', 'rotate', 506)).toBeNull(); // just outside
+    expect(keyAt('p1', 'rotate', 494)).toBeNull();
+  });
+
+  it('keyAt returns null for an untracked channel or an unkeyed one', () => {
+    expect(keyAt('p1', 'rotate', 0)).toBeNull(); // no track at all
+    setKeyframeAt('p1', 'tx', 0, 1);
+    expect(keyAt('p1', 'rotate', 0)).toBeNull(); // track exists on a different channel
+  });
+
+  it('keyAt matches setKeyframe\'s 10ms grid snap (playhead time need not be exact)', () => {
+    state.currentTime = 237;
+    setKeyframe('p1', 'rotate', 12); // snaps to 240
+    expect(keyAt('p1', 'rotate', 237)).toMatchObject({ time: 240, value: 12 });
+  });
+
+  it('removeKeyAt removes just that key and keeps the track when other keys remain', () => {
+    setKeyframeAt('p1', 'rotate', 0, 1);
+    setKeyframeAt('p1', 'rotate', 500, 2);
+    expect(removeKeyAt('p1', 'rotate', 500)).toBe(true);
+    const track = state.doc!.clips[0].tracks[0];
+    expect(track.keyframes.map((k) => k.time)).toEqual([0]);
+    expect(state.doc!.clips[0].tracks).toHaveLength(1);
+  });
+
+  it('removeKeyAt drops the track once its last key is removed (matches timeline delete semantics)', () => {
+    setKeyframeAt('p1', 'rotate', 0, 1);
+    expect(removeKeyAt('p1', 'rotate', 0)).toBe(true);
+    expect(state.doc!.clips[0].tracks).toHaveLength(0);
+  });
+
+  it('removeKeyAt returns false and is a no-op when nothing matches', () => {
+    setKeyframeAt('p1', 'rotate', 0, 1);
+    expect(removeKeyAt('p1', 'rotate', 900)).toBe(false);
+    expect(removeKeyAt('p1', 'sx', 0)).toBe(false);
+    expect(state.doc!.clips[0].tracks[0].keyframes).toHaveLength(1);
   });
 });
 
@@ -889,6 +941,42 @@ describe('bones, groups, structural edits', () => {
     const before = doc.parts.length;
     applyRigChanges({ addBones: [{ label: 'arm', pivot: { x: 0, y: 0 }, parent: null }], reparent: [], movePivots: [] });
     expect(doc.parts.length).toBe(before);
+  });
+
+  it('applyRigChanges sets boneTip when a new bone carries an optional tip, and leaves it null otherwise', () => {
+    resetState(makeDoc([makePart('p1')]));
+    applyRigChanges({
+      addBones: [
+        { label: 'shoulder', pivot: { x: 1, y: 2 }, parent: null, tip: { x: 10, y: 2 } },
+        { label: 'wrist', pivot: { x: 20, y: 2 }, parent: 'shoulder' }, // no tip
+      ],
+      reparent: [],
+      movePivots: [],
+    });
+    const doc = state.doc!;
+    const shoulder = doc.parts.find((p) => p.label === 'shoulder')!;
+    const wrist = doc.parts.find((p) => p.label === 'wrist')!;
+    expect(shoulder.boneTip).toEqual({ x: 10, y: 2 });
+    expect(wrist.boneTip).toBeUndefined(); // addNullPart defaults boneTip unset; no tip given
+  });
+
+  it('applyRigChanges carries bindParts through the label→id map (binding itself is applied by the caller)', () => {
+    resetState(makeDoc([makePart('p1', { label: 'forearm' })]));
+    const changes = {
+      addBones: [
+        { label: 'elbow', pivot: { x: 5, y: 5 }, parent: null, tip: { x: 15, y: 5 }, bindParts: ['forearm'] },
+      ],
+      reparent: [],
+      movePivots: [],
+    };
+    const map = applyRigChanges(changes);
+    // applyRigChanges itself never touches part.skin — bindParts is carried in the
+    // RigChanges value only, resolved by the caller (panels/ai.ts) against this map.
+    const elbowId = map.get('elbow')!;
+    expect(elbowId).toBeDefined();
+    const forearm = state.doc!.parts.find((p) => p.label === 'forearm')!;
+    expect(forearm.skin).toBeUndefined(); // makePart's default — never touched by applyRigChanges
+    expect(changes.addBones[0].bindParts).toEqual(['forearm']);
   });
 });
 

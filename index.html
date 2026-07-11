@@ -31,14 +31,20 @@
       <input id="file-input" type="file" accept=".svg,.json" hidden />
     </header>
     <main id="layout">
-      <aside id="layers"></aside>
+      <aside id="layers" aria-label="Layers"></aside>
       <div id="canvas-col">
         <div id="canvas-tools"></div>
-        <section id="canvas"></section>
+        <section id="canvas" aria-label="Canvas"></section>
       </div>
-      <aside id="inspector"></aside>
+      <aside id="inspector" aria-label="Inspector"></aside>
     </main>
-    <footer id="timeline"></footer>
+    <div
+      id="timeline-splitter"
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize timeline panel"
+    ></div>
+    <footer id="timeline" aria-label="Timeline"></footer>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
