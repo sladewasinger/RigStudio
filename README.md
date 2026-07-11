@@ -6,11 +6,17 @@ state machines, and an AI animation assistant. Exports **Rive `.riv`** files (pl
 anywhere the official Rive runtimes run: web, Android, iOS, Flutter, React Native,
 Unity) and **Lottie JSON**.
 
+![Rig Studio screenshot](samples/rig_studio_screenshot.png)
+
 ```sh
 npm install
 npm run dev        # http://localhost:5173
 npm run build      # type-check + production build
 npm test           # unit tests (vitest)
+
+npm preview        # run production preview server (no file watching, make sure build first)
+
+npm run pages      # build github pages folder (make sure to commit and push)
 ```
 
 ## Workflow
