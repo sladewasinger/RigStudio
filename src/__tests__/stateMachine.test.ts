@@ -18,8 +18,8 @@ import {
   SMTransition,
   StateMachine,
   channelValue,
-} from '../model';
-import { SM_REST_STATE_ID, createSMInstance } from '../stateMachine';
+} from '../core/model';
+import { SM_REST_STATE_ID, createSMInstance } from '../core/stateMachine';
 import { makeClip, makeDoc, makePart, makeTrack, resetState } from './helpers';
 
 // ---- Tiny builders ----

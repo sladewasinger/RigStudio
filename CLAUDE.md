@@ -35,29 +35,57 @@ A debug hook exists on `window.__rigStudio` (`state`, `exportLottie`, `exportRiv
 `renderPose`, `serializeDoc`, `loadProjectText`, `setEditorMode`) for driving the app
 from the console; `window.__smPanel` drives the state-machine editor deterministically.
 
+## Code architecture
+
+- **Self-documenting code**: names over comments. Comments exist only for
+  constraints the code itself can't express (invariants, hard-learned traps,
+  "why", cross-file coupling) — not to narrate what a line already says.
+- **Small, focused files**: ~200 lines is a smell threshold, not a hard limit.
+  A file creeping past it is a prompt to ask whether it's doing two jobs.
+  `view/interactions.ts` and `view/nodeEditing.ts` are documented exceptions
+  (every pointer drag pipeline / all node-structure math respectively gain more
+  from staying in one place than from being split further).
+- **Feature-grouped folders**: `src/` is organized by responsibility, not left
+  flat — `core/` (document model, undo/redo, state-machine evaluator), `geometry/`
+  (pure math: paths, transforms, snapping, align, IK, skinning), `io/` (SVG
+  import, Lottie/Rive export), `view/` (the editing canvas), `timeline/` (clip
+  transport + curve editor), `panels/` (side panels + the state-machine editor
+  UI), `ui/` (cross-cutting chrome like the shortcut overlay), `ai/` (Claude
+  SDK calls). `main.ts` and `style.css` stay at `src/` root — they're the entry
+  point index.html references, not a feature. New code follows this structure;
+  a new concern gets its own folder rather than growing an existing one past
+  its job.
+- **The facade pattern for wide surfaces**: a module with many internal parts
+  but one coherent public API (`view/`, `panels/`) splits into implementation
+  modules plus a permanent `index.ts` that re-exports exactly the consumed
+  surface. Consumers import ONLY the facade (`./view`, `./panels` — Node/bundler
+  resolution treats a directory import as its `index.ts`), never a deep path;
+  implementation modules never import the facade back. See "The `src/view/`
+  layering is binding" below for the enforcement rule this implies.
+
 ## Architecture (src/)
 
 | File | Responsibility |
 |---|---|
-| `model.ts` | Document model (`RigDoc`/`RigPart`/`Clip`/`Track`/`Keyframe`), part hierarchy helpers (`ancestorChain`, `setParent`, cycle-safe), rest pose, app state singleton (`editorMode`: `setup`\|`animate`, multi-selection, playback speed/ping-pong/onion flags), pub/sub (`subscribe`/`notify`), pose sampling (`sampleChannel`, 4 easings), keyframe clipboard (`copyKeys`/`pasteKeysAt`/`copyPoseAt`), project (de)serialization (`serializeDoc`/`deserializeDoc`/`normalizeDoc`) |
-| `importSvg.ts` | SVG file → `RigDoc`. Unwraps Inkscape layers; named groups → parts; ellipse/circle/rect → path data; pivots seeded from the *composed matrix's fixed point* (works whether the group is authored as `rotate(a,cx,cy)` or the `matrix(...)` Inkscape rewrites it into) or from `inkscape:transform-center-x/y` as a `pivotHint` resolved once geometry is measurable |
-| `view.ts` | **Pure re-export facade (33 lines)** over the `src/view/` modules — consumers import ONLY `./view`, never deep paths. The canvas responsibilities live in 13 layered modules: `view/context.ts` (shared mutable state `ctx`, DragState type, constants, micro-utils), `view/coords.ts` (screen↔doc conversion from live CTM/transform strings), `view/pose.ts` (pose composition, effective pivots, `partRootBoxes`), `view/focus.ts` (drill-down/dimming, `artworkUnderPointer`), `view/skinRender.ts` (LBS deformation + private cache), `view/overlay.ts` (selection boxes, handle sets, pivots, gizmos, node handles — render-time side effects live here on purpose), `view/snapping.ts` (candidate collection wiring), `view/render.ts` (`renderPose`, onion skins, `setPoseSampler`), `view/partDom.ts` (part-group/path DOM registry), `view/nodeEditing.ts` (node ops, drag math, structural join/delete), `view/rigOps.ts` (flip/nudge/bind/bone placement), `view/camera.ts` (viewBox zoom/pan/fit), `view/interactions.ts` (pointer routing, every drag pipeline, checkpoint deferral), `view/canvas.ts` (`buildCanvas`, render-then-measure pivot seeding) |
-| `timeline.ts` | Clip transport (play/pause/duplicate/rename/delete/duration, speed selector, ping-pong, onion toggle, fps readout), scrubber, keyframe lanes with click/shift-click/marquee selection, retime drag, a key-property row (time/value/easing) for the selection, copy/paste/nudge/column-select |
-| `panels.ts` | Layers **tree** (parts nest under their parent, fold open to show child paths, drag-to-parent / drop-to-unparent), inspector (Setup: rest/pivot/parent fields; Animate: keyed channel fields), Claude assistant panel (prompt animate, critique, optional pose-snapshot attachment) |
-| `history.ts` | Snapshot-based undo/redo; call `checkpoint()` BEFORE any doc mutation, one per user gesture |
-| `paths.ts` | Path-data parser/serializer (normalizes to absolute M/L/C/A/Z), de Casteljau cubic split for node insertion, `arcToCubics`/`pathToCubics` (W3C endpoint→center parametrization) so arc segments can be split and exported as geometry |
-| `transforms.ts` | SVG transform-list parser plus a small affine `Mat` toolkit (`multiply`/`invertMat`/`applyMat`/`rotationMat`); `rotationPivotOf` finds a transform list's fixed point by testing the *composed matrix* for a rigid rotation, so it recovers pivots regardless of whether Inkscape wrote `rotate(...)` or an equivalent `matrix(...)` |
-| `exportLottie.ts` | `RigDoc` + one clip → Lottie JSON (v5.7.0, 60fps): a root null layer for whole-figure translate/scale, one shape layer per part with Lottie-native `parent` layer references mirroring the bone hierarchy, geometry flattened through baked SVG transforms with arcs converted to cubics, easings converted to bezier handles |
-| `exportRiv.ts` | `RigDoc` + ALL clips → Rive `.riv` binary (format major 7): varuint/ToC writer, typeKey/propertyKey table derived from rive-runtime `dev/defs` (cited in-file), Backboard→Artboard→Node-per-part-at-pivot (geometry baked to docPoint−pivot, rest scale/skew baked in, rotation in RADIANS), Shape/PointsPath/CubicDetachedVertex geometry, Fill/Stroke/SolidColor (opacity folded into alpha), one LinearAnimation per clip with KeyedObject/KeyedProperty/KeyFrameDouble + CubicEaseInterpolators (interpolators emitted BEFORE animations — animation objects consume no component index). Deterministic bytes; playback-only (the Rive editor cannot import .riv) |
-| `ik.ts` | Analytic IK: `solveTwoBone` (law-of-cosines two-joint solve, bend-direction preserving, reach-clamped) and `solveAim`, both in degrees/root space |
-| `skin.ts` | Skinning math: `distToSegment`, `skinWeights` (normalized inverse-square distance to bind-time bone segments) |
-| `graph.ts` | Curve editor panel: value-vs-time plot per track, draggable keys, per-segment bezier handles writing `Keyframe.bezier` |
-| `align.ts` | Align & distribute math (`alignDeltas`/`distributeDeltas`, pure functions over part bboxes with selection/first/last/canvas reference options); applied through parent-chain-aware rest translation from the inspector |
-| `snap.ts` | Pure snapping math (`snapPoint`/`snapDelta`/`boxFeaturePoints`: nearest candidate within a threshold, axis-lock aware, box = center + corners + edge midpoints); view.ts collects candidates and applies it to Setup-mode node/pivot/part-translate drags |
-| `help.ts` | `SHORTCUTS` registry (single source of truth for documented bindings) and the `?`/F1 keyboard-shortcut overlay (`openHelp`/`closeHelp`/`toggleHelp`/`isHelpOpen`) |
-| `stateMachine.ts` | Pure state-machine evaluator (`createSMInstance`): entry resolution, any-then-current transition evaluation (array order, at most one per advance), bool/number/trigger conditions (triggers arm until consumed at end of an advance's evaluation), crossfade blending running both clip clocks with the absolute-keys/rest-fallback rule, exit-freeze, rest pseudo-state (`SM_REST_STATE_ID`); deterministic — time flows only through `advance(dtMs)` |
-| `smPanel.ts` | State-machine editor UI (the timeline's `🔀 logic` view): machine CRUD, draggable state graph (positions persist on `SMState.x/y`), armed click-click transition creation, condition/duration editors, inputs list (live controls during preview), listeners editor; ▶ preview drives the canvas via view's `setPoseSampler` hook + rAF, capture-phase pointer listeners map canvas hits (ancestor-inclusive) to listener actions; `window.__smPanel` debug hook with deterministic `tick(dtMs)` |
-| `claude.ts` | Anthropic SDK calls (`claude-opus-4-8`): `animateWithClaude` (adaptive thinking, structured outputs guaranteeing a valid clip JSON, parent-aware system prompt, optional base64 pose snapshot for vision grounding) and `critiqueWithClaude` (plain-text animation review) |
+| `core/model.ts` | Document model (`RigDoc`/`RigPart`/`Clip`/`Track`/`Keyframe`), part hierarchy helpers (`ancestorChain`, `setParent`, cycle-safe), rest pose, app state singleton (`editorMode`: `setup`\|`animate`, multi-selection, playback speed/ping-pong/onion flags), pub/sub (`subscribe`/`notify`), pose sampling (`sampleChannel`, 4 easings), keyframe clipboard (`copyKeys`/`pasteKeysAt`/`copyPoseAt`), project (de)serialization (`serializeDoc`/`deserializeDoc`/`normalizeDoc`) |
+| `io/importSvg.ts` | SVG file → `RigDoc`. Unwraps Inkscape layers; named groups → parts; ellipse/circle/rect → path data; pivots seeded from the *composed matrix's fixed point* (works whether the group is authored as `rotate(a,cx,cy)` or the `matrix(...)` Inkscape rewrites it into) or from `inkscape:transform-center-x/y` as a `pivotHint` resolved once geometry is measurable |
+| `view/index.ts` | **Pure re-export facade (33 lines)** over the `src/view/` modules — consumers import ONLY `./view`, never deep paths. The canvas responsibilities live in 13 layered modules: `view/context.ts` (shared mutable state `ctx`, DragState type, constants, micro-utils), `view/coords.ts` (screen↔doc conversion from live CTM/transform strings), `view/pose.ts` (pose composition, effective pivots, `partRootBoxes`), `view/focus.ts` (drill-down/dimming, `artworkUnderPointer`), `view/skinRender.ts` (LBS deformation + private cache), `view/overlay.ts` (selection boxes, handle sets, pivots, gizmos, node handles — render-time side effects live here on purpose), `view/snapping.ts` (candidate collection wiring), `view/render.ts` (`renderPose`, onion skins, `setPoseSampler`), `view/partDom.ts` (part-group/path DOM registry), `view/nodeEditing.ts` (node ops, drag math, structural join/delete), `view/rigOps.ts` (flip/nudge/bind/bone placement), `view/camera.ts` (viewBox zoom/pan/fit), `view/interactions.ts` (pointer routing, every drag pipeline, checkpoint deferral), `view/canvas.ts` (`buildCanvas`, render-then-measure pivot seeding) |
+| `timeline/timeline.ts` | Clip transport (play/pause/duplicate/rename/delete/duration, speed selector, ping-pong, onion toggle, fps readout), scrubber, keyframe lanes with click/shift-click/marquee selection, retime drag, a key-property row (time/value/easing) for the selection, copy/paste/nudge/column-select |
+| `panels/index.ts` | **Pure re-export facade** over `src/panels/`'s submodules — consumers import ONLY `./panels`, never deep paths. `panels/icons.ts` (the inline SVG icon set + `icon`/`iconButton` helpers), `panels/layers.ts` (Layers **tree** — parts nest under their parent, fold open to show child paths, drag-to-parent / drop-to-unparent), `panels/inspector.ts` (Setup: rest/pivot/parent fields; Animate: keyed channel fields; plus the skinning, align & distribute, node-operations, and object/style sections), `panels/ai.ts` (the Claude assistant panel, mounted at the bottom of the inspector), `panels/canvasTools.ts` (the tool switcher, snap toggle, and flip/group/ungroup/bind actions shown above the canvas). `panels/smPanel.ts` (state-machine editor) lives alongside these but is imported directly by its consumers (`main.ts`, `timeline/timeline.ts`), not re-exported by the facade |
+| `core/history.ts` | Snapshot-based undo/redo; call `checkpoint()` BEFORE any doc mutation, one per user gesture |
+| `geometry/paths.ts` | Path-data parser/serializer (normalizes to absolute M/L/C/A/Z), de Casteljau cubic split for node insertion, `arcToCubics`/`pathToCubics` (W3C endpoint→center parametrization) so arc segments can be split and exported as geometry |
+| `geometry/transforms.ts` | SVG transform-list parser plus a small affine `Mat` toolkit (`multiply`/`invertMat`/`applyMat`/`rotationMat`); `rotationPivotOf` finds a transform list's fixed point by testing the *composed matrix* for a rigid rotation, so it recovers pivots regardless of whether Inkscape wrote `rotate(...)` or an equivalent `matrix(...)` |
+| `io/exportLottie.ts` | `RigDoc` + one clip → Lottie JSON (v5.7.0, 60fps): a root null layer for whole-figure translate/scale, one shape layer per part with Lottie-native `parent` layer references mirroring the bone hierarchy, geometry flattened through baked SVG transforms with arcs converted to cubics, easings converted to bezier handles |
+| `io/exportRiv.ts` | `RigDoc` + ALL clips → Rive `.riv` binary (format major 7): varuint/ToC writer, typeKey/propertyKey table derived from rive-runtime `dev/defs` (cited in-file), Backboard→Artboard→Node-per-part-at-pivot (geometry baked to docPoint−pivot, rest scale/skew baked in, rotation in RADIANS), Shape/PointsPath/CubicDetachedVertex geometry, Fill/Stroke/SolidColor (opacity folded into alpha), one LinearAnimation per clip with KeyedObject/KeyedProperty/KeyFrameDouble + CubicEaseInterpolators (interpolators emitted BEFORE animations — animation objects consume no component index). Deterministic bytes; playback-only (the Rive editor cannot import .riv) |
+| `geometry/ik.ts` | Analytic IK: `solveTwoBone` (law-of-cosines two-joint solve, bend-direction preserving, reach-clamped) and `solveAim`, both in degrees/root space |
+| `geometry/skin.ts` | Skinning math: `distToSegment`, `skinWeights` (normalized inverse-square distance to bind-time bone segments) |
+| `timeline/graph.ts` | Curve editor panel: value-vs-time plot per track, draggable keys, per-segment bezier handles writing `Keyframe.bezier` |
+| `geometry/align.ts` | Align & distribute math (`alignDeltas`/`distributeDeltas`, pure functions over part bboxes with selection/first/last/canvas reference options); applied through parent-chain-aware rest translation from the inspector |
+| `geometry/snap.ts` | Pure snapping math (`snapPoint`/`snapDelta`/`boxFeaturePoints`: nearest candidate within a threshold, axis-lock aware, box = center + corners + edge midpoints); view.ts collects candidates and applies it to Setup-mode node/pivot/part-translate drags |
+| `ui/help.ts` | `SHORTCUTS` registry (single source of truth for documented bindings) and the `?`/F1 keyboard-shortcut overlay (`openHelp`/`closeHelp`/`toggleHelp`/`isHelpOpen`) |
+| `core/stateMachine.ts` | Pure state-machine evaluator (`createSMInstance`): entry resolution, any-then-current transition evaluation (array order, at most one per advance), bool/number/trigger conditions (triggers arm until consumed at end of an advance's evaluation), crossfade blending running both clip clocks with the absolute-keys/rest-fallback rule, exit-freeze, rest pseudo-state (`SM_REST_STATE_ID`); deterministic — time flows only through `advance(dtMs)` |
+| `panels/smPanel.ts` | State-machine editor UI (the timeline's `🔀 logic` view): machine CRUD, draggable state graph (positions persist on `SMState.x/y`), armed click-click transition creation, condition/duration editors, inputs list (live controls during preview), listeners editor; ▶ preview drives the canvas via view's `setPoseSampler` hook + rAF, capture-phase pointer listeners map canvas hits (ancestor-inclusive) to listener actions; `window.__smPanel` debug hook with deterministic `tick(dtMs)` |
+| `ai/claude.ts` | Anthropic SDK calls (`claude-opus-4-8`): `animateWithClaude` (adaptive thinking, structured outputs guaranteeing a valid clip JSON, parent-aware system prompt, optional base64 pose snapshot for vision grounding) and `critiqueWithClaude` (plain-text animation review) |
 | `main.ts` | Bootstrapping, toolbar (open SVG/project, sample, save project, undo/redo, Compose/Lottie export, Setup/Animate toggle, `?` help), autosave to `localStorage`, and the single global `keydown` handler: Tab mode toggle; Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y undo/redo; Ctrl+S/O save/open; Ctrl+A select-all (nodes in node mode, else parts); Ctrl+D duplicate parts (Setup, skips skinned); Ctrl+G / Ctrl+Shift+G group/ungroup; Ctrl+C/V keyframe copy-paste; V/T/R/I tool keys; `%` snapping toggle; Shift+H / Shift+V flips; `+`/`-` zoom; `?`/F1 help overlay; PageUp/PageDown z-order; Delete and arrows resolve by context (animate keys → nodes → setup parts → playhead scrub); Escape tiers (help overlay → bone placement → path → group/deselect); `F` fit-view; Space play (F/Space/letter keys fire only without ctrl/meta/alt) |
 
 ## Roadmap
@@ -123,7 +151,7 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   don't respond to pose drags and export rigidly.
 - **Tool semantics** (`state.tool`): 'select' keeps the classic mode-dependent drags;
   'translate'/'rotate' force that manipulation in both editor modes (Setup → rest,
-  Animate → keys); 'ik' rotates the two nearest ancestor joints (`src/ik.ts`). Gizmo
+  Animate → keys); 'ik' rotates the two nearest ancestor joints (`src/geometry/ik.ts`). Gizmo
   drags reuse the exact same drag pipelines as body drags.
 - **Node types are Inkscape's convention** (`RigPath.nodeTypes`, one char per drawing
   command, Z excluded): 'c' corner, 's' smooth (mirror direction), 'z' symmetric
@@ -520,7 +548,7 @@ skin-weight math — and the curve editor's `graph.test.ts`).
 - **Transform tools** (`state.tool`, keys V/T/R/I + icon switcher): translate gizmo
   with axis arrows (verified: X-arrow drag with a diagonal pointer moved tx only),
   rotate ring, IK tool. Flips rebound to Shift+H/V.
-- **IK**: two-bone analytic solve in `src/ik.ts`; verified live on a placed bone
+- **IK**: two-bone analytic solve in `src/geometry/ik.ts`; verified live on a placed bone
   chain — both ancestor joints rotate, the grabbed part's own channel untouched, the
   grab point chases the pointer. Works on rest (Setup) and keys (Animate).
 - **Bones v2**: press-drag-release placement (origin→tip, live preview), kite glyph,
@@ -531,7 +559,7 @@ skin-weight math — and the curve editor's `graph.test.ts`).
   cache keyed by geometry signature). Verified: bind → bone rotation deforms the
   rendered path while `path.d` rest data stays untouched; Setup shows rest; unbind
   restores rigidity. Exports render skinned parts RIGIDLY (documented limitation).
-- **Curve editor** (`src/graph.ts` + timeline "curves" toggle): verified a preset
+- **Curve editor** (`src/timeline/graph.ts` + timeline "curves" toggle): verified a preset
   handle grab converts the segment to a custom bezier (x-clamped, y overshoots
   allowed), sampling honors it (rendered pose differs vs preset and restores
   exactly), and both exporters map it (Compose `CubicBezierEasing`, Lottie o/i).
@@ -550,7 +578,7 @@ numeric/DOM assertions; `npm run build` clean; **142 unit tests passing** (adds
   bbox-center compensation — verified 0.1 px center drift, pivot untouched, flip-back
   exact.
 - **Align & distribute** (inspector section, Setup, with reference dropdown:
-  selection/first/last/canvas): pure math in `src/align.ts`, applied through
+  selection/first/last/canvas): pure math in `src/geometry/align.ts`, applied through
   parent-chain-aware rest translation. Verified left-align converges edges to within
   the 0.1-unit rest rounding.
 - **Bezier node editing**: handle lines, node click-selection, one-shot

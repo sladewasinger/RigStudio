@@ -9,7 +9,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { Clip, Keyframe, RigChanges, RigDoc } from './model';
+import { Clip, Keyframe, RigChanges, RigDoc } from '../core/model';
 
 const MODEL = 'claude-opus-4-8';
 

@@ -11,8 +11,8 @@
  * dispatches 'rig-keys-changed' so the timeline rebuilds.
  */
 
-import { Easing, Keyframe, Track, sampleKeyList } from './model';
-import { checkpoint } from './history';
+import { Easing, Keyframe, Track, sampleKeyList } from '../core/model';
+import { checkpoint } from '../core/history';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const HEIGHT = 220;

@@ -13,11 +13,11 @@
 import {
   state, notify, activeClip, deleteKeyframe, Track, Keyframe, EASINGS, Easing,
   copyKeys, pasteKeysAt, copyPoseAt, clipboardSize,
-} from './model';
-import { renderPose } from './view';
-import { checkpoint } from './history';
+} from '../core/model';
+import { renderPose } from '../view';
+import { checkpoint } from '../core/history';
 import { buildGraphPanel, onGraphChange } from './graph';
-import { buildSMPanel, stopPreview, setLogicVisible } from './smPanel';
+import { buildSMPanel, stopPreview, setLogicVisible } from '../panels/smPanel';
 
 let container: HTMLElement;
 let rafId = 0;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { parsePath } from '../../paths';
+import { parsePath } from '../../geometry/paths';
 import { selectedNodeCount } from '../../view';
 import { groupAction } from '../../panels';
 import {

@@ -9,9 +9,9 @@
  * skinRender.ts owns it privately.)
  */
 
-import { state, Channel, RigPart } from '../model';
-import { Mat } from '../transforms';
-import { SnapCandidate } from '../snap';
+import { state, Channel, RigPart } from '../core/model';
+import { Mat } from '../geometry/transforms';
+import { SnapCandidate } from '../geometry/snap';
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 export const ROTATE_SNAP_DEGREES = 15;

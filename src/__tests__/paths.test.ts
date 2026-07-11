@@ -13,7 +13,7 @@ import {
   isSingleSubpath,
   isClosedPath,
   nodeCount,
-} from '../paths';
+} from '../geometry/paths';
 
 type CubicCmd = Extract<PathCmd, { cmd: 'C' }>;
 type ArcCmd = Extract<PathCmd, { cmd: 'A' }>;

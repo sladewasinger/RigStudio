@@ -12,7 +12,7 @@ import {
   RigPath,
   Track,
   state,
-} from '../model';
+} from '../core/model';
 
 export function makePath(id: string, overrides: Partial<RigPath> = {}): RigPath {
   return {

@@ -9,7 +9,7 @@
  * SVG's authored rotation center).
  */
 
-import { state } from '../model';
+import { state } from '../core/model';
 import { ctx, SVG_NS } from './context';
 import { svgPoint } from './coords';
 import { renderPose } from './render';

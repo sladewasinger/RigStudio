@@ -15,19 +15,19 @@
  * middle-drag pans, resetView re-fits.
  */
 
-export { buildCanvas } from './view/canvas';
-export { partRootBoxes } from './view/pose';
-export { clearGroupEntry, enterGroupsFor } from './view/focus';
-export { renderPose, setPoseSampler } from './view/render';
-export { updatePathAttrs, reorderCanvas, registerPart, unregisterPart } from './view/partDom';
+export { buildCanvas } from './canvas';
+export { partRootBoxes } from './pose';
+export { clearGroupEntry, enterGroupsFor } from './focus';
+export { renderPose, setPoseSampler } from './render';
+export { updatePathAttrs, reorderCanvas, registerPart, unregisterPart } from './partDom';
 export {
   hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, applyNodeOp,
   deleteSelectedNodes, nudgeSelectedNodes, canDeleteSegment, canJoinNodes,
   deleteSelectedSegment, joinSelectedNodes,
-} from './view/nodeEditing';
-export type { NodeOp } from './view/nodeEditing';
+} from './nodeEditing';
+export type { NodeOp } from './nodeEditing';
 export {
   flipSelected, nudgeSelectedParts, applyRootDeltas, bindSelectedToBones,
   unbindSelectedSkin, startBonePlacement, cancelBonePlacement,
-} from './view/rigOps';
-export { resetView, zoomBy } from './view/camera';
+} from './rigOps';
+export { resetView, zoomBy } from './camera';

@@ -3,8 +3,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { solveAim, solveTwoBone, Pt } from '../ik';
-import { distToSegment, skinWeights } from '../skin';
+import { solveAim, solveTwoBone, Pt } from '../geometry/ik';
+import { distToSegment, skinWeights } from '../geometry/skin';
 
 /** Rotate `p` around `c` by deg (screen convention: +deg clockwise, +y down). */
 function rot(p: Pt, c: Pt, deg: number): Pt {

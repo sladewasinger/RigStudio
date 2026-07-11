@@ -22,9 +22,9 @@
 
 import '../../style.css';
 import { expect } from 'vitest';
-import { state, notify, selectPart as modelSelectPart } from '../../model';
+import { state, notify, selectPart as modelSelectPart } from '../../core/model';
 import { renderPose } from '../../view';
-import { Mat, matrixOfTransform } from '../../transforms';
+import { Mat, matrixOfTransform } from '../../geometry/transforms';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 

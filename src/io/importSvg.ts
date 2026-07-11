@@ -17,8 +17,8 @@
  *   3. otherwise the canvas falls back to the rendered bbox center.
  */
 
-import { PivotHint, RigDoc, RigPart, RigPath, freshId } from './model';
-import { rotationPivotOf } from './transforms';
+import { PivotHint, RigDoc, RigPart, RigPath, freshId } from '../core/model';
+import { rotationPivotOf } from '../geometry/transforms';
 
 const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
 const SODIPODI_NS = 'http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd';

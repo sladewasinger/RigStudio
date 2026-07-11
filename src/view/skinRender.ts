@@ -7,10 +7,10 @@
  * edits) or the binding changes, via `invalidateSkinCache`.
  */
 
-import { state, RigPart } from '../model';
-import { parsePath, serializePath, pathToCubics, PathCmd } from '../paths';
-import { skinWeights, Seg } from '../skin';
-import { Mat, matrixOfTransform, multiply } from '../transforms';
+import { state, RigPart } from '../core/model';
+import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
+import { skinWeights, Seg } from '../geometry/skin';
+import { Mat, matrixOfTransform, multiply } from '../geometry/transforms';
 import { fullPoseTransform } from './pose';
 
 // Runtime cache: parsed rest geometry + per-point weights, invalidated when the

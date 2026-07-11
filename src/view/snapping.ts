@@ -4,10 +4,10 @@
  * the pure snap math lives in `src/snap.ts`.
  */
 
-import { state, RigPart, RigPath } from '../model';
-import { parsePath } from '../paths';
-import { applyMat, invertMat, matrixOfTransform, multiply } from '../transforms';
-import { SnapCandidate, boxFeaturePoints } from '../snap';
+import { state, RigPart, RigPath } from '../core/model';
+import { parsePath } from '../geometry/paths';
+import { applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
+import { SnapCandidate, boxFeaturePoints } from '../geometry/snap';
 import { nodeKey } from './context';
 import { pathHolderMat, screenScaleOf } from './coords';
 import { effectivePivot, groupTransformOf, partRootBoxes } from './pose';

@@ -7,8 +7,8 @@
  * `ctx.poseSampler`, when set by the state-machine editor, overrides normal sampling.
  */
 
-import { state, RigPart, sampleChannel, channelValue, ancestorChain } from '../model';
-import { Mat, applyMat, invertMat, matrixOfTransform } from '../transforms';
+import { state, RigPart, sampleChannel, channelValue, ancestorChain } from '../core/model';
+import { Mat, applyMat, invertMat, matrixOfTransform } from '../geometry/transforms';
 import { ctx } from './context';
 
 /** The time to sample animation at, or null when Setup mode shows the bare rest pose. */

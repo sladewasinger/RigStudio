@@ -11,8 +11,8 @@
  */
 
 import { ctx, SVG_NS, round1, nodeKey, parseNodeKey } from './context';
-import { state, RigPart, selectedPart, selectedParts, ancestorChain } from '../model';
-import { parsePath } from '../paths';
+import { state, RigPart, selectedPart, selectedParts, ancestorChain } from '../core/model';
+import { parsePath } from '../geometry/paths';
 import { handleSize } from './coords';
 import { poseTime, effectivePivot, effectiveTip, partRootBoxes } from './pose';
 

@@ -9,8 +9,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { exportRiv, __riv } from '../exportRiv';
-import { Clip, RigDoc, RigPart, RigPath, StateMachine } from '../model';
+import { exportRiv, __riv } from '../io/exportRiv';
+import { Clip, RigDoc, RigPart, RigPath, StateMachine } from '../core/model';
 
 const DEG2RAD = Math.PI / 180;
 

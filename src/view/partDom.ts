@@ -8,7 +8,7 @@
  * forward-only.
  */
 
-import { RigPart, RigPath, state } from '../model';
+import { RigPart, RigPath, state } from '../core/model';
 import { ctx, SVG_NS } from './context';
 import { renderPose } from './render';
 import { renderOverlay } from './overlay';

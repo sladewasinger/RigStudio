@@ -3,7 +3,7 @@
  * Boxes here are root-space bboxes; every expected delta is hand-computed.
  */
 import { describe, expect, it } from 'vitest';
-import { AlignEdge, Box, alignDeltas, distributeDeltas } from '../align';
+import { AlignEdge, Box, alignDeltas, distributeDeltas } from '../geometry/align';
 
 /** Three boxes with distinct edges/centers on both axes. */
 function sampleBoxes(): Map<string, Box> {

@@ -161,9 +161,9 @@ import {
   SMListener,
   SMState,
   Track,
-} from './model';
-import { parsePath, pathToCubics } from './paths';
-import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from './transforms';
+} from '../core/model';
+import { parsePath, pathToCubics } from '../geometry/paths';
+import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
 
 // ---- Format constants ----
 

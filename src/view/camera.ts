@@ -4,7 +4,7 @@
  * (also used by the pan drag), and zoomAround/zoomBy scale around a point.
  */
 
-import { state } from '../model';
+import { state } from '../core/model';
 import { ctx } from './context';
 import { svgPoint } from './coords';
 import { renderPose } from './render';

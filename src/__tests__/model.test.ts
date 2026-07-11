@@ -33,8 +33,8 @@ import {
   setParent,
   state,
   ungroupPart,
-} from '../model';
-import { multiply, rotationMat, translationMat } from '../transforms';
+} from '../core/model';
+import { multiply, rotationMat, translationMat } from '../geometry/transforms';
 import { makeClip, makeDoc, makePart, makePath, makeTrack, resetState } from './helpers';
 
 describe('sampleChannel', () => {

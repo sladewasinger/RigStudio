@@ -3,7 +3,7 @@
  * candidate lists, axis-locked behavior, box feature points, and delta snapping.
  */
 import { describe, expect, it } from 'vitest';
-import { snapPoint, snapDelta, boxFeaturePoints, SnapCandidate } from '../snap';
+import { snapPoint, snapDelta, boxFeaturePoints, SnapCandidate } from '../geometry/snap';
 
 describe('snapPoint', () => {
   it('returns the nearest candidate within threshold', () => {

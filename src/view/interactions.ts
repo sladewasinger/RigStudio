@@ -13,14 +13,14 @@
 import {
   RigPart, RigPath, state, notify, setKeyframe, selectedPart, selectedParts,
   selectPart, ancestorChain, channelValue, addNullPart,
-} from '../model';
+} from '../core/model';
 import {
   parsePath, serializePath, PathCmd,
-} from '../paths';
-import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../transforms';
-import { solveAim, solveTwoBone } from '../ik';
-import { snapPoint, snapDelta, SnapAxis } from '../snap';
-import { checkpoint } from '../history';
+} from '../geometry/paths';
+import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
+import { solveAim, solveTwoBone } from '../geometry/ik';
+import { snapPoint, snapDelta, SnapAxis } from '../geometry/snap';
+import { checkpoint } from '../core/history';
 import {
   ctx, DragState, ROTATE_SNAP_DEGREES, DRAG_THRESHOLD_PX, MIN_SCALE, MAX_SCALE,
   round1, round2, round3, linearOnly, nodeKey, parseNodeKey, snappingActive,

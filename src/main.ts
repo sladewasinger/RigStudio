@@ -2,14 +2,14 @@ import {
   state, notify, subscribe, activeClip, serializeDoc, deserializeDoc, EditorMode,
   selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder, deleteParts,
   setSnapEnabled, selectAllParts, duplicateParts, partById,
-} from './model';
-import { importSvg } from './importSvg';
+} from './core/model';
+import { importSvg } from './io/importSvg';
 import {
   buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, clearGroupEntry,
   hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, nudgeSelectedParts, unregisterPart,
   zoomBy, selectAllNodes,
 } from './view';
-import { checkpoint } from './history';
+import { checkpoint } from './core/history';
 import {
   buildLayersPanel, buildInspector, buildCanvasTools, flipAction, groupAction, ungroupAction,
 } from './panels';
@@ -17,12 +17,12 @@ import {
   buildTimeline, render as renderTimeline, togglePlay,
   copySelectedKeys, pasteKeysAtPlayhead, deleteSelectedKeys, nudgeSelectedKeys,
   hasKeySelection, clearKeySelection,
-} from './timeline';
-import { exportLottie } from './exportLottie';
-import { exportRiv } from './exportRiv';
-import { smHandleEscape, smHandleDelete } from './smPanel';
-import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './history';
-import { toggleHelp, closeHelp, isHelpOpen } from './help';
+} from './timeline/timeline';
+import { exportLottie } from './io/exportLottie';
+import { exportRiv } from './io/exportRiv';
+import { smHandleEscape, smHandleDelete } from './panels/smPanel';
+import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './core/history';
+import { toggleHelp, closeHelp, isHelpOpen } from './ui/help';
 
 const layersEl = document.getElementById('layers')!;
 const canvasEl = document.getElementById('canvas')!;

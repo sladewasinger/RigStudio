@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { canUndo, undo } from '../../history';
+import { canUndo, undo } from '../../core/history';
 import { zoomBy } from '../../view';
 import {
   bootRig, resetRig, state, partByLabel, clientPointOnPart, gestureDrag, click,

@@ -12,14 +12,14 @@
 
 import {
   RigPath, state, notify, selectedPart, freshId,
-} from '../model';
+} from '../core/model';
 import {
   parsePath, serializePath, insertNodeAfter, PathCmd,
   deleteSegment, closePath, joinPaths, isSingleSubpath, isClosedPath, nodeCount,
-} from '../paths';
-import { applyMat, invertMat } from '../transforms';
-import { snapPoint } from '../snap';
-import { checkpoint } from '../history';
+} from '../geometry/paths';
+import { applyMat, invertMat } from '../geometry/transforms';
+import { snapPoint } from '../geometry/snap';
+import { checkpoint } from '../core/history';
 import {
   ctx, DragState, linearOnly, nodeKey, parseNodeKey, snappingActive,
 } from './context';

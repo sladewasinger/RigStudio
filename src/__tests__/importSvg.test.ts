@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { importSvg } from '../importSvg';
+import { importSvg } from '../io/importSvg';
 
 const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
 

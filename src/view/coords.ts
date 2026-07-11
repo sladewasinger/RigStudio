@@ -8,8 +8,8 @@
  * such elements, whose screen matrix is garbage).
  */
 
-import { RigPart, RigPath } from '../model';
-import { Mat, applyMat, invertMat, matrixOfTransform } from '../transforms';
+import { RigPart, RigPath } from '../core/model';
+import { Mat, applyMat, invertMat, matrixOfTransform } from '../geometry/transforms';
 import { ctx } from './context';
 
 export function svgPoint(x: number, y: number): DOMPoint {

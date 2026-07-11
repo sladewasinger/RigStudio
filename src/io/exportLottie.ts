@@ -13,9 +13,9 @@
  * axis flipping is needed; the viewBox origin is baked into geometry and pivots.
  */
 
-import { Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from './model';
-import { parsePath, pathToCubics } from './paths';
-import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from './transforms';
+import { Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from '../core/model';
+import { parsePath, pathToCubics } from '../geometry/paths';
+import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
 
 const FR = 60;
 

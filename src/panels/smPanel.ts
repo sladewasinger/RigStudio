@@ -18,10 +18,10 @@ import {
   StateMachine, SMState, SMTransition, SMInput, SMCondition, SMListener, SMListenerAction,
   SMInputType, SMConditionOp,
   newStateMachine,
-} from './model';
-import { checkpoint } from './history';
-import { renderPose, setPoseSampler } from './view';
-import { createSMInstance, SMInstance, SM_REST_STATE_ID } from './stateMachine';
+} from '../core/model';
+import { checkpoint } from '../core/history';
+import { renderPose, setPoseSampler } from '../view';
+import { createSMInstance, SMInstance, SM_REST_STATE_ID } from '../core/stateMachine';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 

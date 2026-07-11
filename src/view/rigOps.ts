@@ -7,9 +7,9 @@
 
 import {
   state, selectedParts, setKeyframe, channelValue,
-} from '../model';
-import { parsePath, serializePath, pathToCubics, PathCmd } from '../paths';
-import { applyMat, invertMat, matrixOfTransform, multiply } from '../transforms';
+} from '../core/model';
+import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
+import { applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
 import { ctx, linearOnly, round1, round3 } from './context';
 import {
   poseTime, groupTransformOf, chainMatOf, effectivePivot, effectiveTip, fullPoseTransform,

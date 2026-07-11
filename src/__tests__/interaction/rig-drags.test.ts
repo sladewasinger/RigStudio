@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { canUndo, undo } from '../../history';
-import { applyMat } from '../../transforms';
+import { canUndo, undo } from '../../core/history';
+import { applyMat } from '../../geometry/transforms';
 import {
   bootRig, resetRig, state, partByLabel, clientPointOnPart, gestureDrag,
   screenScale, expectClose, docToClient, selectByLabel, overlayEl, overlayCount,

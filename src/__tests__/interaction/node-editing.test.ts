@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { parsePath, PathCmd } from '../../paths';
+import { parsePath, PathCmd } from '../../geometry/paths';
 import {
   bootRig, resetRig, partByLabel, gestureDrag, expectClose, overlayEl,
   clientCenterOf, enterNodeMode, rawToClient, wheelAt, viewBox,

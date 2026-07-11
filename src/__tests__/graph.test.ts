@@ -5,8 +5,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { PRESET_BEZIER, niceStep, valueRange } from '../graph';
-import { Easing, Keyframe, cubicBezierEase } from '../model';
+import { PRESET_BEZIER, niceStep, valueRange } from '../timeline/graph';
+import { Easing, Keyframe, cubicBezierEase } from '../core/model';
 
 const key = (time: number, value: number, easing: Easing = 'linear'): Keyframe =>
   ({ time, value, easing });

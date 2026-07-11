@@ -10,7 +10,7 @@ import {
   rotationMat,
   rotationPivotOf,
   translationMat,
-} from '../transforms';
+} from '../geometry/transforms';
 
 function expectMatClose(actual: Mat, expected: Mat, digits = 9): void {
   expect(actual.a).toBeCloseTo(expected.a, digits);

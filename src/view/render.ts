@@ -8,7 +8,7 @@
  * SMInstance (smPanel's only hook) and repaints.
  */
 
-import { state, activeClip, Channel } from '../model';
+import { state, activeClip, Channel } from '../core/model';
 import { ctx, SVG_NS } from './context';
 import { poseTime, rootPoseTransform, groupTransformOf } from './pose';
 import { focusContext } from './focus';

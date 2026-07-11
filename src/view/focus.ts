@@ -6,7 +6,7 @@
  * class). Clicking through a faded part falls to blank canvas, which exits focus.
  */
 
-import { state, RigPart, selectedPart, ancestorChain, partById } from '../model';
+import { state, RigPart, selectedPart, ancestorChain, partById } from '../core/model';
 import { ctx } from './context';
 
 /** Escape/blank-click hook: close all entered groups. */

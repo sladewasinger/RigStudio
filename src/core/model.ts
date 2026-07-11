@@ -8,7 +8,7 @@
  * carries a rest pose — offsets edited in Setup mode that keyframes add on top of.
  */
 
-import { Mat, applyMat, multiply, rotationMat } from './transforms';
+import { Mat, applyMat, multiply, rotationMat } from '../geometry/transforms';
 
 export interface Vec2 {
   x: number;
