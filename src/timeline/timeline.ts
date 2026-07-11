@@ -570,6 +570,10 @@ export function render(): void {
 
   // --- Ruler + lanes ---
   const lanes = div('tl-lanes');
+  // Catch-all: the blank gutter to the left of the ruler (above row 1, left of the
+  // label column) is the `lanes` container's own background, not covered by any
+  // child — mark it a boxTarget too so a marquee can start from the very top-left.
+  lanes.dataset.boxTarget = '1';
 
   const ruler = div('tl-ruler');
   const playhead = div('tl-playhead');
@@ -647,6 +651,12 @@ function buildLane(track: Track, duration: number, index: number): HTMLElement {
   // aimed drag inside the row's own vertical padding still starts a box-select.
   lane.dataset.boxTarget = '1';
   const label = div('tl-lane-label');
+  // Bug fix: the label is display-only text, but it's still the pointerdown TARGET
+  // when a drag starts directly over it (the lane's own boxTarget only helps when the
+  // hit lands on the row's padding, not the label element itself) — without this the
+  // gate in wireBoxSelect fell through and the browser started native text selection
+  // instead of the marquee. Marking it a boxTarget feeds it the same as the gap/strip.
+  label.dataset.boxTarget = '1';
   const partLabel =
     track.target === 'root' ? 'root' : (doc.parts.find((p) => p.id === track.target)?.label ?? '?');
   label.textContent = `${partLabel}.${track.channel}`;

@@ -16,6 +16,26 @@ import { parsePath } from '../geometry/paths';
 import { handleSize } from './coords';
 import { poseTime, effectivePivot, effectiveTip, partRootBoxes } from './pose';
 
+/** The 4 corner rotate-handle circles of the Inkscape-style rotate/skew handle set —
+ *  shared between Edit's rotate+skew set and Animate's rotate-only set (bug fix: the
+ *  second gizmo click must be visible in Animate too, not just internally flip a mode
+ *  flag with the box looking unchanged). */
+function appendRotateCorners(
+  handles: SVGGElement, x0: number, y0: number, x1: number, y1: number, size: number,
+): void {
+  for (const [name, hx, hy] of [
+    ['nw', x0, y0], ['ne', x1, y0], ['se', x1, y1], ['sw', x0, y1],
+  ] as [string, number, number][]) {
+    const h = document.createElementNS(SVG_NS, 'circle');
+    h.setAttribute('cx', String(hx));
+    h.setAttribute('cy', String(hy));
+    h.setAttribute('r', String(size * 0.9));
+    h.setAttribute('class', `rotate-handle handle-${name}`);
+    h.dataset.role = 'rotate-handle';
+    handles.appendChild(h);
+  }
+}
+
 // ---- Overlay: selection box, handles, pivots, drag gizmos, node handles ----
 
 export function renderOverlay(): void {
@@ -224,17 +244,7 @@ export function renderOverlay(): void {
         }
       } else {
         // Inkscape's second handle set: corners rotate, sides SKEW.
-        for (const [name, hx, hy] of [
-          ['nw', x0, y0], ['ne', x1, y0], ['se', x1, y1], ['sw', x0, y1],
-        ] as [string, number, number][]) {
-          const h = document.createElementNS(SVG_NS, 'circle');
-          h.setAttribute('cx', String(hx));
-          h.setAttribute('cy', String(hy));
-          h.setAttribute('r', String(size * 0.9));
-          h.setAttribute('class', `rotate-handle handle-${name}`);
-          h.dataset.role = 'rotate-handle';
-          handles.appendChild(h);
-        }
+        appendRotateCorners(handles, x0, y0, x1, y1, size);
         for (const [name, hx, hy] of [
           ['n', cx, y0], ['e', x1, cy], ['s', cx, y1], ['w', x0, cy],
         ] as [string, number, number][]) {
@@ -250,8 +260,22 @@ export function renderOverlay(): void {
         }
       }
       ctx.overlay.appendChild(handles);
+    } else if (!setup && !part.skin && ctx.handleMode === 'rotate') {
+      // Animate's second click (bug fix): the mode flip from translate to rotate was
+      // invisible — the dashed box looked identical, so the user couldn't tell a body
+      // drag now rotates instead of moves. Render the same 4 rotate-handle corners as
+      // Edit's rotate set (interactions.ts routes their drag through the same
+      // setup-aware rotate pipeline, keying instead of writing rest) but WITHOUT the
+      // skew sides — skew has no keyable channel in Animate.
+      const handles = document.createElementNS(SVG_NS, 'g');
+      handles.setAttribute('transform', boxTransform);
+      appendRotateCorners(handles, x0, y0, x1, y1, size);
+      ctx.overlay.appendChild(handles);
     } else {
-      // Animate mode: passive corner markers only (drag the body to rotate).
+      // Animate's first click (translate/scale set) — scale isn't keyable for parts,
+      // so this stays the plain dashed box with passive corner markers (drag the body
+      // to translate); also the fallback for skinned parts in either mode, which don't
+      // respond to pose drags at all.
       const boxCorners = document.createElementNS(SVG_NS, 'g');
       boxCorners.setAttribute('class', 'overlay-passive');
       boxCorners.setAttribute('transform', boxTransform);

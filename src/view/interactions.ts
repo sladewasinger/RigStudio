@@ -306,16 +306,23 @@ export function wireInteractions(): void {
       return;
     }
 
-    // Rotate handle (Setup mode): spin the rest pose around the pivot.
+    // Rotate handle (rotate/skew handle set's corner circles): spin the rest pose in
+    // Edit, or key rotate at the playhead in Animate (bug fix — these now render in
+    // Animate too, see overlay.ts, so the drag must mirror the body-drag/gizmo-ring
+    // rotate pipelines' setup-awareness instead of always writing rest).
     if (target instanceof SVGElement && target.dataset.role === 'rotate-handle') {
       const part = selectedPart();
       if (!part) return;
       const p = pointerInRoot(ev);
+      const setup = state.editorMode === 'setup';
       const pivot = effectivePivot(part, poseTime());
       const startAngle0 = Math.atan2(p.y - pivot.y, p.x - pivot.x);
       ctx.drag = {
         kind: 'rotate',
-        targets: selectedParts().map((sp) => ({ part: sp, start: sp.rest.rotate })),
+        targets: selectedParts().map((sp) => ({
+          part: sp,
+          start: setup ? sp.rest.rotate : channelValue(sp, 'rotate', state.currentTime),
+        })),
         pivotX: pivot.x, pivotY: pivot.y,
         startAngle: startAngle0,
         lastAngle: startAngle0,

@@ -96,6 +96,45 @@ describe('scenario — marquee starts in the lane padding (P5a item 4)', () => {
   });
 });
 
+describe('scenario — marquee starts from the label gutter (bug fix, extends P5a item 4)', () => {
+  it('a drag from the top-left of the label text still box-selects and leaves no text selected', () => {
+    setEditorMode('animate');
+    state.currentTime = 300;
+    const id = partByLabel('right_arm').id;
+    const pt = clientPointOnPart('right_arm');
+    gestureDrag(pt, { x: pt.x + 35, y: pt.y - 20 }); // first-click gizmo drag keys tx/ty
+    expect(clipTrack(id, 'tx'), 'tx track keyed').toBeTruthy();
+    expect(clipTrack(id, 'ty'), 'ty track keyed').toBeTruthy();
+
+    const laneEls = document.querySelectorAll<HTMLElement>('#timeline .tl-lane');
+    expect(laneEls.length, 'tx + ty lanes present').toBeGreaterThanOrEqual(2);
+    const firstLabel = laneEls[0].querySelector<HTMLElement>('.tl-lane-label');
+    expect(firstLabel, 'first lane label exists').toBeTruthy();
+    const labelRect = firstLabel!.getBoundingClientRect();
+    const lastRect = laneEls[laneEls.length - 1].getBoundingClientRect();
+
+    document.getSelection()?.removeAllRanges();
+    // The reported bug: a drag starting exactly on the label TEXT (not the row's own
+    // padding, which already worked per item 4 above) fell through the boxTarget gate
+    // and the browser started a native text selection instead of a marquee. Starts at
+    // the label's top-left corner, sweeps past the bottom-right of the whole block.
+    dragOnElement(
+      firstLabel!,
+      { x: labelRect.left + 2, y: labelRect.top + 2 },
+      { x: lastRect.right + 10, y: lastRect.bottom + 10 },
+    );
+
+    expect(
+      document.querySelectorAll('#timeline .tl-key.selected').length,
+      'the one key on each of the tx/ty lanes got box-selected',
+    ).toBe(2);
+    expect(
+      document.getSelection()?.toString() ?? '',
+      'no native text selection left behind by the drag',
+    ).toBe('');
+  });
+});
+
 describe('scenario — mode picker is mutually exclusive (P5a item 5)', () => {
   it('logic replaces the lanes area; curves adds beneath it; only one mode is active', () => {
     setEditorMode('animate');

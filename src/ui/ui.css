@@ -135,9 +135,24 @@
   border: 1.5px solid var(--muted);
   flex: none;
 }
-.key-toggle:hover:not(:disabled) { border-color: var(--accent); background: transparent; }
+/* Bug fix: hover/active must NOT touch fill state (background/border-color) — that
+   hid whether a key existed until the mouse left. Only an outer ring communicates
+   hover/active now, on top of whatever fill state (hollow/filled) already applies.
+   `:active` needs its own override too: the global `button:active:not(:disabled)`
+   rule in style.css outranks `.key-toggle.is-keyed` on specificity, so without this
+   pressing a filled circle would flash it dark gray. */
+.key-toggle:hover:not(:disabled),
+.key-toggle:active:not(:disabled) {
+  background: transparent;
+  box-shadow: 0 0 0 3px var(--accent-2-soft);
+}
 .key-toggle.is-keyed { background: var(--accent); border-color: var(--accent); }
-.key-toggle.is-keyed:hover:not(:disabled) { filter: brightness(1.15); }
+.key-toggle.is-keyed:hover:not(:disabled),
+.key-toggle.is-keyed:active:not(:disabled) {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-2-soft);
+  filter: brightness(1.15);
+}
 
 /* ============================================================================
    AI assistant panel (src/panels/ai.ts) — busy state during an in-flight Claude
@@ -166,6 +181,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+/* Bug fix: `hidden` and this class have EQUAL CSS specificity (0,1,0); the author
+   rule above wins the cascade regardless of `busyRow.hidden` in ai.ts, so the busy
+   row rendered even at rest on a fresh load. This [hidden] override has higher
+   specificity (0,2,0) and always wins, restoring the attribute's effect. */
+.ai-busy-indicator[hidden] {
+  display: none;
 }
 .ai-busy-dot {
   width: 7px;

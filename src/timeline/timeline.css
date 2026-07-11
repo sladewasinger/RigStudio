@@ -11,6 +11,19 @@
    descendant rules using #timeline-prefixed selectors so they win on specificity
    regardless of <style>/<link> ordering between style.css and this file. */
 
+/* ---- Bug fix: labels/transport/key bar are display-only text and shouldn't enter
+   native text-selection mode when a drag starts on them (that's how a marquee drag
+   starting over the label gutter used to select the row's label text instead of
+   box-selecting). `user-select: none` panel-wide, opting text inputs back in so
+   the time/value keyframe fields (and any future text entry) stay editable. ---- */
+#timeline {
+  user-select: none;
+}
+#timeline input,
+#timeline textarea {
+  user-select: text;
+}
+
 /* ---- Resize splitter (sibling of #timeline, between it and #layout) ---- */
 #timeline-splitter {
   flex: 0 0 auto;
@@ -126,10 +139,12 @@
   justify-content: flex-end;
 }
 /* Gutter spacer between the label column and the strip — widens the "generous
-   padding" the spec asks for and doubles as marquee-start territory (below). */
-.tl-lane-gap { flex: none; width: 14px; }
-#timeline .tl-ruler { margin-left: 174px; } /* 160px label + 14px gap, kept in sync */
-.tl-lanes-pad { margin-left: 174px; height: 14px; }
+   padding" the spec asks for and doubles as marquee-start territory (below). Bumped
+   14px -> 20px (bug fix c) so the strip's start reads as visually clear of the
+   label text; the two margin-lefts below stay in sync (160px label + 20px gap). */
+.tl-lane-gap { flex: none; width: 20px; }
+#timeline .tl-ruler { margin-left: 180px; } /* 160px label + 20px gap, kept in sync */
+.tl-lanes-pad { margin-left: 180px; height: 14px; }
 
 .tl-lane-block {
   padding-top: var(--sp-1);

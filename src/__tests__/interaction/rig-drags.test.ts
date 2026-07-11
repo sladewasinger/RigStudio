@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { canUndo, undo } from '../../core/history';
 import { applyMat } from '../../geometry/transforms';
-import { channelValue, Channel } from '../../core/model';
+import { channelValue, Channel, setKeyframe } from '../../core/model';
 import {
   bootRig, resetRig, state, partByLabel, clientPointOnPart, gestureDrag,
   screenScale, expectClose, docToClient, selectByLabel, overlayEl, overlayCount,
@@ -185,6 +185,59 @@ describe('scenario 5 — animate unified gizmo body drag (P3 rework)', () => {
     expect(track, 'rotate track created').toBeTruthy();
     expect(track!.keyframes[0].time).toBe(0);
     expect(clipTrack(id, 'tx'), 'no tx track from the rotate drag').toBeFalsy();
+  });
+
+  it('bug fix: the second click also renders 4 rotate handles (0 skew) in Animate, and dragging one keys rotate', () => {
+    setEditorMode('animate');
+    state.currentTime = 0;
+    const id = partByLabel('right_arm').id;
+
+    let pt = clientPointOnPart('right_arm');
+    click(pt.x, pt.y); // first click: select → translate/scale set (no keyable scale, so no handles)
+    expect(overlayCount('.rotate-handle'), 'no rotate handles on the first (translate) click').toBe(0);
+    expect(overlayCount('.skew-handle'), 'no skew handles on the first click').toBe(0);
+
+    pt = clientPointOnPart('right_arm');
+    click(pt.x, pt.y); // second click: rotate mode — must now be VISIBLE (the reported bug)
+    expect(overlayCount('.rotate-handle'), '4 rotate handles visible on the second click').toBe(4);
+    expect(overlayCount('.skew-handle'), 'skew stays Edit-only — not a keyable channel').toBe(0);
+
+    // Pre-seed a rotate key that differs from rest, so a correct drag-start baseline
+    // MUST read the keyed value (channelValue), not rest.rotate — this is what proves
+    // the handle drag shares the setup-aware rotate pipeline (interactions.ts) rather
+    // than a naive port that always spins rest, which would pop the value back to a
+    // rest-relative angle the instant the drag begins.
+    const restRotate = partByLabel('right_arm').rest.rotate;
+    const keyedStart = restRotate + 40;
+    setKeyframe(id, 'rotate', keyedStart);
+    repaint();
+
+    const pivotC = docToClient(partByLabel('right_arm').pivot); // effectivePivot == pivot: own rotation doesn't move it
+    const handles = Array.from(overlayEl().querySelectorAll('[data-role="rotate-handle"]'));
+    expect(handles.length).toBe(4);
+    // Pick the handle farthest from the pivot for a clean lever arm (matches scenario 3).
+    const withDist = handles.map((h) => {
+      const c = clientCenterOf(h);
+      return { c, d: Math.hypot(c.x - pivotC.x, c.y - pivotC.y) };
+    }).sort((a, b) => b.d - a.d);
+    const start = withDist[0].c;
+
+    const th = (25 * Math.PI) / 180; // rotate a further 25° about the pivot
+    const rx = start.x - pivotC.x, ry = start.y - pivotC.y;
+    const target = {
+      x: pivotC.x + rx * Math.cos(th) - ry * Math.sin(th),
+      y: pivotC.y + rx * Math.sin(th) + ry * Math.cos(th),
+    };
+    gestureDrag(start, target);
+
+    const track = clipTrack(id, 'rotate');
+    expect(track, 'dragging the rotate-handle circle wrote a rotate key (shares the body-drag pipeline)').toBeTruthy();
+    const finalValue = channelOf(id, 'rotate');
+    expectClose(
+      Math.cos(((finalValue - keyedStart - 25) * Math.PI) / 180), 1, 1e-3,
+      'keyed rotate advances 25° from the ALREADY-KEYED value, not from rest',
+    );
+    expect(clipTrack(id, 'tx'), 'no tx track from a rotate-handle drag').toBeFalsy();
   });
 
   it('Shift+drag keys tx and ty at the playhead (always translates)', () => {

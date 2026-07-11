@@ -437,7 +437,9 @@ input[type='number'] { width: 90px; }
 
 .select-box.secondary { stroke: rgba(122, 162, 247, 0.45); }
 
-/* Inkscape-style handles (Setup mode) */
+/* Inkscape-style handles. Scale is Edit(Setup)-only (not keyable); .rotate-handle
+   is shared with Animate's rotate-mode handle set (view/overlay.ts) since rotate IS
+   keyable there. */
 .scale-handle {
   fill: var(--accent-2);
   stroke: #fff;
