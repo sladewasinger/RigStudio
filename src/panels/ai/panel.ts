@@ -14,6 +14,7 @@ import { ai } from './state';
 import {
   AiFields, applyBusyState, buildAiFields, mountAiActions, mountAiIntroFields, mountAiToggleFields,
 } from './fields';
+import { buildTemplateRow } from './templates';
 import { buildThreadStrip } from './threadStrip';
 import { recordTurn, summarizeTracks } from './threads';
 import { buildPreviewBar } from './previewBar';
@@ -106,6 +107,11 @@ export function buildAiPanel(el: HTMLElement): void {
   applyBusyState(fields, ai.busy); // reflect an in-flight request across a mid-request rebuild
   fields.status.textContent = ai.status;
   mountAiIntroFields(box, fields);
+
+  // AI Animate System v2 A5: motion-template quick actions — FILL the prompt from the
+  // rig profile + set duration, never auto-send (see templates.ts's decision comment).
+  const templates = buildTemplateRow(fields);
+  if (templates) box.appendChild(templates);
 
   // AI Animate System v2 A4: the refinement-thread strip for the ACTIVE clip, "under
   // the prompt box" per the wave brief — reads fresh every render (see threadStrip.ts).

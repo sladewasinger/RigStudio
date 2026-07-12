@@ -11,6 +11,8 @@ import {
   state, notify, activeClip, snapshotProtectedKeys, ProtectedKey,
 } from '../../core/model';
 import { animateWithClaude, critiqueWithClaude } from '../../ai/claude';
+import { buildRigProfileBlock } from '../../ai/profileBlock';
+import { getRigProfile } from '../../ai/rigProfile';
 import { buildThreadContextBlock } from '../../ai/threads';
 import {
   cloneArtworkSvg, rasterizeSvg, renderClipFilmstrip, FilmstripFrame,
@@ -140,6 +142,13 @@ export async function runAnimate(
         instruction = `${block}\n\nNEW INSTRUCTION: ${instruction}`;
       }
     }
+
+    // AI Animate System v2 A5: every Create/Modify request leads with a compact rig-
+    // profile block (chains/roles/symmetry — `ai/profileBlock.ts`) so free-text prompts
+    // benefit from the analysis too. Prepended FIRST: scene-level context reads before
+    // the A4 conversation context and the instruction itself. Cached profile — cheap.
+    const profileBlock = buildRigProfileBlock(getRigProfile(ctxv.doc.parts));
+    if (profileBlock) instruction = `${profileBlock}\n\n${instruction}`;
 
     const result = await animateCallImpl(
       ctxv.apiKey, ctxv.doc, clip, instruction, state.selectedPartIds,

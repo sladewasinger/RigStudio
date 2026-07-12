@@ -286,3 +286,39 @@
   border-color: transparent;
 }
 .ai-thread-clear:hover { color: var(--text); border-color: var(--border); }
+
+/* ============================================================================
+   AI motion-template quick actions (src/panels/ai/templates.ts, AI Animate System v2
+   A5 "Rig Profile + motion templates") — a compact one-line row of archetype buttons
+   under the prompt box. They only FILL the prompt (never send), so they read as small
+   input helpers, not action buttons: pill-shaped, quiet until hovered.
+   ============================================================================ */
+.ai-template-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: 0 0 var(--sp-2);
+}
+.ai-template-cap {
+  color: var(--muted);
+  font-size: 11px;
+  cursor: help;
+  margin-right: 2px;
+}
+.ai-panel .ai-template-btn {
+  margin: 0;
+  padding: 1px 8px;
+  height: auto;
+  min-height: 20px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.ai-panel .ai-template-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent-2);
+}
