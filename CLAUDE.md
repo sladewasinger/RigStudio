@@ -462,6 +462,8 @@ Two new GOTCHA conventions came out of this wave's recurring-bug analysis
 build clean, **332 unit / 11 files**, **72 interaction / 10 files**.
 Deferred by user decision: swap the default sample to girl_example + pull the
 commercial PIP_MASTER art from public distribution (the marked FINAL item).
+[Update: CANCELLED later that day — Pip stays as the permanent public demo
+sample; girl_example.svg remains a nested-import test fixture only.]
 
 ### Fourteenth wave (v2.12: UX overhaul program) — implemented and verified
 

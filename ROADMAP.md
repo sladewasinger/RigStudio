@@ -457,11 +457,9 @@ principles pass integrates last as a preset refinement turn.
   squash-stretch via part scale keys — choreography preserved, quality raised.
   Uses A3 filmstrips for before/after and A2 preview for acceptance.
 
-- [ ] **FINAL ITEM (do last): swap the default sample to girl_example** — Pip is
-  commercial art for the user's app; re-base the interaction-harness fixtures onto
-  the girl (or a neutral fixture), remove PIP_MASTER.svg from public/ and the
-  gh-pages build. NOTE: Pip is currently publicly served via the repo + GitHub
-  Pages — pull earlier if privacy matters.
+(The former "swap default sample to girl_example" FINAL item was CANCELLED
+2026-07-11 — user decision: Pip stays as the permanent public demo sample.
+girl_example.svg remains a nested-import test fixture only.)
 
 Category B — nice-to-have (untracked):
 - [ ] **Find/search parts** in the Layers tree. (S–M)
