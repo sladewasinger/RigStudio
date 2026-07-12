@@ -297,35 +297,33 @@ the ≋ "skinned" badge becomes a subtle renamed indicator (bone glyph + "deform
 its bones" tooltip); bezier-handle-level manual weights are deferred (control points
 inherit from their neighboring vertex).
 
-- [ ] **Bones/skinning bug overhaul** (in flight): reproduce-then-fix the six
+- [x] **Bones/skinning bug overhaul** (done d1c26b5): reproduce-then-fix the six
   live-use bugs — bbox auto-bind grabbing the wrong parts (→ real point-in-fill
   targeting + selected-part preference), bind not render-neutral, stale overlay
   after placement, dead-end clicks on deformed parts, independently draggable
   child origins (→ shared joints), inert IK tool.
-- [ ] **Freeze mode (Rive parity)**: `Y` key + toolbar toggle with an UNMISSABLE
+- [x] **Freeze mode (Rive parity)** (done b7ae446): `Y` key + toolbar toggle with an UNMISSABLE
   in-freeze indicator (banner + canvas tint). Pivots/origins/joints are visible
   but immovable (and don't change the cursor) outside freeze; freeze unlocks
   exactly that editing. Prevents the constant accidental origin-drags.
-- [ ] **Bone position model**: only a chain's ROOT bone has a position; child
+- [x] **Bone position model** (done b7ae446): only a chain's ROOT bone has a position; child
   bones are rotation + length from the parent tip (inspector shows exactly
   that; tips/origins derive). Editing length/rotation is how you fit a chain to
   artwork.
-- [ ] **Assignment via hierarchy**: placing a chain under an object is the whole
+- [x] **Assignment via hierarchy** (done d1c26b5/b7ae446): placing a chain under an object is the whole
   assignment story; weights stay auto-derived data (per-vertex, manual override
   editor remains for refinement); the layers indicator gets the subtle rename.
-- [ ] **File → New**: a New button (in-app confirm when unsaved work exists)
-  starting a fresh blank document with a default artboard.
+- [x] **File → New** (done b7ae446): a New button (in-app confirm when unsaved work
+  exists) starting a fresh blank document with a default artboard.
 - [x] **Table-stakes gap audit** (done 2026-07-11) — findings filed below.
 
 ### Table-stakes gap audit findings (2026-07-11)
 
-Category A — do next (untracked basics):
-- [ ] **Unsaved-changes guard** — confirm before Open / Load sample / New replaces the
-  doc (extend New's planned confirm), and set `beforeunload.returnValue` when dirty so
-  tab-close warns. Today all three swap silently + resetHistory → no undo. (S)
-- [ ] **Still-image export (PNG, SVG)** — an "Export PNG" (and SVG) of the current
-  frame / artwork, with an "export selection only" option. The SVG→canvas→PNG
-  rasterizer already exists in panels/ai.ts (reuse it + download()). (S–M)
+Category A — done (a66884c):
+- [x] **Unsaved-changes guard** — dirty flag at the checkpoint() chokepoint; New/
+  Open/Load sample confirm only when dirty; beforeunload warns when dirty.
+- [x] **Still-image export (PNG, SVG)** — toolbar buttons, @1x/@2x, artboard or
+  selection crop, chrome stripped, transparent background.
 
 Category B — nice-to-have (untracked):
 - [ ] **Find/search parts** in the Layers tree. (S–M)
