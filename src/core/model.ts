@@ -1320,6 +1320,98 @@ export function removeKeyAt(target: string, channel: Channel, time: number): boo
   return true;
 }
 
+// ---- AI Animate System v2 (A1: session & intent UX) ----
+
+/**
+ * A keyframe locked by the AI panel's "protect playhead keys" checkbox: the user is
+ * parked at a specific frame while asking Claude to modify the clip, and wants exactly
+ * the keys AT that frame (across every track) to survive untouched no matter what the
+ * response contains. `snapshotProtectedKeys` captures them BEFORE the request (same
+ * `<= 5` tolerance as `keyAt`, so a key "at the playhead" here is the same key
+ * `keyAt`/`removeKeyAt` would find there); `enforceProtectedKeys` restores them AFTER the
+ * response is applied — belt-and-suspenders on top of the prompt also listing them as
+ * untouchable, since a model can still ignore instructions.
+ */
+export interface ProtectedKey {
+  target: string; // part id, or 'root' (legacy)
+  channel: Channel;
+  time: number;
+  value: number;
+  easing: Easing;
+  bezier?: [number, number, number, number] | null;
+}
+
+export function snapshotProtectedKeys(clip: Clip, atTime: number): ProtectedKey[] {
+  const out: ProtectedKey[] = [];
+  for (const track of clip.tracks) {
+    const key = track.keyframes.find((k) => Math.abs(k.time - atTime) <= 5);
+    if (key) {
+      out.push({
+        target: track.target,
+        channel: track.channel,
+        time: key.time,
+        value: key.value,
+        easing: key.easing,
+        bezier: key.bezier ?? null,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Force every protected key back onto `clip` exactly as snapshotted, whether the AI
+ * response left the track alone, changed the key's value/easing/bezier, or dropped the
+ * track (or just that key) entirely. Returns how many keys actually needed correcting —
+ * 0 means the model behaved and this was a no-op. Pure and synchronous; callers wrap it
+ * in their own checkpoint (see panels/ai.ts's `applyAiResult`).
+ */
+export function enforceProtectedKeys(clip: Clip, protectedKeys: ProtectedKey[]): number {
+  let restored = 0;
+  for (const pk of protectedKeys) {
+    let track = clip.tracks.find((t) => t.target === pk.target && t.channel === pk.channel);
+    if (!track) {
+      track = { target: pk.target, channel: pk.channel, keyframes: [] };
+      clip.tracks.push(track);
+    }
+    const existing = track.keyframes.find((k) => Math.abs(k.time - pk.time) <= 5);
+    const changed =
+      !existing
+      || existing.value !== pk.value
+      || existing.easing !== pk.easing
+      || JSON.stringify(existing.bezier ?? null) !== JSON.stringify(pk.bezier ?? null);
+    if (changed) restored++;
+    if (existing) {
+      existing.time = pk.time;
+      existing.value = pk.value;
+      existing.easing = pk.easing;
+      existing.bezier = pk.bezier ?? undefined;
+    } else {
+      track.keyframes.push({
+        time: pk.time, value: pk.value, easing: pk.easing, bezier: pk.bezier ?? undefined,
+      });
+      track.keyframes.sort((a, b) => a.time - b.time);
+    }
+  }
+  return restored;
+}
+
+/**
+ * Turn a model-proposed clip name into a safe, unique one for the "Create new animation"
+ * button: trims/collapses whitespace, falls back to a generic name when blank, then
+ * de-dupes against `existing` clip names the way a file manager does — "wave", "wave 2",
+ * "wave 3" — matching case-insensitively so "Wave" doesn't silently collide with "wave".
+ */
+export function sanitizeClipName(raw: string | null | undefined, existing: string[]): string {
+  let base = (raw ?? '').trim().replace(/\s+/g, ' ');
+  if (!base) base = 'New animation';
+  const taken = new Set(existing.map((n) => n.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  let n = 2;
+  while (taken.has(`${base} ${n}`.toLowerCase())) n++;
+  return `${base} ${n}`;
+}
+
 // ---- Keyframe clipboard ----
 
 export interface CopiedKey {

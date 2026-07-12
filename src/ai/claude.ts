@@ -9,7 +9,7 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { Clip, Keyframe, RigChanges, RigDoc, RigPart } from '../core/model';
+import { Channel, Clip, Keyframe, RigChanges, RigDoc, RigPart } from '../core/model';
 
 const MODEL = 'claude-opus-4-8';
 
@@ -18,19 +18,40 @@ export interface RawClip {
   name: string;
   duration: number;
   tracks: { target: string; channel: string; keyframes: Keyframe[] }[];
+  /**
+   * Model-proposed name for a brand-new clip (AI Animate System v2 A1 "Create new
+   * animation" only — the schema only asks for this field on create-mode requests).
+   * `name` above is kept for back-compat and is otherwise unused by the apply path;
+   * this is the field that actually becomes the new clip's name, sanitized/deduped by
+   * `core/model.ts`'s `sanitizeClipName`.
+   */
+  clipName?: string;
 }
 
 export interface AnimateResult {
   clip: RawClip;
   /** Structural edits (only when the user opted in), or null. */
   rig: RigChanges | null;
+  /** How many keyframe times `clampRawClip` had to clamp into `[0, duration]` — surfaced
+   *  in the panel's status text so the "duration pinned" clamp isn't silent. */
+  clampedCount: number;
 }
 
-const CLIP_SCHEMA = {
-  type: 'object',
-  properties: {
+/**
+ * The clip response schema, parameterized over the two independent axes a request can
+ * vary on (AI Animate System v2 A1): `withRig` (the existing "allow rig changes" opt-in)
+ * and `withClipName` (Create-new mode only). Built as a function rather than fixed consts
+ * so the four combinations share one source of truth for the tracks/keyframes shape.
+ */
+function buildClipSchema(opts: { withRig: boolean; withClipName: boolean }): Record<string, unknown> {
+  const properties: Record<string, unknown> = {
     name: { type: 'string' },
-    duration: { type: 'integer', description: 'Clip length in milliseconds' },
+    duration: {
+      type: 'integer',
+      description:
+        'Clip length in milliseconds — ECHO BACK the exact pinned duration stated in the ' +
+        'request; this response never resizes the clip (see the duration-pin rule below).',
+    },
     tracks: {
       type: 'array',
       items: {
@@ -64,17 +85,27 @@ const CLIP_SCHEMA = {
         additionalProperties: false,
       },
     },
-  },
-  required: ['name', 'duration', 'tracks'],
-  additionalProperties: false,
-} as const;
+  };
+  const required = ['name', 'duration', 'tracks'];
 
-/** CLIP_SCHEMA plus opt-in structural rig edits (bones, reparenting, pivots). */
-const CLIP_WITH_RIG_SCHEMA = {
-  type: 'object',
-  properties: {
-    ...CLIP_SCHEMA.properties,
-    rig: {
+  // "gains an optional clipName" (A1 spec): optional relative to the BASE schema — it
+  // only exists at all on Create-new requests, added on top of everything above — but
+  // required WITHIN that variant, matching this file's existing strict-schema convention
+  // (every schema below marks every property it declares as required; "optionality" for
+  // fields that can genuinely be absent is expressed with a nullable type instead, e.g.
+  // "parent"/"tip" on addBones). A create-mode response always needs a name to propose.
+  if (opts.withClipName) {
+    properties.clipName = {
+      type: 'string',
+      description:
+        'A short, fitting name for this NEW clip (e.g. "wave", "idle_breathing") — will ' +
+        "be sanitized and de-duplicated against the rig's existing clip names before use.",
+    };
+    required.push('clipName');
+  }
+
+  if (opts.withRig) {
+    properties.rig = {
       type: 'object',
       description:
         'Structural rig edits, applied before the clip. Use empty arrays when the ' +
@@ -149,11 +180,12 @@ const CLIP_WITH_RIG_SCHEMA = {
       },
       required: ['addBones', 'reparent', 'movePivots'],
       additionalProperties: false,
-    },
-  },
-  required: ['name', 'duration', 'tracks', 'rig'],
-  additionalProperties: false,
-} as const;
+    };
+    required.push('rig');
+  }
+
+  return { type: 'object', properties, required, additionalProperties: false };
+}
 
 const RIG_EDIT_NOTES = `
 Structural edits (the user has enabled them): alongside the clip you may return "rig"
@@ -239,11 +271,26 @@ export const TARGETING_RULES = `Targeting rule — read carefully: NEVER set a t
 - Use the SELECTION and TREE to resolve vague references in the user's direction ("him",
   "the figure", "the arm", "it") to actual part labels.`;
 
+/**
+ * General statement of the A1 request contract — the CONCRETE numbers (which mode, the
+ * pinned duration, any protected keyframes) are per-request values, so they travel in the
+ * user message (see `buildRequestNotes`) rather than here; this paragraph just tells the
+ * model the rules exist and that they're enforced regardless of compliance.
+ */
+const REQUEST_MODES_NOTE = `Each request states its MODE — "create a new clip" (the current
+clip is reference context only, not modified) or "modify the current clip in place" — a
+PINNED duration your keyframe times must stay within (out-of-range times are clamped, the
+clip is never stretched), and sometimes a list of PROTECTED keyframes that must not change.
+Follow those per-request instructions exactly; the app also enforces them afterward
+regardless of what you return.`;
+
 export const SYSTEM = `You are the animation assistant inside Rig Studio, a 2D cutout-rig editor.
 
 ${RIG_SEMANTICS}
 
 ${TARGETING_RULES}
+
+${REQUEST_MODES_NOTE}
 
 Craft notes: use anticipation and follow-through; overlap limb timing slightly; ease
 in/out by default and linear only for mechanical motion; loop cleanly (first and last
@@ -358,17 +405,105 @@ function userContent(scene: string, tail: string, imageBase64?: string | null): 
   return blocks;
 }
 
+/** A protected keyframe as told to the model — by part LABEL (the scene JSON's frame of
+ *  reference), not id; see `core/model.ts`'s `ProtectedKey` for the id-keyed doc-side form
+ *  the panel actually enforces against after the response comes back. */
+export interface PromptProtectedKey {
+  target: string;
+  channel: Channel;
+  time: number;
+  value: number;
+}
+
+/**
+ * Per-request instructions that vary by call (unlike the static SYSTEM prompt, which only
+ * states that these rules exist — see `REQUEST_MODES_NOTE`): which mode this is, the
+ * pinned duration, any protected keyframes, and the user's direction. Exported for the
+ * unit suite's inspection; not itself a network call.
+ */
+export function buildRequestNotes(
+  mode: 'new' | 'modify',
+  pinnedDuration: number,
+  protectedKeys: PromptProtectedKey[] | undefined,
+  instruction: string,
+): string {
+  const lines: string[] = [];
+  lines.push(
+    mode === 'new'
+      ? 'Mode: CREATE A NEW CLIP for this direction. The "currentClip" below is REFERENCE ' +
+        'CONTEXT ONLY (composition, timing, and part usage you may draw on) — this request ' +
+        'does not modify it and you are not obligated to reuse its tracks. Propose a short, ' +
+        'fitting "clipName" for the new clip.'
+      : 'Mode: MODIFY THE CURRENT CLIP in place. Return the COMPLETE updated clip (every ' +
+        'track, not a diff); keep existing motion the user did not ask to change.',
+  );
+  lines.push(
+    `Duration is PINNED at ${pinnedDuration}ms for this clip: every keyframe "time" must ` +
+      `fall within 0..${pinnedDuration}. Do not stretch or shrink the overall length — out-` +
+      'of-range times will be clamped, not honored.',
+  );
+  if (protectedKeys && protectedKeys.length > 0) {
+    lines.push(
+      'The following keyframes are PROTECTED (locked by the user) and must be left EXACTLY ' +
+        'as given if you touch that track at all — do not move, re-value, or remove them:\n' +
+        protectedKeys.map((k) => `- ${k.target}.${k.channel} @ ${k.time}ms = ${k.value}`).join('\n'),
+    );
+  }
+  lines.push(`Direction: ${instruction}`);
+  return lines.join('\n\n');
+}
+
+/**
+ * AI Animate System v2 A1 "duration pinned" rule: the response's own "duration" field is
+ * NEVER trusted to resize the clip (no stretching) — every keyframe time is clamped into
+ * `[0, duration]` instead, and the output's duration is forced to the pinned value. Pure
+ * and exported so it's unit-testable without a network call.
+ */
+export function clampRawClip(raw: RawClip, duration: number): { clip: RawClip; clampedCount: number } {
+  let clampedCount = 0;
+  const tracks = raw.tracks.map((t) => ({
+    ...t,
+    keyframes: [...t.keyframes]
+      .map((k) => {
+        const time = Math.min(duration, Math.max(0, k.time));
+        if (time !== k.time) clampedCount++;
+        return { ...k, time };
+      })
+      .sort((a, b) => a.time - b.time),
+  }));
+  return { clip: { ...raw, duration, tracks }, clampedCount };
+}
+
+export interface AnimateCallOptions {
+  imageBase64?: string | null;
+  /** Opt-in structural rig edits (bones/reparenting/pivots) — same toggle as before,
+   *  now shared by both Create-new and Modify requests. */
+  allowRigChanges?: boolean;
+  /** 'new' asks for a brand-new clip (the passed-in `clip` is reference context only,
+   *  never mutated by the caller); 'modify' edits that clip's semantics in place. */
+  mode: 'new' | 'modify';
+  /** "Protect playhead keys" (mode 'modify' + the panel's checkbox) — listed in the
+   *  prompt as untouchable. Real enforcement is app-side (model.ts's
+   *  `enforceProtectedKeys`) since a model can still ignore this. */
+  protectedKeys?: PromptProtectedKey[];
+  signal?: AbortSignal;
+}
+
 export async function animateWithClaude(
   apiKey: string,
   doc: RigDoc,
   clip: Clip,
   instruction: string,
   selectedPartIds: string[],
-  imageBase64?: string | null,
-  allowRigChanges = false,
-  signal?: AbortSignal,
+  opts: AnimateCallOptions,
 ): Promise<AnimateResult> {
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  // The pinned duration is always the REFERENCE clip's current duration — for 'modify'
+  // that's the target clip itself (no stretching); for 'new' there's no duration picker
+  // yet (out of A1's scope), so a fresh clip simply matches the clip it was asked
+  // alongside, which is also the most useful default for the user watching it play.
+  const pinnedDuration = clip.duration;
+  const allowRigChanges = !!opts.allowRigChanges;
 
   const response = await client.messages.create(
     {
@@ -378,7 +513,7 @@ export async function animateWithClaude(
       output_config: {
         format: {
           type: 'json_schema',
-          schema: allowRigChanges ? CLIP_WITH_RIG_SCHEMA : CLIP_SCHEMA,
+          schema: buildClipSchema({ withRig: allowRigChanges, withClipName: opts.mode === 'new' }),
         },
       },
       system: allowRigChanges ? SYSTEM + RIG_EDIT_NOTES : SYSTEM,
@@ -386,12 +521,14 @@ export async function animateWithClaude(
         {
           role: 'user',
           content: userContent(
-            sceneJson(doc, clip, selectedPartIds), `Direction: ${instruction}`, imageBase64,
+            sceneJson(doc, clip, selectedPartIds),
+            buildRequestNotes(opts.mode, pinnedDuration, opts.protectedKeys, instruction),
+            opts.imageBase64,
           ),
         },
       ],
     },
-    { signal },
+    { signal: opts.signal },
   );
 
   if (response.stop_reason === 'refusal') {
@@ -403,17 +540,10 @@ export async function animateWithClaude(
   if (!text) throw new Error('No response content.');
 
   const raw = JSON.parse(text) as RawClip & { rig?: RigChanges };
-  const clipOut: RawClip = {
-    name: raw.name || clip.name,
-    duration: raw.duration,
-    tracks: raw.tracks.map((t) => ({
-      ...t,
-      keyframes: [...t.keyframes].sort((a, b) => a.time - b.time),
-    })),
-  };
+  const { clip: clamped, clampedCount } = clampRawClip(raw, pinnedDuration);
   // Track targets stay LABELS here — the caller applies rig changes first (new bones
   // don't have ids until then), then resolves targets against the updated doc.
-  return { clip: clipOut, rig: allowRigChanges ? (raw.rig ?? null) : null };
+  return { clip: clamped, rig: allowRigChanges ? (raw.rig ?? null) : null, clampedCount };
 }
 
 /** Plain-text animation review of the active clip. */
