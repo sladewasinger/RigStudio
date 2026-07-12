@@ -494,7 +494,12 @@ concept seed.
   filmstrip renderer). Known caveat: geometric auto-bind uses DOM isPointInFill —
   headless binding either implements a pure point-in-fill test or requires
   explicit part targets (agents name parts anyway).
-- [ ] **H2. `rig-studio-mcp` server** — tools: import_svg, list_parts/analyze_rig
+- [ ] **H2. `rig-studio-mcp` server** — LOCAL stdio transport (an npm package the
+  AI client spawns on demand — no hosting, no ports; remote/HTTP hosting is an
+  optional later tier). Strictly a wrapper over H1: needed for shell-less clients
+  (Claude Desktop etc.) + schema-guided tool calls + in-memory doc sessions;
+  Claude Code can already drive the H1 CLI directly. Tools: import_svg,
+  list_parts/analyze_rig
   (A5's RigProfile), add_bones/bind, apply_clip (the SAME structured schema as
   the in-app assistant — one schema, two front doors), add_state_machine,
   render_filmstrip, export_riv, save/load. Output files open directly in the
