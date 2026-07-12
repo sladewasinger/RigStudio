@@ -361,7 +361,7 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
   flipSelected pattern); second click = rotate handles (group rest.rotate,
   which genuinely propagates); skew skipped for groups (the set still visibly
   changes). Backed by the new visible-counterpart GOTCHA in CLAUDE.md.
-- [ ] **Full-chain IK (FABRIK)** — the current analytic solver rotates exactly two
+- [x] **Full-chain IK (FABRIK)** (05f0803) — the current analytic solver rotates exactly two
   ancestor joints and never the grabbed bone itself (it and its parent move as one
   rigid unit; depth capped). Replace with an n-joint FABRIK solve from the grabbed
   tip to the chain root: every joint participates incl. the grabbed bone's own
