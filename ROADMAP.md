@@ -346,11 +346,19 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
 - [ ] **IK drag feedback** — highlight the solving chain + target line during an
   IK drag so the tool explains itself.
 - [ ] **Nested-group SVG import** — the importer flattens below the top level;
-  rework to recursive: LABELED groups become parts at any depth (parented per the
-  SVG structure, geometry stays doc-space per the app convention), unlabeled
-  wrapper groups dissolve with transforms folded into children. Acceptance
-  fixture: public/girl_example.svg (Girl → Head/RightArm→Arm/LeftArm→Arm/Pants→
-  nested Pants).
+  rework to recursive: EVERY group becomes a part at any depth (exact SVG
+  structure preserved — user decision; label = inkscape:label, else the SVG id,
+  rename in-editor), parented per the nesting, geometry stays doc-space per the
+  app convention. Acceptance fixture: public/girl_example.svg.
+- [ ] **Tip drags never change a child bone's length** — dragging a parent's tip
+  moves the shared joint; every descendant's local geometry (length + relative
+  direction) is invariant, riding the joint. (Reported with screenshots; child
+  currently shortens.)
+- [ ] **FINAL ITEM (do last): swap the default sample to girl_example** — Pip is
+  commercial art for the user's app; re-base the interaction-harness fixtures onto
+  the girl (or a neutral fixture), remove PIP_MASTER.svg from public/ and the
+  gh-pages build. NOTE: Pip is currently publicly served via the repo + GitHub
+  Pages — pull earlier if privacy matters.
 
 Category B — nice-to-have (untracked):
 - [ ] **Find/search parts** in the Layers tree. (S–M)
