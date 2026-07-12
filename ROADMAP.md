@@ -506,6 +506,24 @@ concept seed.
   editor for review/refinement. One brain (the AI-animate system), two mouths
   (in-app panel, MCP).
 
+## Desktop / real file access (planned with Austin 2026-07-11 — after A & H;
+## Category B also queued after A & H per user decision)
+
+- [ ] **D1. File System Access API + PWA (browser, no packaging)** — behind a
+  small storage interface (open/save/saveAs/recents): Chromium's
+  showSaveFilePicker gives writable in-place Save (no more download-per-save);
+  persisted IndexedDB file handles make RECENT FILES real (subsumes the
+  Category-B item — don't build it twice); PWA manifest for installability.
+  Feature-detected; Firefox/Safari keep the download flow. Small (~day) —
+  benefits the deployed Pages app immediately; may slot earlier if desired.
+- [ ] **D2. Tauri desktop wrapper (NOT Electron — performance)** — native
+  installable reusing D1's storage interface with a Tauri fs/dialog
+  implementation: system WebView (WebView2=Chromium on Windows, so canvas
+  behavior matches the dev browser), 3–10MB bundles vs Electron's 100MB+
+  Chromium+Node, low memory, auto-updater, Win/macOS/Linux. macOS WKWebView
+  needs a QA pass (Safari-engine quirks). Electron only if a Node-side need
+  ever appears (none foreseen).
+
 ## Testing conventions (hard-learned)
 
 - **Dispatch to the true hit target**: interaction tests must target
