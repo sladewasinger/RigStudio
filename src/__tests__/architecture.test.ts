@@ -28,7 +28,6 @@ const GRANDFATHERED = new Map<string, number>([
   ['io/exportLottie.ts', 327],
   ['io/exportRiv.ts', 660],
   ['main.ts', 522],
-  ['panels/ai.ts', 647],
   ['panels/inspector.ts', 867],
   ['panels/layers.ts', 347],
   ['panels/smPanel.ts', 1254],

@@ -1,0 +1,137 @@
+/**
+ * The Claude animation assistant panel orchestrator: mounts in Animate mode only
+ * (locked v2.12 P5b decision — choreography against a clip makes no sense while
+ * editing the character itself), assembling `./fields.ts` (static form), `./threadStrip
+ * .ts` (AI Animate System v2 A4 refinement history), `./previewBar.ts` (the A2 review
+ * card, when a preview is active), and wiring the action buttons to `./requests.ts`.
+ * `./index.ts` is the public facade over this whole directory.
+ */
+import { state, notify } from '../../core/model';
+import { renderPose } from '../../view';
+import { AnimateResult } from '../../ai/claude';
+import { FilmstripFrame } from '../../ui/snapshot';
+import { ai } from './state';
+import {
+  AiFields, applyBusyState, buildAiFields, mountAiActions, mountAiIntroFields, mountAiToggleFields,
+} from './fields';
+import { buildThreadStrip } from './threadStrip';
+import { recordTurn, summarizeTracks } from './threads';
+import { buildPreviewBar } from './previewBar';
+import { AiRequestCtx, runAnimate, runCritique, __setAnimateCallForTest } from './requests';
+import {
+  commitPreview, debugStatus, debugTick, discardPreview, isPreviewActive,
+  reconcilePreviewLifecycle, renderCandidateFilmstrip,
+} from './preview';
+
+/** Apply button (real or via the debug hook): commits the candidate exactly like pre-
+ *  A2 did, then AI Animate System v2 A4 records a refinement-thread turn — APPLY ONLY
+ *  (see `./threads.ts`'s doc comment: the thread reflects what actually landed, never a
+ *  discarded candidate or an in-flight Retry). */
+function handleApply(): void {
+  const instruction = ai.promptText; // capture BEFORE clearing below — this IS the request's instruction
+  const committed = commitPreview();
+  if (!committed || !committed.outcome) {
+    ai.status = 'Failed to apply — no document loaded.';
+    notify();
+    return;
+  }
+  const { outcome, mode, clampedCount } = committed;
+  state.editorMode = 'animate';
+  state.currentTime = 0;
+  state.playing = true;
+  const clampNote = clampedCount > 0
+    ? ` (clamped ${clampedCount} out-of-range key time${clampedCount === 1 ? '' : 's'})`
+    : '';
+  ai.status = mode === 'new'
+    ? `Done — created "${outcome.clip.name}" and switched to it${outcome.structural}${clampNote}.`
+    : `Done — playing the result${outcome.structural}${clampNote}.`;
+
+  if (state.doc) {
+    const doc = state.doc;
+    const labelOf = (id: string) => doc.parts.find((p) => p.id === id)?.label ?? id;
+    recordTurn(doc.name, outcome.clip.name, {
+      instruction,
+      mode,
+      summary: summarizeTracks(outcome.clip.tracks, labelOf),
+      clip: { duration: outcome.clip.duration, tracks: outcome.clip.tracks },
+    });
+  }
+
+  // Clear the prompt only on a SUCCESSFUL apply (state.ts's AiPanelState doc comment).
+  ai.promptText = '';
+  renderPose();
+  document.dispatchEvent(new CustomEvent('rig-play'));
+  notify();
+}
+
+function handleDiscard(): void {
+  if (!discardPreview()) return;
+  ai.status = '';
+  notify();
+}
+
+// ---- Debug hook for headless verification (mirrors __smPanel's tick pattern) ----
+if (typeof window !== 'undefined') {
+  (window as unknown as { __aiPreview: unknown }).__aiPreview = {
+    isActive: (): boolean => isPreviewActive(),
+    status: () => debugStatus(),
+    tick: (dtMs: number) => debugTick(dtMs),
+    apply: (): void => handleApply(),
+    discard: (): void => handleDiscard(),
+    busy: (): boolean => ai.busy,
+    /** A3: renders a filmstrip from the CANDIDATE preview — headless/live verification
+     *  of frame sampling/restoration without a real Retry click. [] if none active. */
+    renderFilmstrip: (): Promise<FilmstripFrame[]> => renderCandidateFilmstrip(),
+    /** Console/live-verification convenience: the NEXT Create/Modify click resolves
+     *  with `result` instead of calling the network. */
+    fabricateNext: (result: AnimateResult): void => {
+      __setAnimateCallForTest(async () => result);
+    },
+  };
+}
+
+export function buildAiPanel(el: HTMLElement): void {
+  // A2: reconcile the two preview-lifecycle triggers with no dedicated main.ts hook
+  // (see ./preview.ts's LIFECYCLE section). SILENT: notify() already fired to reach
+  // this render pass, so calling it again here would recurse.
+  if (reconcilePreviewLifecycle()) ai.status = '';
+
+  if (state.editorMode !== 'animate') return;
+
+  const box = document.createElement('div');
+  box.className = 'ai-panel';
+  box.innerHTML = '<h3>Animate with Claude</h3>';
+
+  const fields: AiFields = buildAiFields();
+  applyBusyState(fields, ai.busy); // reflect an in-flight request across a mid-request rebuild
+  fields.status.textContent = ai.status;
+  mountAiIntroFields(box, fields);
+
+  // AI Animate System v2 A4: the refinement-thread strip for the ACTIVE clip, "under
+  // the prompt box" per the wave brief — reads fresh every render (see threadStrip.ts).
+  const strip = buildThreadStrip(() => notify());
+  if (strip) box.appendChild(strip);
+
+  mountAiToggleFields(box, fields);
+
+  const ctx: AiRequestCtx = {
+    fields,
+    setBusy: (busy) => applyBusyState(fields, busy),
+    previewBarRef: { current: null },
+  };
+
+  // A2: the preview bar — shown in place of an immediate apply once a Create/Modify
+  // request succeeds, between the busy readout and the action buttons.
+  if (isPreviewActive()) {
+    const bar = buildPreviewBar(ctx, { onApply: handleApply, onDiscard: handleDiscard });
+    if (bar) box.appendChild(bar);
+  }
+
+  mountAiActions(box, fields);
+
+  fields.createBtn.onclick = () => { void runAnimate(ctx, 'new'); };
+  fields.modifyBtn.onclick = () => { void runAnimate(ctx, 'modify'); };
+  fields.critiqueBtn.onclick = () => { void runCritique(ctx); };
+
+  el.appendChild(box);
+}

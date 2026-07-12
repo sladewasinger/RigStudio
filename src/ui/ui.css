@@ -251,3 +251,38 @@
 /* [hidden] must actually hide inside the AI panel — the display rules on buttons
    otherwise outrank the UA hidden rule (same fight .ai-busy-indicator[hidden] won). */
 .ai-panel [hidden] { display: none !important; }
+
+/* ============================================================================
+   AI refinement-thread strip (src/panels/ai/threadStrip.ts, AI Animate System v2 A4
+   "clip-scoped refinement threads") — a compact one-line readout under the prompt box
+   showing the ACTIVE clip's turn count + last instruction, with a clear-thread ✕.
+   Deliberately quiet (muted text, no border/background) — it's a secondary, ambient
+   status line, not another decision point like the preview bar above.
+   ============================================================================ */
+.ai-thread-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  padding: 2px var(--sp-1);
+  margin: 0 0 var(--sp-2);
+}
+.ai-thread-info {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-thread-clear {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  line-height: 1;
+  font-size: 11px;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+.ai-thread-clear:hover { color: var(--text); border-color: var(--border); }
