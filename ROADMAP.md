@@ -325,6 +325,33 @@ Category A — done (a66884c):
 - [x] **Still-image export (PNG, SVG)** — toolbar buttons, @1x/@2x, artboard or
   selection crop, chrome stripped, transparent background.
 
+Follow-ups from live bones testing (queued behind the freeze-semantics wave):
+- [ ] **MAJOR: node editing on a bone-deformed part is incoherent** — node handles
+  sit on the REST shape while the art draws deformed; dragging momentarily aligns
+  them, release diverges again. Fix: entering node editing on a bound part renders
+  THAT PART at rest (bind pose) for the duration — node editing edits rest data,
+  so the visuals must show rest; deformation resumes on exit (+ a hint).
+- [ ] **Bones visible in node-editing mode** (currently dimmed/hidden with the
+  other parts — they're the binding context and must stay visible/selectable).
+- [ ] **Bind button moves off the top bar** → node-editing-only, appears when
+  node(s) are selected; if no bone tip/origin is co-selected, opens a dialog
+  (which child bone of this part + tip-or-origin) — replaces the old whole-part
+  bind (auto-bind covers that path now).
+- [ ] **Canvas-tools bar overflow** — long hint text (e.g. the IK tool's) pushes
+  buttons out of view. Buttons must never hide: hint moves to its own slim second
+  line (ellipsis + full text on hover).
+- [ ] **Bone glyphs not zoom-stable** (kite geometry in doc units) — fix per the
+  new CLAUDE.md screen-constant-chrome gotcha, plus a generic zoom-sweep harness
+  assertion so the whole class of bug gets caught.
+- [ ] **IK drag feedback** — highlight the solving chain + target line during an
+  IK drag so the tool explains itself.
+- [ ] **Nested-group SVG import** — the importer flattens below the top level;
+  rework to recursive: LABELED groups become parts at any depth (parented per the
+  SVG structure, geometry stays doc-space per the app convention), unlabeled
+  wrapper groups dissolve with transforms folded into children. Acceptance
+  fixture: public/girl_example.svg (Girl → Head/RightArm→Arm/LeftArm→Arm/Pants→
+  nested Pants).
+
 Category B — nice-to-have (untracked):
 - [ ] **Find/search parts** in the Layers tree. (S–M)
 - [ ] **Project frame rate + frames/timecode display** — add doc.fps (exporters

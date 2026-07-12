@@ -11,7 +11,7 @@ import { state, RigPart } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
 import { skinWeights, overrideWeightRow, Seg } from '../geometry/skin';
 import { Mat, matrixOfTransform, multiply } from '../geometry/transforms';
-import { fullPoseTransform } from './pose';
+import { fullPoseTransform, effectivePivot, effectiveTip } from './pose';
 
 /**
  * Auto-weight falloff exponent for the render path (see skinWeights). A long thin limb
@@ -82,17 +82,44 @@ function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get
   return entry;
 }
 
+/** A bone's per-frame contribution: the rigid delta from its bind pose plus a stretch of
+ *  the along-axis component (so a lengthened bone stretches the limb, a shortened one
+ *  compresses it) applied in the BIND frame before the delta rotates it onto the current
+ *  axis. `s === 1` (unchanged length) reduces to the plain rigid delta. */
+interface BoneXform {
+  m: Mat;
+  bx: number; by: number; // bind-segment origin (root)
+  ax: number; ay: number; // bind-segment unit axis (zero when degenerate)
+  s: number; // stretch factor curLen / bindLen (clamped)
+}
+
+const STRETCH_MIN = 0.2;
+const STRETCH_MAX = 5;
+
 /** Per-frame linear-blend deformation: rewrite each path's d attribute. */
 export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | null): void {
   const skin = part.skin;
   if (!skin) return;
   const data = skinDataFor(part);
 
-  // Each bone's delta from its bind pose (identity at rest → rest geometry).
-  const deltas: Mat[] = skin.bones.map((b) => {
+  // Each bone's rigid delta from its bind pose (identity at rest → rest geometry) plus a
+  // length-stretch factor: dragging a bone tip rotates AND stretches the limb.
+  const xf: BoneXform[] = skin.bones.map((b) => {
     const bone = state.doc?.parts.find((p) => p.id === b.id);
-    if (!bone) return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-    return multiply(matrixOfTransform(fullPoseTransform(bone, t)), b.restWorldInv);
+    const m = bone
+      ? multiply(matrixOfTransform(fullPoseTransform(bone, t)), b.restWorldInv)
+      : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+    const bindLen = Math.hypot(b.bindSeg.q.x - b.bindSeg.p.x, b.bindSeg.q.y - b.bindSeg.p.y);
+    let ax = 0, ay = 0, s = 1;
+    if (bone && bindLen > 1e-3) {
+      ax = (b.bindSeg.q.x - b.bindSeg.p.x) / bindLen;
+      ay = (b.bindSeg.q.y - b.bindSeg.p.y) / bindLen;
+      const pv = effectivePivot(bone, t);
+      const tp = effectiveTip(bone, t);
+      const curLen = tp ? Math.hypot(tp.x - pv.x, tp.y - pv.y) : bindLen;
+      s = Math.min(STRETCH_MAX, Math.max(STRETCH_MIN, curLen / bindLen));
+    }
+    return { m, bx: b.bindSeg.p.x, by: b.bindSeg.p.y, ax, ay, s };
   });
 
   for (const pd of data.paths) {
@@ -101,10 +128,17 @@ export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | nul
       const mapped = pd.pts[i].map((pt) => {
         const w = pd.weights[k++];
         let x = 0, y = 0;
-        for (let bi = 0; bi < deltas.length; bi++) {
-          const m = deltas[bi];
-          x += w[bi] * (m.a * pt.x + m.c * pt.y + m.e);
-          y += w[bi] * (m.b * pt.x + m.d * pt.y + m.f);
+        for (let bi = 0; bi < xf.length; bi++) {
+          const { m, s } = xf[bi];
+          let sx = pt.x, sy = pt.y;
+          if (s !== 1) {
+            // Scale the along-bone-axis component (bind frame) by s before the rigid delta.
+            const along = (pt.x - xf[bi].bx) * xf[bi].ax + (pt.y - xf[bi].by) * xf[bi].ay;
+            sx += (s - 1) * along * xf[bi].ax;
+            sy += (s - 1) * along * xf[bi].ay;
+          }
+          x += w[bi] * (m.a * sx + m.c * sy + m.e);
+          y += w[bi] * (m.b * sx + m.d * sy + m.f);
         }
         return { x, y };
       });

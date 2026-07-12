@@ -226,8 +226,16 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   public symbols are added to their module AND re-exported there. Overlay render-time
   side effects (handleMode reset, stale node-selection pruning) belong inside the
   render functions — do not "clean them up" out.
-- **Any change under `src/view/` must pass `npm run test:interaction`** (19 real-
-  gesture tests, headless Chromium, ~1 s). New interaction features get a scenario
+- **GOTCHA — ALL canvas chrome must be screen-constant under zoom.** This bug has
+  shipped repeatedly (pivot rings, gizmo halo, node glyphs, bone kites): any
+  overlay/control visual whose GEOMETRY is in doc units grows/shrinks with zoom.
+  The rule: sizes/radii/offsets derive from `handleSize()`/`screenScaleOf` (screen
+  px through the zoom), strokes use `vector-effect: non-scaling-stroke`, text
+  font-size divides by the screen scale. VERIFICATION of any new or touched chrome
+  MUST include a zoom sweep (fit → ~8×) asserting the element's on-screen size is
+  invariant.
+- **Any change under `src/view/` must pass `npm run test:interaction`** (real-
+  gesture tests, headless Chromium, ~1.5 s). New interaction features get a scenario
   there; the suite was mutation-checked (sabotaging a pipeline makes its scenario
   fail), keep it that trustworthy.
 - **`public/PIP_MASTER.svg` is the bundled sample artwork** ("Load sample" button),
@@ -266,31 +274,61 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   so one undo reverts placement + binding. Placing over empty/unmatched canvas binds
   nothing (silent). Re-binding an already-skinned part does NOT re-bake geometry (it is
   already in its bind pose); it refreshes the bone set in place and keeps overrides.
+- **Bones stay PARENTED under the art (hierarchy-as-assignment).** A chain placed on a
+  selected art part is parented to it (`art → bone1 → bone2 → …`), and that parenting is
+  the assignment: the layers tree shows the chain under the limb, and code must keep it
+  there. Bind must NOT re-parent the chain to root (an earlier overhaul did, to preserve
+  the bone world, and broke the tree — do not regress it).
 - **Bind is RENDER-NEUTRAL** (< 0.01px): the rendered geometry must be byte-stable
   before/after bind. Two traps, both fixed and both interaction-tested at the rendered
-  level (`interaction/bones.test.ts` B7): (a) `applyPathAttrs` MUST clear a stale DOM
+  level (`interaction/bones.test.ts` B7/B13): (a) `applyPathAttrs` MUST clear a stale DOM
   `transform` when the model's is empty — bind bakes `path.transform` into `d` and
   empties it, so a leftover DOM attribute double-applies (parts with an Inkscape
-  `rotate(...)`/`matrix(...)` on their paths shifted; transform-less parts didn't); (b)
-  a bone placed while an art was selected is parented to that art and RIDES its rest
-  ownPose (rotate+translate) — baking bakes that rest into the geometry and zeroes it on
-  the art, so `bindPartsToBones` then re-parents the bone to root and folds the (rigid)
-  lost pose into the bone's own rest (`reparentBoneToRootPreservingWorld`), keeping the
-  bone's world — hence the identity rest delta — exact. Otherwise the LBS rest delta
-  un-does the art's rotation and shifts the baked art.
-- **Connected chains.** A child bone's origin IS its parent bone's tip — one shared
-  joint. Dragging the child's pivot handle drags that joint and carries the parent's
-  `boneTip` along; dragging the parent's tip handle carries the child's origin (both in
-  `interactions.ts`, pivot/boneTip drag branches). The selected bone's tip handle
-  renders AFTER the glyph loop so a child glyph on the shared joint can't occlude it.
-  Root bones keep a free origin. **Freeze rule:** a shared JOINT — any bone pivot, and a
-  bone tip that has a child bone (marked with the `joint` class) — is only draggable in
-  freeze mode (`state.freezeMode`; see the conventions bullet). A LEAF bone's tip carries
-  no child origin, so it stays live outside freeze as an ordinary rotation/length edit.
+  `rotate(...)`/`matrix(...)` on their paths shifted; transform-less parts didn't); (b) a
+  bone parented to an art RIDES that art's rest ownPose (rotate+translate) — baking bakes
+  that rest into the geometry and zeroes it on the art, so the bone loses the ancestor
+  pose it inherited. `bindPartsToBones` folds the (rigid) lost pose into the bone's OWN
+  rest **while keeping its parentId** (`foldLostArtPoseIntoBoneRest`: solve
+  `chainMat·ownPose == W`), so its world — hence the identity rest delta and the whole
+  child sub-chain — is preserved exact without detaching the chain from the art. Otherwise
+  the LBS rest delta un-does the art's rotation and shifts the baked art.
+- **The pose model — freeze vs non-freeze (Edit mode).** A bone poses by ROTATION (about
+  its origin) + LENGTH (its tip). It has NO free translation — a child bone's origin IS
+  its parent's tip (one shared joint), so translating a bone alone would tear the chain.
+  All bone edits run the same pipelines; the mode only decides whether the SKINNED ART
+  follows or stays put:
+  - **NON-freeze (posing the limb):** reshaping a bone deforms the bound art through the
+    existing LBS delta-from-bind (`skinRender`). *Tip drag* (leaf or joint,
+    `aimBoneAtTip`) aims the bone at the pointer (rotates its `rest.rotate`) AND stretches
+    it (its length feeds a per-bone axis stretch in the LBS delta — the art actually
+    stretches, not just rotates); child origins ride the new tip. *Body drag / rotate
+    gizmo* rotates the bone about its origin (a bone's translate action is redirected to
+    rotate; bones are filtered out of every translate pipeline). *Child origin drag* ==
+    dragging the parent's tip (moves the shared joint, `aimBoneAtTip` on the parent), so
+    the chain never disconnects. Root bone origins are freeze-gated (as art pivots are).
+  - **FREEZE (`state.freezeMode`, editing the rig against static art):** the SAME gestures
+    move the bones, but the art must NOT move. At the first move of a freeze bone gesture,
+    `captureFrozenBaseline` snapshots the art's CURRENT rendered look into its rest
+    geometry and re-binds every bone at its current pose (identity delta, unit stretch);
+    each subsequent move calls `refreshBindForChain` (restWorldInv/bindSeg → identity
+    delta) so the art holds that frozen look while the bone moves; gesture END calls
+    `refreshFrozenSkinWeights` (rebuild auto weights from the new bind — parts with
+    manual overrides keep them). A ROOT bone origin / full-chain translate is draggable
+    ONLY in freeze. Inspector bone fields (rotation/length/position) route through the
+    same rule (`rebindFrozenChain`). Everything happens under the ONE gesture checkpoint,
+    so a freeze reshape + its bind refresh is a single undo.
+- **Connected-chain invariant.** `|child origin − parent tip| == 0` after ANY gesture,
+  in either mode. The selected bone's tip handle renders AFTER the glyph loop so a child
+  glyph on the shared joint can't occlude it. Interaction-tested (`bones.test.ts` B14
+  no-free-translation, `freeze.test.ts` F2; an `afterEach(assertNoGap)` re-checks it
+  after every scenario in both files).
 - **Weight model.** Auto weights are normalized inverse-distance-power to each bone's
   bind-time segment (`skinWeights`). The RENDER path passes a sharpened exponent
   (`skinRender.ts` `SKIN_WEIGHT_POWER = 4`, vs the unit-tested default 2) because
-  inverse-square bends a long thin limb mushily — 4 localizes the joint folds. On top
+  inverse-square bends a long thin limb mushily — 4 localizes the joint folds. A bone's
+  LENGTH change (vs its bind segment) applies a per-bone along-axis STRETCH to the LBS
+  delta (clamped), so dragging a tip stretches the limb; unchanged length ⇒ factor 1 ⇒
+  the plain rigid delta (backward-compatible). On top
   of auto weights sit **manual per-node overrides**: `skin.overrides[pathId][cmdIndex]`
   = `{a, b, t}` pins a node's weight to bone `a` at (1−t) blended with bone `b` at t
   (`b:null` = 100% a) — the origin↔tip lerp across the joint where a's tip meets b's

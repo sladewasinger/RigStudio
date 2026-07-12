@@ -111,12 +111,12 @@ fileInput.onchange = async () => {
 
 document.getElementById('btn-sample')!.onclick = async () => {
   if (!(await confirmReplaceIfDirty())) return;
-  const res = await fetch(`${import.meta.env.BASE_URL}girl_example.svg`);
+  const res = await fetch(`${import.meta.env.BASE_URL}PIP_MASTER.svg`);
   if (!res.ok) {
-    void dialog.alert('Sample not found — copy girl_example.svg into public/');
+    void dialog.alert('Sample not found — copy PIP_MASTER.svg into public/');
     return;
   }
-  loadSvgText(await res.text(), 'girl_example');
+  loadSvgText(await res.text(), 'pip');
 };
 
 // ---- Project save / autosave ----

@@ -11,9 +11,10 @@ import {
 } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from '../geometry/transforms';
-import { ctx, linearOnly, parseNodeKey, round1, round3 } from './context';
+import { ctx, linearOnly, parseNodeKey, round1, round3, wrapToPi } from './context';
 import {
   poseTime, groupTransformOf, chainMatOf, effectivePivot, effectiveTip, fullPoseTransform,
+  ownTranslateOf,
 } from './pose';
 import { applyPathAttrs } from './partDom';
 import { invalidateSkinCache } from './skinRender';
@@ -173,35 +174,41 @@ export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
   // but the bone still referenced the art — so at render its world lost the rotation while
   // the LBS rest record kept it, and the delta un-did the rotation, visibly shifting the
   // baked art (the reported "bind moved rest-rotated art" bug; identity-rest arts, and
-  // arts whose rotation lived in `part.transform` not `rest`, never showed it). Fix: move
-  // each such bone to root and FOLD the (rigid) art pose it lost into the bone's own rest,
-  // so its world — hence the identity rest delta and the whole child sub-chain — is
-  // preserved exactly.
+  // arts whose rotation lived in `part.transform` not `rest`, never showed it). Fix: FOLD
+  // the (rigid) art pose the bone lost into the bone's OWN rest, KEEPING it parented to the
+  // art, so its world — hence the identity rest delta and the whole child sub-chain — is
+  // preserved exactly while the layers tree still shows the chain under the art part
+  // (hierarchy-as-assignment; the older design re-parented the chain to root, breaking it).
   for (const bone of bones) {
     if (!bone.parentId || !bakedArtIds.has(bone.parentId)) continue;
-    reparentBoneToRootPreservingWorld(bone, boneWorlds.get(bone.id)!);
+    foldLostArtPoseIntoBoneRest(bone, boneWorlds.get(bone.id)!);
     invalidateSkinCache(bone.id);
   }
 }
 
 /**
- * Re-parent a bone to root while keeping its world transform `W` byte-stable: fold the
- * ancestor pose it loses into its own rest (rotate + translate around its unchanged
- * pivot). `W` is a product of rigid ownPoses (rotate + translate, no scale), so the
- * decomposition is exact; the pivot stays put so effectivePivot/effectiveTip — and any
- * child bones riding this one — are unchanged.
+ * Keep a bone parented to its (now baked) art while preserving its world transform `W`
+ * byte-stable: solve the bone's OWN rest so `chainMat(bone)·ownPose(bone) == W`. Bind bakes
+ * the art's rest into geometry and zeroes it, so the bone loses the ancestor pose it rode;
+ * this folds that loss into the bone's rest (rotate + translate around its unchanged pivot).
+ * After baking the art sits at root with an identity pose, so chainMat is identity and the
+ * target reduces to `W` — but the general form stays correct if the art itself had ancestors.
+ * `W` is a product of rigid ownPoses (rotate + translate, no scale), so the decomposition is
+ * exact; the pivot stays put so effectivePivot/effectiveTip — and child bones riding this
+ * one — are unchanged. Unlike the older design the bone is NOT re-parented to root, so the
+ * chain stays under the art part in the layers tree.
  */
-function reparentBoneToRootPreservingWorld(bone: RigPart, W: Mat): void {
-  bone.parentId = null;
-  const rotDeg = round3((Math.atan2(W.b, W.a) * 180) / Math.PI);
+function foldLostArtPoseIntoBoneRest(bone: RigPart, W: Mat): void {
+  const target = multiply(invertMat(chainMatOf(bone, null)), W);
+  const rotDeg = round3((Math.atan2(target.b, target.a) * 180) / Math.PI);
   const rad = (rotDeg * Math.PI) / 180;
   const cos = Math.cos(rad), sin = Math.sin(rad);
   const { x: px, y: py } = bone.pivot;
   // ownPose = translate(tx,ty)·rotate(rotDeg, pivot); its matrix translation is
-  // (tx,ty) + pivot − Rot·pivot, so solve (tx,ty) to reproduce W's translation.
+  // (tx,ty) + pivot − Rot·pivot, so solve (tx,ty) to reproduce target's translation.
   bone.rest.rotate = rotDeg;
-  bone.rest.tx = round3(W.e - px + (cos * px - sin * py));
-  bone.rest.ty = round3(W.f - py + (sin * px + cos * py));
+  bone.rest.tx = round3(target.e - px + (cos * px - sin * py));
+  bone.rest.ty = round3(target.f - py + (sin * px + cos * py));
 }
 
 /**
@@ -413,6 +420,140 @@ export function unbindSelectedSkin(): boolean {
   }
   renderPose();
   return true;
+}
+
+// ---- Bone reshaping (the freeze / non-freeze pose model) ----
+//
+// A bone is posed by ROTATION (around its origin) + LENGTH (its tip). There is no free
+// translation of a bone — a child bone's origin IS its parent's tip (one shared joint),
+// so translating a bone independently would tear the chain apart. Reshaping a bone rotates
+// its rest, which deforms any skinned art through the existing LBS delta-from-bind (art
+// follows). In FREEZE mode the SAME reshapes run but the bind reference is refreshed so the
+// art stays put (the rig is fitted against static art) — see refreshBindForChain below.
+
+/**
+ * Reshape a bone to reach `targetRoot` (root coords): AIM it (rotate `rest.rotate` so the
+ * origin→tip ray points at the target — this rotates any skinned art via the LBS delta) and
+ * set its LENGTH (its tip lands exactly on the target). Direct child origins ride the new tip
+ * (the shared joint stays connected; deeper joints stay connected through inheritance). The
+ * caller owns the checkpoint, freeze re-bind, and repaint.
+ */
+export function aimBoneAtTip(
+  bone: RigPart, targetRoot: { x: number; y: number }, t: number | null,
+): void {
+  const doc = state.doc;
+  if (!doc) return;
+  const origin = effectivePivot(bone, t);
+  const curTip = effectiveTip(bone, t) ?? { x: origin.x + 5, y: origin.y };
+  const curAng = Math.atan2(curTip.y - origin.y, curTip.x - origin.x);
+  const tgtAng = Math.atan2(targetRoot.y - origin.y, targetRoot.x - origin.x);
+  const dDeg = (wrapToPi(tgtAng - curAng) * 180) / Math.PI;
+  bone.rest.rotate = round1(bone.rest.rotate + dDeg);
+  // Set the tip so the rendered tip lands exactly on the target (length captured), measured
+  // against the freshly-rotated pose so effectiveTip == targetRoot.
+  const invNew = invertMat(matrixOfTransform(fullPoseTransform(bone, t)));
+  const tipLocal = applyMat(invNew, targetRoot.x, targetRoot.y);
+  bone.boneTip = { x: round1(tipLocal.x), y: round1(tipLocal.y) };
+  carryChildOrigins(bone, t);
+}
+
+/** Glue each direct child bone's origin to this bone's tip (the shared joint). */
+export function carryChildOrigins(bone: RigPart, t: number | null): void {
+  const doc = state.doc;
+  if (!doc || !bone.boneTip) return;
+  for (const child of doc.parts) {
+    if (child.kind === 'bone' && child.parentId === bone.id) {
+      const ot = ownTranslateOf(child, t);
+      child.pivot = { x: round1(bone.boneTip.x - ot.x), y: round1(bone.boneTip.y - ot.y) };
+    }
+  }
+}
+
+/**
+ * FREEZE-mode bind refresh: re-capture the bind reference (restWorldInv + bindSeg) of every
+ * bone bound to any part whose skin includes a bone in `boneId`'s chain, at the bones'
+ * CURRENT pose. This resets the LBS delta to identity (and the bind length to the current
+ * length) so the art does NOT move while the rig is edited against static art. Weights are
+ * NOT recomputed here — the skin cache signature omits bindSeg, so cached weight rows survive
+ * the gesture ("keep existing weights during the gesture"); call refreshFrozenSkinWeights()
+ * at gesture END to rebuild auto weights from the new segments.
+ */
+export function refreshBindForChain(boneId: string, t: number | null): void {
+  const doc = state.doc;
+  if (!doc) return;
+  const chainIds = new Set(boneChain(doc.parts, boneId).map((b) => b.id));
+  for (const part of doc.parts) {
+    if (!part.skin || !part.skin.bones.some((b) => chainIds.has(b.id))) continue;
+    for (const sb of part.skin.bones) {
+      const bone = doc.parts.find((p) => p.id === sb.id);
+      if (!bone) continue;
+      sb.restWorldInv = invertMat(matrixOfTransform(fullPoseTransform(bone, t)));
+      const pp = effectivePivot(bone, t);
+      const qq = effectiveTip(bone, t) ?? { x: pp.x + 5, y: pp.y };
+      sb.bindSeg = { p: { x: pp.x, y: pp.y }, q: { x: qq.x, y: qq.y } };
+    }
+  }
+}
+
+/**
+ * Rebuild auto weights for every skinned part bound to the chain (freeze gesture END). Parts
+ * WITH per-node overrides keep them (overrides reference bone ids, not positions) — the cache
+ * rebuild recomputes only the auto weight rows from the refreshed bind segments.
+ */
+export function refreshFrozenSkinWeights(boneId: string): void {
+  const doc = state.doc;
+  if (!doc) return;
+  const chainIds = new Set(boneChain(doc.parts, boneId).map((b) => b.id));
+  for (const part of doc.parts) {
+    if (part.skin && part.skin.bones.some((b) => chainIds.has(b.id))) invalidateSkinCache(part.id);
+  }
+}
+
+/**
+ * FREEZE gesture START: snapshot the art's CURRENT rendered appearance as its bind baseline
+ * so a freeze bone edit doesn't snap the art. Bakes each bound part's current rendered `d`
+ * (whatever it looks like now — possibly already deformed by earlier NON-freeze posing) into
+ * its rest path data, then re-binds every bone at its CURRENT pose so the LBS delta is
+ * identity and the stretch is unit for that new baseline. From here the per-move
+ * refreshBindForChain holds the art on this frozen look while the bones move. When the art is
+ * already at its bind appearance (the documented "static art" flow) this is a no-op in effect
+ * — the baked geometry round-trips byte-identically. Call BEFORE the bone pose is mutated so
+ * the DOM still shows the pre-edit look.
+ */
+export function captureFrozenBaseline(boneId: string, t: number | null): void {
+  const doc = state.doc;
+  if (!doc) return;
+  const chainIds = new Set(boneChain(doc.parts, boneId).map((b) => b.id));
+  for (const part of doc.parts) {
+    if (!part.skin || !part.skin.bones.some((b) => chainIds.has(b.id))) continue;
+    const g = ctx.partGroups.get(part.id);
+    if (g) {
+      for (const path of part.paths) {
+        const el = g.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
+        const dNow = el?.getAttribute('d');
+        if (dNow) path.d = dNow; // freeze the current look into the rest geometry
+      }
+    }
+    for (const sb of part.skin.bones) {
+      const bone = doc.parts.find((p) => p.id === sb.id);
+      if (!bone) continue;
+      sb.restWorldInv = invertMat(matrixOfTransform(fullPoseTransform(bone, t)));
+      const pp = effectivePivot(bone, t);
+      const qq = effectiveTip(bone, t) ?? { x: pp.x + 5, y: pp.y };
+      sb.bindSeg = { p: { x: pp.x, y: pp.y }, q: { x: qq.x, y: qq.y } };
+    }
+    invalidateSkinCache(part.id);
+  }
+}
+
+/**
+ * DISCRETE freeze-mode bone edit (the inspector rotation/length/position fields): re-baseline
+ * the art to its pre-edit look (still in the DOM, since poseEdited's repaint hasn't run yet)
+ * and re-bind at the new bone pose — the field-edit equivalent of a canvas drag's freeze
+ * baseline capture. Call AFTER mutating the bone but BEFORE the repaint.
+ */
+export function rebindFrozenChain(boneId: string): void {
+  captureFrozenBaseline(boneId, poseTime());
 }
 
 // ---- Bone placement ----

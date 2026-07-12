@@ -13,7 +13,7 @@
  * so tests must place bones where a user actually would — on the visible limb.
  */
 
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { canUndo, undo } from '../../core/history';
 import {
   selectPart as modelSelectPart, setKeyframe, notify,
@@ -23,11 +23,29 @@ import { startBonePlacement, renderPose, setNodeBinding, recomputeAutoWeights } 
 import {
   bootRig, resetRig, state, partByLabel, partGroupEl, gestureDrag, click,
   clientCenterOf, overlayEl, overlayCount, expectClose, setEditorMode, repaint,
-  enterNodeMode, medialPoints, clientPointOnPart, svgEl, selectByLabel, pressKey,
+  enterNodeMode, medialPoints, clientPointOnPart, svgEl, selectByLabel, pressKey, hitAt,
 } from './harness';
 
 beforeAll(bootRig);
 beforeEach(resetRig);
+
+/**
+ * THE CONNECTED-CHAIN INVARIANT (v2.13 bone rework): a child bone's origin IS its parent
+ * bone's tip — one shared joint that NEVER opens a gap, in either mode, after any gesture.
+ * In the bone position model a child keeps zero rest translate, so its origin equals its
+ * parent's tip in the parent's frame. Enforced after EVERY scenario in this file.
+ */
+function assertNoGap(): void {
+  const parts = state.doc?.parts ?? [];
+  for (const child of parts) {
+    if (child.kind !== 'bone' || !child.parentId) continue;
+    const parent = parts.find((p) => p.id === child.parentId && p.kind === 'bone');
+    if (!parent || !parent.boneTip) continue;
+    expectClose(child.pivot.x + child.rest.tx, parent.boneTip.x, 0.3, 'no gap: child origin x == parent tip x');
+    expectClose(child.pivot.y + child.rest.ty, parent.boneTip.y, 0.3, 'no gap: child origin y == parent tip y');
+  }
+}
+afterEach(assertNoGap);
 
 /** Place a bone by a real press-drag-release gesture; returns the created bone part. */
 function placeBoneGesture(from: { x: number; y: number }, to: { x: number; y: number }) {
@@ -297,9 +315,11 @@ describe('scenario B8 — skinned-part overlay is fresh + explains itself', () =
 });
 
 describe('scenario B9 — connected chain: the shared joint moves as one', () => {
-  // RE-SPEC (v2.13 freeze mode): both a child bone's origin and a parent bone's tip are
-  // shared JOINTS, so both are freeze-gated. Press Y to enter freeze mode before dragging
-  // them; the shared-joint coupling the scenario verifies is otherwise unchanged.
+  // RE-SPEC (v2.13 bone rework): a child bone's origin and its parent's tip are the SAME
+  // shared joint, now LIVE in both modes (dragging it moves the joint + deforms the art
+  // outside freeze). This scenario runs in freeze to isolate the shared-joint COUPLING (the
+  // parent tip / child origin tracking each other) from art deformation; the coupling holds
+  // identically without freeze.
   it('dragging a child bone pivot carries the parent tip, and vice-versa', () => {
     const [b1, b2] = placeChain(LIMB, 2);
     const cur = (id: string) => state.doc!.parts.find((p) => p.id === id)!;
@@ -423,5 +443,141 @@ describe('scenario B11 — recompute auto weights is enabled whenever skinned', 
     expect(partByLabel(LIMB).skin!.overrides, 'overrides cleared').toBeUndefined();
     // With no overrides it still recomputes (cache rebuild) but reports no doc change.
     expect(recomputeAutoWeights(), 'no-op recompute reports no change').toBe(false);
+  });
+});
+
+// ---- v2.13 bone rework: hierarchy-as-assignment, no free child translation, the
+// freeze / non-freeze pose matrix ----
+
+/** pivot→tip length of a bone in its own frame. */
+function boneLen(b: ReturnType<typeof partByLabel>): number {
+  return b.boneTip ? Math.hypot(b.boneTip.x - b.pivot.x, b.boneTip.y - b.pivot.y) : 0;
+}
+
+/**
+ * Place an n-bone chain with the ART part SELECTED first, so bone 1 PARENTS to the art
+ * (the locked hierarchy-as-assignment chain art→bone1→…→bone n) and every bone binds it.
+ * Child bones are pressed at an offset from the parent tip (only the drag END matters for a
+ * child), mirroring the free-form helper.
+ */
+function placeParentedChain(label: string, n: number): ReturnType<typeof partByLabel>[] {
+  const pts = medialPoints(label, n);
+  selectByLabel(label); // art selected → bone 1 parents to it and auto-bind targets it
+  const bones: ReturnType<typeof partByLabel>[] = [];
+  for (let k = 1; k <= n; k++) {
+    const press = k === 1 ? pts[0] : { x: pts[k - 1].x + 28, y: pts[k - 1].y + 18 };
+    startBonePlacement();
+    gestureDrag(press, pts[k]);
+    bones.push(state.doc!.parts[state.doc!.parts.length - 1]);
+  }
+  return bones;
+}
+
+describe('scenario B13 — chain stays PARENTED under the art (hierarchy-as-assignment)', () => {
+  it('a chain placed on a selected, rest-rotated art shows art→bone1→bone2 in the doc, render-neutral', () => {
+    // The d1c26b5 regression: bind re-parented the chain to root to preserve the bone world,
+    // detaching it from the art in the layers tree. The fix folds the lost art pose into the
+    // bone's OWN rest while KEEPING parentId == the art, so the tree still reads art→bones.
+    const arm = partByLabel('left_arm');
+    modelSelectPart(arm.id);
+    arm.rest.rotate = 30; // a real rest for the bone to ride + the fold to undo
+    notify();
+    renderPose();
+    const before = renderScreenSamples('left_arm');
+
+    const [b1, b2] = placeParentedChain('left_arm', 2);
+
+    // Hierarchy: art → bone1 → bone2 (the locked assignment chain).
+    expect(partByLabel('left_arm').skin, 'art skinned by the chain').toBeTruthy();
+    expect(b1.parentId, 'bone 1 stays parented to the art (NOT re-homed to root)').toBe(arm.id);
+    expect(b2.parentId, 'bone 2 parented to bone 1').toBe(b1.id);
+    expect(partByLabel('left_arm').skin!.bones.map((b) => b.id))
+      .toEqual([b1.id, b2.id]);
+
+    // Render-neutral: the rest-rotated art did not move a pixel across placement + bind.
+    expectClose(maxDrift(before, renderScreenSamples('left_arm')), 0, 0.06,
+      'rest-rotated art stable across bind, parented');
+  });
+});
+
+describe('scenario B14 — a child bone has NO free translation; a body drag rotates it', () => {
+  it('the translate tool cannot slide a child bone (origin byte-stable, no gap); a select drag rotates it about the joint', () => {
+    const [b1, b2] = placeParentedChain('left_leg', 2);
+    const cur = (id: string) => state.doc!.parts.find((p) => p.id === id)!;
+    const origin0 = { ...cur(b2.id).pivot };
+    const tip0 = { ...cur(b1.id).boneTip! };
+
+    // (1) Translate tool: grab the X-axis arrow of the translate gizmo and pull hard. A bone
+    // is filtered out of every translate pipeline, so this is a no-op — the shared joint can
+    // NOT slide (bug #2: a body-drag used to translate a child bone and tear open a gap).
+    state.tool = 'translate';
+    modelSelectPart(b2.id);
+    repaint();
+    const arrow = overlayEl().querySelector('[data-gizmo-axis="x"]')!;
+    const aFrom = clientCenterOf(arrow);
+    expect(hitAt(aFrom.x, aFrom.y).getAttribute('data-gizmo-axis'), 'press lands on the X arrow')
+      .toBe('x');
+    gestureDrag(aFrom, { x: aFrom.x + 60, y: aFrom.y }, { steps: 10 });
+    expect(cur(b2.id).pivot, 'child origin byte-stable under a translate drag').toEqual(origin0);
+    expect(cur(b1.id).boneTip, 'parent tip byte-stable — no gap').toEqual(tip0);
+
+    // (2) Select tool: a body drag on the bone (its rotate gizmo) rotates it about the origin
+    // and deforms the skinned art — the origin (shared joint) still never moves.
+    state.tool = 'select';
+    modelSelectPart(b2.id);
+    repaint();
+    const rot0 = cur(b2.id).rest.rotate;
+    const artBefore = renderScreenSamples('left_leg');
+    const glyph = overlayEl().querySelector(`[data-part-id="${b2.id}"]`)!;
+    const from = clientCenterOf(glyph);
+    gestureDrag(from, { x: from.x + 34, y: from.y - 26 }, { steps: 10 });
+    expect(Math.abs(cur(b2.id).rest.rotate - rot0), 'child bone rotated').toBeGreaterThan(0.5);
+    expect(cur(b2.id).pivot, 'origin still byte-stable under rotation (no gap)').toEqual(origin0);
+    expect(maxDrift(artBefore, renderScreenSamples('left_leg')), 'art deformed').toBeGreaterThan(0.5);
+  });
+});
+
+describe('scenario B15 — NON-freeze tip drag rotates + STRETCHES the limb (art follows)', () => {
+  it('dragging a leaf tip outward lengthens the bone and deforms the skinned art', () => {
+    const [bone] = placeParentedChain('left_leg', 1);
+    expect(partByLabel('left_leg').skin, 'limb skinned').toBeTruthy();
+    modelSelectPart(bone.id);
+    repaint();
+
+    const len0 = boneLen(bone);
+    const artBefore = renderScreenSamples('left_leg');
+
+    // Pull the tip straight out along the bone axis (origin → tip), so the drag is mostly a
+    // stretch: the bone gets longer AND the art stretches through the LBS length term.
+    const originC = clientCenterOf(overlayEl().querySelector('.pivot-grab')!);
+    const tipC = clientCenterOf(overlayEl().querySelector('.bone-tip-handle')!);
+    const dx = tipC.x - originC.x, dy = tipC.y - originC.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const to = { x: tipC.x + (dx / d) * d * 0.5, y: tipC.y + (dy / d) * d * 0.5 };
+    gestureDrag(tipC, to, { steps: 10 });
+
+    const after = state.doc!.parts.find((p) => p.id === bone.id)!;
+    expect(boneLen(after) - len0, 'bone stretched (tip pushed out)').toBeGreaterThan(3);
+    expect(maxDrift(artBefore, renderScreenSamples('left_leg')), 'skinned art deformed/stretched')
+      .toBeGreaterThan(1);
+  });
+});
+
+describe('scenario B16 — one gesture = one undo (freeze tip reshape + bind refresh)', () => {
+  it('a freeze-mode tip reshape is a single history step incl. its bind refresh', () => {
+    const [bone] = placeParentedChain('left_leg', 1);
+    const before = serializeDoc(state.doc!);
+
+    pressKey('y'); // freeze mode
+    modelSelectPart(bone.id);
+    repaint();
+
+    const tipC = clientCenterOf(overlayEl().querySelector('.bone-tip-handle')!);
+    gestureDrag(tipC, { x: tipC.x + 40, y: tipC.y - 24 }, { steps: 10 });
+    expect(serializeDoc(state.doc!), 'the reshape mutated the doc').not.toBe(before);
+
+    expect(canUndo()).toBe(true);
+    undo();
+    expect(serializeDoc(state.doc!), 'ONE undo reverts the reshape AND its bind refresh').toBe(before);
   });
 });

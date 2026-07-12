@@ -12,7 +12,7 @@
 
 import {
   RigPart, RigPath, state, notify, setKeyframe, selectedPart, selectedParts,
-  selectPart, ancestorChain, channelValue, addNullPart,
+  selectPart, ancestorChain, channelValue, addNullPart, translateBoneChain,
 } from '../core/model';
 import {
   parsePath, serializePath, PathCmd,
@@ -46,7 +46,10 @@ import {
   nodeIndexOf, ensureNodeTypes, segmentStart, pointOnSegment, segmentHit, subpathStart,
   applyMirrorConstraint, editNodeStructure, moveNode,
 } from './nodeEditing';
-import { cancelBonePlacement, autoBindPlacedBone } from './rigOps';
+import {
+  cancelBonePlacement, autoBindPlacedBone, aimBoneAtTip,
+  refreshBindForChain, refreshFrozenSkinWeights, captureFrozenBaseline,
+} from './rigOps';
 import { applyViewRect, zoomAround } from './camera';
 
 /** First real movement of a drag: fire the deferred checkpoint exactly once. */
@@ -158,7 +161,8 @@ export function wireInteractions(): void {
       const axisAttr = target.dataset.gizmoAxis;
       ctx.drag = {
         kind: 'translate',
-        targets: selectedParts().map((sp) => ({
+        // Bones never translate (see the body-drag branch); the arrows only move art/nulls.
+        targets: selectedParts().filter((sp) => sp.kind !== 'bone').map((sp) => ({
           part: sp,
           startTx: setup ? sp.rest.tx : channelValue(sp, 'tx', state.currentTime),
           startTy: setup ? sp.rest.ty : channelValue(sp, 'ty', state.currentTime),
@@ -201,17 +205,14 @@ export function wireInteractions(): void {
       return;
     }
 
-    // Bone tip: re-aim/re-length the bone (Setup).
+    // Bone tip: re-aim + stretch the bone (both editor modes). A leaf tip and a shared
+    // JOINT tip (a child bone hangs off it) drag identically — the reshape rotates+stretches
+    // the bone and carries child origins onto the new tip. Outside freeze the skinned art
+    // deforms with it; inside freeze the bind refreshes so the art stays put (see the
+    // pointermove branch). No freeze gate: posing the limb via its bones is the point.
     if (target instanceof SVGElement && target.dataset.role === 'bone-tip') {
       const part = selectedPart();
       if (!part) return;
-      // Freeze gate: a tip that is ALSO a shared joint — a child bone hangs off it, so
-      // dragging it moves that child's ORIGIN — is origin editing and only works in
-      // freeze mode. A LEAF bone's tip is a pure rotation/length edit and stays live.
-      const tipIsJoint = (state.doc?.parts ?? []).some(
-        (p) => p.kind === 'bone' && p.parentId === part.id,
-      );
-      if (tipIsJoint && !state.freezeMode) return;
       ctx.drag = { kind: 'boneTip', part, startClient: { x: ev.clientX, y: ev.clientY }, active: false };
       try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
@@ -387,11 +388,17 @@ export function wireInteractions(): void {
     if (pivotEl) {
       const part = selectedPart();
       if (!part) return;
-      // Freeze gate: pivots/origins are visible but INERT outside freeze mode, so a stray
-      // press on the joint handle never moves it (the accidental-origin-drag complaint).
-      // Swallow the press (no drag, no selection change) rather than fall through — a
-      // hard no-op, not a translate of the part underneath.
-      if (!state.freezeMode) return;
+      // A CHILD bone's origin IS its parent bone's tip — one shared joint. Dragging it moves
+      // that joint (rotating+stretching the parent, art follows outside freeze), so it is
+      // LIVE in both modes. Everything else that is an origin — a ROOT bone's origin, an art
+      // part's pivot — is freeze-gated: visible but INERT outside freeze so a stray press
+      // never re-anchors it (the accidental-origin-drag complaint). Swallow the press as a
+      // hard no-op (no drag, no selection change) rather than fall through to a body drag.
+      const parentBone = part.kind === 'bone' && part.parentId
+        ? doc.parts.find((pp) => pp.id === part.parentId && pp.kind === 'bone')
+        : null;
+      const isChildJoint = !!parentBone;
+      if (!isChildJoint && !state.freezeMode) return;
       ctx.drag = {
         kind: 'pivot',
         part,
@@ -482,10 +489,15 @@ export function wireInteractions(): void {
         // set (first click) and ROTATES in the rotate/skew set (second click), in BOTH
         // Edit and Animate. Shift always translates (muscle memory). The T/R tools force
         // their manipulation; the IK tool solves the ancestor chain toward the pointer.
-        const action: 'translate' | 'rotate' | 'ik' =
+        let action: 'translate' | 'rotate' | 'ik' =
           state.tool === 'select'
             ? (ev.shiftKey || ctx.handleMode === 'scale' ? 'translate' : 'rotate')
             : state.tool;
+        // A bone has no free translation — its origin is either the chain root (moved only
+        // via its origin handle in freeze) or a shared joint (a parent's tip). A body drag
+        // on a bone therefore always ROTATES around its origin (art follows), never slides
+        // it: the child-bone-tears-from-parent gap the user reported can't happen.
+        if (part.kind === 'bone' && action === 'translate') action = 'rotate';
 
         // Skinned art deforms through its BONES, not a group transform, so translate/
         // rotate/scale drags are meaningless on it (and would be lies). The one pose
@@ -558,7 +570,9 @@ export function wireInteractions(): void {
         if (action === 'translate') {
           ctx.drag = {
             kind: 'translate',
-            targets: selectedParts().map((sp) => ({
+            // Bones are excluded from translation entirely (shared-joint chains stay
+            // connected — a bone moves only by rotation/length or a freeze origin edit).
+            targets: selectedParts().filter((sp) => sp.kind !== 'bone').map((sp) => ({
               part: sp,
               startTx: setup ? sp.rest.tx : channelValue(sp, 'tx', state.currentTime),
               startTy: setup ? sp.rest.ty : channelValue(sp, 'ty', state.currentTime),
@@ -640,8 +654,18 @@ export function wireInteractions(): void {
       return;
     }
 
+    const wasActive = 'active' in ctx.drag ? ctx.drag.active : true;
     if (!activateDrag(ctx.drag, ev)) return;
     const setup = state.editorMode === 'setup';
+
+    // FREEZE: at the FIRST activated move of a bone reshape, snapshot the art's CURRENT look
+    // as its bind baseline (BEFORE the bone moves), so the reshape edits the rig against the
+    // static art even when the art was already posed in non-freeze. Per-move refreshBind then
+    // holds that look. A no-op in effect when the art is at its bind appearance.
+    if (!wasActive && state.freezeMode) {
+      const bid = frozenChainBoneId(ctx.drag);
+      if (bid) captureFrozenBaseline(bid, poseTime());
+    }
 
     if (ctx.drag.kind === 'rotate') {
       const p = pointerInRoot(ev);
@@ -666,6 +690,13 @@ export function wireInteractions(): void {
         if (part.id === ctx.drag.targets[0]?.part.id) ctx.drag.currentDelta = round1(value - start);
         if (setup) part.rest.rotate = value;
         else setKeyframe(part.id, 'rotate', value);
+      }
+      // Freeze: a bone rotate reshapes the rig against static art — refresh the bind so the
+      // skinned art doesn't swing with the bone (outside freeze it deforms, as intended).
+      if (state.freezeMode) {
+        for (const { part } of ctx.drag.targets) {
+          if (part.kind === 'bone') refreshBindForChain(part.id, poseTime());
+        }
       }
       renderPose();
       notifyTimelineOnly();
@@ -802,29 +833,20 @@ export function wireInteractions(): void {
     } else if (ctx.drag.kind === 'boneTip') {
       const p = pointerInRoot(ev);
       const part = ctx.drag.part;
-      const local = applyMat(
-        invertMat(matrixOfTransform(fullPoseTransform(part, poseTime()))), p.x, p.y,
-      );
-      part.boneTip = { x: round1(local.x), y: round1(local.y) };
-      // Connected chains: any child bone whose origin sits at this tip rides along, so
-      // dragging the parent tip carries the shared joint (child.pivot + own-translate ==
-      // parent.boneTip in the same frame).
       const tt = poseTime();
-      for (const child of state.doc?.parts ?? []) {
-        if (child.kind === 'bone' && child.parentId === part.id) {
-          const ot = ownTranslateOf(child, tt);
-          child.pivot = { x: round1(part.boneTip.x - ot.x), y: round1(part.boneTip.y - ot.y) };
-        }
-      }
+      // Rotate + stretch the bone toward the pointer; child origins ride the new tip (the
+      // shared joint stays connected). Outside freeze the LBS delta rotates+stretches the
+      // skinned art (posing the limb from its bones); inside freeze the bind refreshes each
+      // move so the art stays put (fitting the rig against static art).
+      aimBoneAtTip(part, { x: p.x, y: p.y }, tt);
+      if (state.freezeMode) refreshBindForChain(part.id, tt);
       renderPose();
     } else if (ctx.drag.kind === 'pivot') {
       const d = ctx.drag;
       const p = pointerInRoot(ev);
       const part = d.part;
       const t = poseTime();
-      // Snap the target joint position (root space) onto the part's own nodes or other
-      // joints. The pivot-compensation solve below then keeps the artwork fixed, so the
-      // joint lands on the target WITHOUT moving the art.
+      // Snap the target joint position (root space) onto the part's own nodes or other joints.
       let sx = p.x, sy = p.y;
       ctx.snapMarker = null;
       if (snappingActive()) {
@@ -835,68 +857,74 @@ export function wireInteractions(): void {
           ctx.snapMarker = rootToUser(match.point);
         }
       }
-      // Un-apply the ancestors' motion so we work in the part's parent-chain frame
-      // (pivot + own translate live there: effectivePivot = chain · (pivot + ot)).
-      const local = applyMat(invertMat(chainMatOf(part, t)), sx, sy);
-      // Moving the joint must never move the artwork. The pivot anchors the part's
-      // own rotation AND the innermost rest scale/skew, so re-anchoring it shifts
-      // the rendered art unless the rest translation absorbs the difference. Solve
-      // both together: find pivot pv with pv + translate(pv) = pointer, where
-      // translate(pv) is the own-translate that keeps the drag-start own matrix
-      // intact. translate(pv) is affine in pv, so one Jacobian step (from finite
-      // differences) solves it exactly.
-      const rot = channelValue(part, 'rotate', t);
-      const ownMat = (pv: { x: number; y: number }): Mat =>
-        matrixOfTransform(
-          [`rotate(${rot},${pv.x},${pv.y})`, part.transform, innerLocalTransform(part, pv)]
-            .filter(Boolean)
-            .join(' '),
-        );
-      const m0 = ownMat(d.startPivot);
-      const translateFor = (pv: { x: number; y: number }) => {
-        // m0 · ownMat(pv)⁻¹ is a pure translation (identical linear parts).
-        const dm = multiply(m0, invertMat(ownMat(pv)));
-        return { x: d.startTranslate.x + dm.e, y: d.startTranslate.y + dm.f };
-      };
-      const F = (pv: { x: number; y: number }) => {
-        const tn = translateFor(pv);
-        return { x: pv.x + tn.x, y: pv.y + tn.y };
-      };
-      const seed = { x: local.x - d.startTranslate.x, y: local.y - d.startTranslate.y };
-      const f0 = F(seed);
-      const fx = F({ x: seed.x + 1, y: seed.y });
-      const fy = F({ x: seed.x, y: seed.y + 1 });
-      const ja = fx.x - f0.x, jb = fx.y - f0.y, jc = fy.x - f0.x, jd = fy.y - f0.y;
-      const det = ja * jd - jb * jc;
-      let pv = seed;
-      if (Math.abs(det) > 1e-9) {
-        const rx = local.x - f0.x, ry = local.y - f0.y;
-        pv = {
-          x: seed.x + (jd * rx - jc * ry) / det,
-          y: seed.y + (ja * ry - jb * rx) / det,
-        };
-      }
-      part.pivot = { x: round1(pv.x), y: round1(pv.y) };
-      // Recompute the compensation for the ROUNDED pivot so the artwork stays put
-      // exactly (finer rounding here — 0.1 on the translation would visibly wiggle
-      // the art while the pivot slides).
-      const tn = translateFor(part.pivot);
-      part.rest.tx = round3(tn.x);
-      part.rest.ty = round3(tn.y);
-      // Connected chains: a child bone's origin IS its parent bone's tip — one shared
-      // joint. Dragging the child's pivot drags that joint, so carry the parent's tip
-      // along. chainMatOf(child) === the parent's full-pose matrix, so the (snapped)
-      // root target maps straight into the parent's local frame as its new boneTip.
-      const parentBone = part.parentId
-        ? state.doc?.parts.find((pp) => pp.id === part.parentId)
+      const parentBone = part.kind === 'bone' && part.parentId
+        ? state.doc?.parts.find((pp) => pp.id === part.parentId && pp.kind === 'bone')
         : null;
-      if (part.kind === 'bone' && parentBone?.kind === 'bone') {
-        const tipLocal = applyMat(
-          invertMat(matrixOfTransform(fullPoseTransform(parentBone, t))), sx, sy,
+      if (part.kind === 'bone' && parentBone) {
+        // A child bone's origin IS the shared joint with its parent's tip. Move the joint by
+        // reshaping the PARENT toward the pointer (aim + stretch); the child origin is carried
+        // onto the new tip, so the chain never disconnects. Identical to dragging the parent's
+        // tip handle. Freeze refreshes the bind so the art stays put; otherwise it deforms.
+        aimBoneAtTip(parentBone, { x: sx, y: sy }, t);
+        if (state.freezeMode) refreshBindForChain(parentBone.id, t);
+        renderPose();
+      } else if (part.kind === 'bone') {
+        // ROOT bone origin (reached only in freeze): translate the whole chain so every shared
+        // joint stays connected, then refresh the bind so the art stays put. Approximate for a
+        // chain baked with rest rotation (translateBoneChain), but the anchors stay connected.
+        const cur = effectivePivot(part, t);
+        const localDelta = applyMat(
+          linearOnly(invertMat(chainMatOf(part, t))), sx - cur.x, sy - cur.y,
         );
-        parentBone.boneTip = { x: round1(tipLocal.x), y: round1(tipLocal.y) };
+        translateBoneChain(state.doc!.parts, part.id, round3(localDelta.x), round3(localDelta.y));
+        if (state.freezeMode) refreshBindForChain(part.id, t);
+        renderPose();
+      } else {
+        // Art-part pivot (freeze-only): re-anchor the joint WITHOUT moving the artwork. The
+        // pivot anchors the part's own rotation AND innermost rest scale/skew, so re-anchoring
+        // it shifts the render unless the rest translation absorbs the difference. Solve both:
+        // find pivot pv with pv + translate(pv) = pointer, where translate(pv) keeps the
+        // drag-start own matrix intact — affine in pv, so one Jacobian step solves it exactly.
+        const local = applyMat(invertMat(chainMatOf(part, t)), sx, sy);
+        const rot = channelValue(part, 'rotate', t);
+        const ownMat = (pv: { x: number; y: number }): Mat =>
+          matrixOfTransform(
+            [`rotate(${rot},${pv.x},${pv.y})`, part.transform, innerLocalTransform(part, pv)]
+              .filter(Boolean)
+              .join(' '),
+          );
+        const m0 = ownMat(d.startPivot);
+        const translateFor = (pv: { x: number; y: number }) => {
+          // m0 · ownMat(pv)⁻¹ is a pure translation (identical linear parts).
+          const dm = multiply(m0, invertMat(ownMat(pv)));
+          return { x: d.startTranslate.x + dm.e, y: d.startTranslate.y + dm.f };
+        };
+        const F = (pv: { x: number; y: number }) => {
+          const tn = translateFor(pv);
+          return { x: pv.x + tn.x, y: pv.y + tn.y };
+        };
+        const seed = { x: local.x - d.startTranslate.x, y: local.y - d.startTranslate.y };
+        const f0 = F(seed);
+        const fx = F({ x: seed.x + 1, y: seed.y });
+        const fy = F({ x: seed.x, y: seed.y + 1 });
+        const ja = fx.x - f0.x, jb = fx.y - f0.y, jc = fy.x - f0.x, jd = fy.y - f0.y;
+        const det = ja * jd - jb * jc;
+        let pv = seed;
+        if (Math.abs(det) > 1e-9) {
+          const rx = local.x - f0.x, ry = local.y - f0.y;
+          pv = {
+            x: seed.x + (jd * rx - jc * ry) / det,
+            y: seed.y + (ja * ry - jb * rx) / det,
+          };
+        }
+        part.pivot = { x: round1(pv.x), y: round1(pv.y) };
+        // Recompute the compensation for the ROUNDED pivot so the artwork stays put exactly
+        // (finer rounding — 0.1 on the translation would visibly wiggle the art).
+        const tn = translateFor(part.pivot);
+        part.rest.tx = round3(tn.x);
+        part.rest.ty = round3(tn.y);
+        renderPose();
       }
-      renderPose();
     } else if (ctx.drag.kind === 'bendSegment') {
       const d = ctx.drag;
       const path = d.part.paths.find((p) => p.id === d.pathId);
@@ -1028,6 +1056,12 @@ export function wireInteractions(): void {
       ) {
         ctx.handleMode = ctx.handleMode === 'scale' ? 'rotate' : 'scale';
       }
+      // A FREEZE-mode bone reshape kept the art frozen per-move via the bind refresh (using
+      // the cached weights); rebuild each bound part's auto weights ONCE now, from the final
+      // bind segments, so later posing deforms correctly from the new bone layout.
+      if (state.freezeMode) {
+        for (const id of frozenReshapedBoneIds(ctx.drag)) refreshFrozenSkinWeights(id);
+      }
       ctx.drag = null;
       ctx.snapMarker = null; // drop any snap marker before the final repaint
       notify();
@@ -1036,6 +1070,35 @@ export function wireInteractions(): void {
   };
   ctx.svg.addEventListener('pointerup', end);
   ctx.svg.addEventListener('pointercancel', end);
+}
+
+/** The bone whose chain a freeze bone drag edits (any chain member — the helpers resolve
+ *  the full chain from it), or null when the drag isn't a bone reshape. */
+function frozenChainBoneId(d: DragState): string | null {
+  if (d.kind === 'boneTip') return d.part.kind === 'bone' ? d.part.id : null;
+  if (d.kind === 'pivot') return d.part.kind === 'bone' ? d.part.id : null;
+  if (d.kind === 'rotate') return d.targets.find((tt) => tt.part.kind === 'bone')?.part.id ?? null;
+  return null;
+}
+
+/**
+ * The bone(s) a drag reshaped, for the freeze gesture-end weight refresh (empty when the
+ * gesture didn't reshape a bone). A pivot drag on a CHILD bone reshapes its PARENT (the
+ * shared joint); on a ROOT bone it translates that bone's chain. refreshFrozenSkinWeights
+ * resolves the full chain from any member, so returning one id per touched chain suffices.
+ */
+function frozenReshapedBoneIds(d: DragState): string[] {
+  if (d.kind === 'boneTip' && d.active) return d.part.kind === 'bone' ? [d.part.id] : [];
+  if (d.kind === 'pivot' && d.active && d.part.kind === 'bone') {
+    const parent = d.part.parentId
+      ? state.doc?.parts.find((p) => p.id === d.part.parentId && p.kind === 'bone')
+      : null;
+    return [parent?.id ?? d.part.id];
+  }
+  if (d.kind === 'rotate' && d.active) {
+    return d.targets.filter((tt) => tt.part.kind === 'bone').map((tt) => tt.part.id);
+  }
+  return [];
 }
 
 // The timeline listens for this to redraw keyframe diamonds during a drag without the

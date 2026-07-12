@@ -1006,3 +1006,12 @@ g.dimmed { opacity: 0.22; pointer-events: none; transition: opacity 0.12s ease; 
   background: transparent;
   padding: 0;
 }
+
+/* v2.13 bone rework: bone joints (shared origin/tip) are now LIVE in both modes — posing
+   the limb from its bones deforms the art; freeze only changes whether the art follows. So
+   a bone tip (leaf OR joint) and a child bone's origin always show a move cursor. These
+   selectors are appended AFTER (and at equal specificity to) the freeze-gated rules above,
+   so source order lets them win. (Art-part / ROOT-bone origins stay freeze-gated — the plain
+   .pivot-handle rule above still governs those.) */
+#canvas:not(.freeze-mode) .bone-tip-handle.joint { cursor: move; }
+.pivot-handle.joint { cursor: move; }

@@ -330,7 +330,14 @@ export function renderOverlay(): void {
     const ep = effectivePivot(part, t);
     const px = ep.x, py = ep.y;
     const cross = document.createElementNS(SVG_NS, 'g');
-    cross.setAttribute('class', setup ? 'pivot-handle' : 'pivot-handle locked');
+    // A CHILD bone's origin is the shared joint with its parent's tip — draggable in BOTH
+    // modes (not freeze-gated), so it carries the `joint` class to keep its move cursor.
+    const isChildJoint = setup && part.kind === 'bone' && !!part.parentId
+      && doc.parts.some((pp) => pp.id === part.parentId && pp.kind === 'bone');
+    cross.setAttribute(
+      'class',
+      setup ? (isChildJoint ? 'pivot-handle joint' : 'pivot-handle') : 'pivot-handle locked',
+    );
     if (setup) cross.dataset.role = 'pivot';
     if (rootTransform) cross.setAttribute('transform', rootTransform);
     cross.innerHTML =

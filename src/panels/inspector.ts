@@ -15,6 +15,7 @@ import {
   applyNodeOp, NodeOp, unbindSelectedSkin, selectedNodeCount, primaryNodeType,
   canJoinNodes, canDeleteSegment, joinSelectedNodes, deleteSelectedSegment,
   setNodeBinding, clearNodeBinding, recomputeAutoWeights, primaryNodeBinding,
+  rebindFrozenChain,
 } from '../view';
 import { alignDeltas, distributeDeltas, AlignEdge, AlignReference } from '../geometry/align';
 import { checkpoint } from '../core/history';
@@ -220,15 +221,23 @@ function buildBoneRestSection(el: HTMLElement, part: RigPart): void {
     ? doc.parts.find((p) => p.id === part.parentId && p.kind === 'bone')
     : null;
 
+  // Freeze-mode bone edits reshape the rig against static art: after the pose mutates,
+  // refresh the bind so the skinned art stays put (outside freeze it deforms — posing the
+  // limb — through the LBS delta, exactly like the canvas drags).
+  const afterBoneEdit = () => {
+    if (state.freezeMode) rebindFrozenChain(part.id);
+    poseEdited();
+  };
+
   el.appendChild(numberField('rotation (deg)', part.rest.rotate, (v) => {
     checkpoint();
     part.rest.rotate = v;
-    poseEdited();
+    afterBoneEdit();
   }));
   el.appendChild(numberField('length', boneLength(part), (v) => {
     checkpoint();
     setBoneLength(doc.parts, part, Math.max(0, v));
-    poseEdited();
+    afterBoneEdit();
   }, 0.5));
 
   if (!parentBone) {
@@ -236,12 +245,12 @@ function buildBoneRestSection(el: HTMLElement, part: RigPart): void {
     el.appendChild(numberField('position x', part.pivot.x, (v) => {
       checkpoint();
       translateBoneChain(doc.parts, part.id, v - part.pivot.x, 0);
-      renderPose();
+      afterBoneEdit();
     }));
     el.appendChild(numberField('position y', part.pivot.y, (v) => {
       checkpoint();
       translateBoneChain(doc.parts, part.id, 0, v - part.pivot.y);
-      renderPose();
+      afterBoneEdit();
     }));
   } else {
     const info = document.createElement('p');
