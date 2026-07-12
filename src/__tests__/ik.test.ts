@@ -3,8 +3,19 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { solveAim, solveTwoBone, Pt } from '../geometry/ik';
+import { solveAim, solveChainIK, solveTwoBone, Pt } from '../geometry/ik';
 import { distToSegment, skinWeights } from '../geometry/skin';
+
+function dist(a: Pt, b: Pt): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/** The segment lengths of a joint polyline. */
+function segLens(joints: Pt[]): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < joints.length - 1; i++) out.push(dist(joints[i], joints[i + 1]));
+  return out;
+}
 
 /** Rotate `p` around `c` by deg (screen convention: +deg clockwise, +y down). */
 function rot(p: Pt, c: Pt, deg: number): Pt {
@@ -78,6 +89,101 @@ describe('solveTwoBone', () => {
     const d = solveTwoBone(a, a, e, { x: 0, y: 5 });
     expect(d.delta2).toBe(0);
     expect(Number.isFinite(d.delta1)).toBe(true);
+  });
+});
+
+describe('solveChainIK (full-chain FABRIK)', () => {
+  it('reaches an in-range target exactly for 2/3/5-joint chains', () => {
+    // Chains laid along +x with a slight zig so the start pose is non-degenerate.
+    const chains: Pt[][] = [
+      [{ x: 0, y: 0 }, { x: 10, y: 1 }, { x: 20, y: -1 }], // 2 segments (3 joints)
+      [{ x: 0, y: 0 }, { x: 8, y: 2 }, { x: 16, y: -2 }, { x: 24, y: 1 }], // 3 segments
+      [ // 5 segments (6 joints)
+        { x: 0, y: 0 }, { x: 6, y: 1 }, { x: 12, y: -1 },
+        { x: 18, y: 2 }, { x: 24, y: -2 }, { x: 30, y: 0 },
+      ],
+    ];
+    for (const joints of chains) {
+      const total = segLens(joints).reduce((a, b) => a + b, 0);
+      const target = { x: total * 0.4, y: total * 0.35 }; // comfortably inside reach
+      const out = solveChainIK(joints, target);
+      expect(dist(out[out.length - 1], target)).toBeLessThan(0.05);
+    }
+  });
+
+  it('preserves every segment length to 1e-9 (reachable AND unreachable)', () => {
+    const joints: Pt[] = [
+      { x: 0, y: 0 }, { x: 10, y: 3 }, { x: 22, y: -4 }, { x: 30, y: 5 },
+    ];
+    const lens = segLens(joints);
+    const total = lens.reduce((a, b) => a + b, 0);
+    for (const target of [{ x: 12, y: 9 }, { x: total * 3, y: total * 2 }]) {
+      const out = solveChainIK(joints, target);
+      const got = segLens(out);
+      for (let i = 0; i < lens.length; i++) expect(got[i]).toBeCloseTo(lens[i], 9);
+    }
+  });
+
+  it('pins the root joint byte-stable', () => {
+    const joints: Pt[] = [{ x: 3, y: 7 }, { x: 13, y: 7 }, { x: 23, y: 7 }];
+    const out = solveChainIK(joints, { x: 8, y: 20 });
+    expect(out[0]).toEqual({ x: 3, y: 7 });
+  });
+
+  it('straightens toward an unreachable target at full extension', () => {
+    const joints: Pt[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }, { x: 30, y: 0 }];
+    const total = segLens(joints).reduce((a, b) => a + b, 0);
+    const target = { x: 100, y: 100 }; // far out of reach
+    const out = solveChainIK(joints, target);
+    const eff = out[out.length - 1];
+    // End effector at full reach from the root, along the root→target ray.
+    expect(dist(out[0], eff)).toBeCloseTo(total, 6);
+    const ux = (target.x - out[0].x) / dist(out[0], target);
+    const uy = (target.y - out[0].y) / dist(out[0], target);
+    expect(eff.x).toBeCloseTo(out[0].x + ux * total, 4);
+    expect(eff.y).toBeCloseTo(out[0].y + uy * total, 4);
+    // Every segment points the same way (a straight line): consecutive unit dirs equal.
+    for (let i = 1; i < out.length - 1; i++) {
+      const d0x = (out[i].x - out[i - 1].x), d0y = (out[i].y - out[i - 1].y);
+      const d1x = (out[i + 1].x - out[i].x), d1y = (out[i + 1].y - out[i].y);
+      const l0 = Math.hypot(d0x, d0y), l1 = Math.hypot(d1x, d1y);
+      const cos = (d0x * d1x + d0y * d1y) / (l0 * l1);
+      expect(cos).toBeCloseTo(1, 6);
+    }
+  });
+
+  it('keeps the current bend direction (no flip) for a reachable nearby target', () => {
+    // Elbow bent "up" (−y). A symmetric-ish reachable target must NOT snap the elbow
+    // through to the mirror solution.
+    const joints: Pt[] = [{ x: 0, y: 0 }, { x: 10, y: -6 }, { x: 20, y: 0 }];
+    const bendSign = (js: Pt[]) => Math.sign(
+      (js[1].x - js[0].x) * (js[2].y - js[1].y) - (js[1].y - js[0].y) * (js[2].x - js[1].x),
+    );
+    const before = bendSign(joints);
+    const out = solveChainIK(joints, { x: 16, y: 4 });
+    expect(bendSign(out)).toBe(before);
+  });
+
+  it('is deterministic — identical inputs give identical output twice', () => {
+    const joints: Pt[] = [{ x: 0, y: 0 }, { x: 9, y: 2 }, { x: 18, y: -3 }, { x: 27, y: 1 }];
+    const target = { x: 11, y: 13 };
+    expect(solveChainIK(joints, target)).toEqual(solveChainIK(joints, target));
+  });
+
+  it('a 2-joint chain matches the analytic solveTwoBone elbow (within tolerance)', () => {
+    // Same setup solveTwoBone's own tests use: A=(0,0), B=(10,0), E=(10,10).
+    const a = { x: 0, y: 0 }, b = { x: 10, y: 0 }, e = { x: 10, y: 10 };
+    const target = { x: 4, y: 12 };
+    const { delta1 } = solveTwoBone(a, b, e, target);
+    // Analytic elbow after link 1 swings by delta1 (screen: +deg clockwise, +y down).
+    const r = (delta1 * Math.PI) / 180;
+    const elbow = {
+      x: a.x + (b.x - a.x) * Math.cos(r) - (b.y - a.y) * Math.sin(r),
+      y: a.y + (b.x - a.x) * Math.sin(r) + (b.y - a.y) * Math.cos(r),
+    };
+    const out = solveChainIK([a, b, e], target);
+    expect(dist(out[out.length - 1], target)).toBeLessThan(0.05); // both reach the target
+    expect(dist(out[1], elbow)).toBeLessThan(0.05); // same elbow (same bend side)
   });
 });
 

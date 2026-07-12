@@ -1,15 +1,21 @@
 /**
- * Analytic inverse kinematics for pose dragging.
+ * Inverse kinematics for pose dragging.
  *
- * solveTwoBone: classic two-joint IK — given joints A (e.g. shoulder) and B (elbow)
- * and an effector point E rigidly attached past B (e.g. the grabbed spot on a hand),
- * find the rotation deltas for the two chain links so E lands on target T. The elbow
- * keeps its current bend direction, targets outside reach clamp to full extension,
- * and deltas come back in degrees normalized to (-180, 180].
+ * solveChainIK: full-chain FABRIK (Forward And Backward Reaching Inverse Kinematics)
+ * over the polyline of a bone chain's joint positions — the n-joint solver the IK tool
+ * drags run so EVERY joint participates (incl. the grabbed bone's own rotation), not
+ * just two. See its own doc comment.
+ *
+ * solveTwoBone: the older analytic two-joint IK — given joints A (e.g. shoulder) and B
+ * (elbow) and an effector point E rigidly attached past B (e.g. the grabbed spot on a
+ * hand), find the rotation deltas for the two chain links so E lands on target T. The
+ * elbow keeps its current bend direction, targets outside reach clamp to full extension,
+ * and deltas come back in degrees normalized to (-180, 180]. Kept for the unit tests
+ * that pin it (and as the reference the 2-joint FABRIK path is validated against).
  *
  * Everything is solved in root/screen space: because pose chains are rigid
  * (translate + rotate only), a root-space angle delta equals the same delta on the
- * link's own rotate channel.
+ * link's own rotate channel; a root-space joint polyline maps back to per-bone rotations.
  */
 
 export interface Pt {
@@ -18,6 +24,80 @@ export interface Pt {
 }
 
 const RAD2DEG = 180 / Math.PI;
+
+function dist(a: Pt, b: Pt): number {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+/**
+ * Full-chain IK via FABRIK. `joints` is the chain's joint polyline in root space, root
+ * (pinned base) first and end-effector last; `target` is where the LAST joint should land.
+ * Returns a NEW polyline with the SAME segment lengths (preserved to float precision), the
+ * root byte-stable, and the end-effector on (or, when unreachable, straightened toward)
+ * the target.
+ *
+ * Design decisions:
+ *  - **Starts from the CURRENT pose** (`joints` copied verbatim as the working set), so a
+ *    reachable target near the current configuration converges WITHOUT flipping the chain
+ *    to the mirror-image solution — the pose bias the caller relies on (pinned by a test).
+ *  - **Lengths are preserved exactly.** Every point placement is `p_i + (len/‖·‖)·(·)`, so
+ *    each finished segment is exactly its original length; the LAST operation on the whole
+ *    chain is always a full backward pass (or none), so the returned lengths hold to ~1e-12.
+ *  - **Unreachable targets straighten** the chain toward the target at full extension —
+ *    FABRIK's single-pass reach does this naturally (each joint steps `len` toward the
+ *    target from the previous one), no special aim math.
+ *  - **Deterministic**: pure arithmetic, fixed iteration budget, no randomness.
+ */
+export function solveChainIK(
+  joints: Pt[],
+  target: Pt,
+  opts: { tol?: number; maxIter?: number } = {},
+): Pt[] {
+  const n = joints.length;
+  if (n === 0) return [];
+  const p = joints.map((j) => ({ x: j.x, y: j.y }));
+  if (n === 1) return p; // a lone joint has nothing to solve — the base is pinned.
+
+  const tol = opts.tol ?? 0.05;
+  const maxIter = opts.maxIter ?? 16;
+  const root = { x: p[0].x, y: p[0].y };
+  const lens: number[] = [];
+  let total = 0;
+  for (let i = 0; i < n - 1; i++) {
+    const l = dist(joints[i], joints[i + 1]);
+    lens.push(l);
+    total += l;
+  }
+
+  // Unreachable: lay every joint out on the root→target ray at full extension.
+  if (dist(root, target) >= total) {
+    for (let i = 0; i < n - 1; i++) {
+      const d = dist(p[i], target) || 1e-9;
+      const r = lens[i] / d;
+      p[i + 1] = { x: p[i].x * (1 - r) + target.x * r, y: p[i].y * (1 - r) + target.y * r };
+    }
+    return p;
+  }
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    if (dist(p[n - 1], target) < tol) break;
+    // Forward reach: pin the effector to the target, walk back toward the root.
+    p[n - 1] = { x: target.x, y: target.y };
+    for (let i = n - 2; i >= 0; i--) {
+      const d = dist(p[i + 1], p[i]) || 1e-9;
+      const r = lens[i] / d;
+      p[i] = { x: p[i + 1].x * (1 - r) + p[i].x * r, y: p[i + 1].y * (1 - r) + p[i].y * r };
+    }
+    // Backward reach: pin the root back, walk out toward the effector.
+    p[0] = { x: root.x, y: root.y };
+    for (let i = 0; i < n - 1; i++) {
+      const d = dist(p[i], p[i + 1]) || 1e-9;
+      const r = lens[i] / d;
+      p[i + 1] = { x: p[i].x * (1 - r) + p[i + 1].x * r, y: p[i].y * (1 - r) + p[i + 1].y * r };
+    }
+  }
+  return p;
+}
 
 function angleOf(from: Pt, to: Pt): number {
   return Math.atan2(to.y - from.y, to.x - from.x);

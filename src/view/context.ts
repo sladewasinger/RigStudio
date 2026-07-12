@@ -60,15 +60,18 @@ export type DragState =
     }
   | {
       kind: 'ik';
-      /** Nearest ancestor (link 2, e.g. forearm) — rotated by delta2. */
-      p1: RigPart;
-      /** Second ancestor (link 1, e.g. upper arm) — rotated by delta1; null = aim. */
-      p2: RigPart | null;
-      /** Grab point in the clicked part's full-pose frame (rides the chain). */
-      grabLocal: { x: number; y: number };
+      /** The full bone chain FABRIK rotates, ROOT→effector (outermost first). Every bone
+       *  participates incl. the grabbed one — the n-joint replacement for the old two-joint
+       *  p1/p2. Recomputed at drag start; rotations are written back per bone from the
+       *  solved joint polyline (interactions.ts). */
+      chain: RigPart[];
+      /** Effector bone (deepest in `chain`) whose TIP FABRIK drives to the pointer. */
       grabbed: RigPart;
-      /** Live pointer position (root coords) — drives the drag-time target line from the
-       *  effector to the pointer, showing how far short a clamped reach falls. */
+      /** Effector point in the grabbed bone's own frame (its tip): the FABRIK end-effector
+       *  and the overlay target-line / effector-marker anchor. */
+      grabLocal: { x: number; y: number };
+      /** Live pointer position (root coords) — the FABRIK target, and the drag-time target
+       *  line from the effector to the pointer showing how far short a clamped reach falls. */
       current: { x: number; y: number } | null;
       startClient: { x: number; y: number };
       active: boolean;

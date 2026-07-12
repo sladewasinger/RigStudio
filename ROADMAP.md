@@ -361,6 +361,13 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
   flipSelected pattern); second click = rotate handles (group rest.rotate,
   which genuinely propagates); skew skipped for groups (the set still visibly
   changes). Backed by the new visible-counterpart GOTCHA in CLAUDE.md.
+- [ ] **Full-chain IK (FABRIK)** — the current analytic solver rotates exactly two
+  ancestor joints and never the grabbed bone itself (it and its parent move as one
+  rigid unit; depth capped). Replace with an n-joint FABRIK solve from the grabbed
+  tip to the chain root: every joint participates incl. the grabbed bone's own
+  rotation, lengths preserved, current-pose bias (no flips), deterministic
+  iterations; Edit writes rests, Animate keys; chain highlight covers all
+  participating bones.
 - [ ] **FINAL ITEM (do last): swap the default sample to girl_example** — Pip is
   commercial art for the user's app; re-base the interaction-harness fixtures onto
   the girl (or a neutral fixture), remove PIP_MASTER.svg from public/ and the

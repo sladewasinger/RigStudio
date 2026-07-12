@@ -353,16 +353,32 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   `dropSkinOverridesForPath` + `invalidateSkinCache`. `normalizeDoc` prunes overrides
   with dangling bone refs or non-finite t and clamps t to [0,1]. Plain node drags and
   one-shot node ops (smooth/symmetric/corner) keep the index, so they keep overrides.
-- **IK.** The IK tool solves two joints with `ik.ts` `solveTwoBone` (bend-direction
-  preserving, reach-clamped). Two entry gestures: grabbing a BONE glyph rotates its two
-  nearest BONE ancestors (ancestors are filtered to `kind==='bone'`, so the art a chain
-  roots on is never mistaken for a joint — that made a 2-bone chain's end over-rotate);
-  grabbing the SKINNED ART itself uses the art's own `skin.bones` (deepest-in-chain =
-  tip joint, effector rides it), so dragging the limb end bends the chain and the art
-  deforms live. Skinned parts are otherwise gated out of pose drags, so the IK branch
-  is handled explicitly BEFORE that gate (`interactions.ts` skinned branch). Skin
-  weights are cached; bone deltas recompute every `renderPose`. Per-bone rotation
-  limits are out of scope.
+- **IK (full-chain FABRIK).** The IK tool solves the WHOLE bone chain with `ik.ts`
+  `solveChainIK` — n-joint FABRIK over the chain's joint polyline (root..effector tip),
+  so EVERY joint participates including the grabbed bone's own rotation (the old
+  `solveTwoBone` rotated exactly two ancestors and left the grabbed bone rigid — the
+  reported "only the immediate parent moves, nothing beyond two joints" bug).
+  `solveChainIK` preserves segment lengths exactly, pins the root, starts from the
+  CURRENT pose (bend bias — no flips for reachable targets), straightens toward
+  unreachable targets, and is deterministic (fixed iterations, no randomness).
+  `solveTwoBone`/`solveAim` stay exported only for the unit tests that pin them (and as
+  the reference the 2-joint FABRIK path is validated against). Two entry gestures
+  (`interactions.ts`): grabbing a BONE glyph makes that bone the effector; grabbing the
+  SKINNED ART uses the art's own `skin.bones` (deepest-in-chain = the effector). Either
+  way the chain is `[...bone ancestors (kind==='bone' only), effector]` (the art a chain
+  roots on is filtered out, never mistaken for a joint), and the effector's TIP is driven
+  to the pointer. **Write-back math:** a bone's `rest.rotate` is RELATIVE (its parent's
+  rotation reframes it), so bones are aimed ROOT-FIRST — each bone rotated so its solved
+  segment direction matches, re-reading its CURRENT origin/axis (which already reflects
+  the parents written earlier this pass) rather than a stale snapshot; because rotating a
+  parent reframes its whole subtree, connectivity needs no per-bone carry. ONLY
+  `rest.rotate` (Edit) / a keyed rotate at the playhead (Animate) changes — never
+  `pivot`/`boneTip` — so every bone length stays byte-exact and the shared-joint
+  connection (child origin == parent tip) is untouched. Skinned parts are otherwise gated
+  out of pose drags, so the IK branch is handled explicitly BEFORE that gate. The chain
+  highlight (`.ik-active`) covers ALL participating bones; skin weights are cached, bone
+  deltas recompute every `renderPose`. Per-bone rotation limits / pole targets are out of
+  scope.
 - **Skinned-part UX.** A skinned part takes no translate/rotate/scale pose drag (its
   geometry follows its bones — such handles would be lies), and IK is the only pose
   gesture it accepts. Selecting one still draws a selection box + a canvas "skinned —

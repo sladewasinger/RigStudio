@@ -18,7 +18,7 @@ import {
   parsePath, serializePath, PathCmd,
 } from '../geometry/paths';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
-import { solveAim, solveTwoBone } from '../geometry/ik';
+import { solveChainIK } from '../geometry/ik';
 import { snapPoint, snapDelta, SnapAxis } from '../geometry/snap';
 import { checkpoint } from '../core/history';
 import {
@@ -544,21 +544,10 @@ export function wireInteractions(): void {
               .map((b) => doc.parts.find((pp) => pp.id === b.id))
               .filter((b): b is RigPart => !!b && b.kind === 'bone');
             if (bones.length > 0) {
-              // Deepest-in-chain bone is the tip joint; the effector rides it at the grab.
+              // Deepest-in-chain bone is the tip joint: FABRIK solves the whole chain
+              // root→that bone, driving its tip to the pointer (the limb end follows).
               bones.sort((a, b) => ancestorChain(a).length - ancestorChain(b).length);
-              const p1 = bones[bones.length - 1];
-              const p2 = bones.length >= 2 ? bones[bones.length - 2] : null;
-              const grabLocal = applyMat(
-                invertMat(matrixOfTransform(fullPoseTransform(p1, t))), p.x, p.y,
-              );
-              ctx.drag = {
-                kind: 'ik', p1, p2, grabbed: p1,
-                grabLocal: { x: grabLocal.x, y: grabLocal.y },
-                current: { x: p.x, y: p.y },
-                startClient: { x: ev.clientX, y: ev.clientY },
-                active: false,
-              };
-              try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+              startIkDrag(bones[bones.length - 1], p, ev);
               notify();
               renderPose();
               return;
@@ -574,32 +563,15 @@ export function wireInteractions(): void {
         const canToggle =
           state.tool === 'select' && wasPrimary && !ev.shiftKey && !ev.ctrlKey;
 
-        if (action === 'ik') {
-          // The joints of a chain are its BONES. For a grabbed BONE, walk only bone
-          // ancestors so the art the chain is rooted on is never mistaken for a joint
-          // (that made a 2-bone chain's end wildly over-rotate a single link). Art
-          // grabbed inside a plain art hierarchy keeps using its real ancestors.
-          const ancestors = part.kind === 'bone'
-            ? ancestorChain(part).filter((a) => a.kind === 'bone')
-            : ancestorChain(part); // outermost first
-          const p1 = ancestors[ancestors.length - 1] ?? null;
-          const p2 = ancestors[ancestors.length - 2] ?? null;
-          if (p1) {
-            const grabLocal = applyMat(
-              invertMat(matrixOfTransform(fullPoseTransform(part, t))), p.x, p.y,
-            );
-            ctx.drag = {
-              kind: 'ik', p1, p2, grabbed: part,
-              grabLocal: { x: grabLocal.x, y: grabLocal.y },
-              current: { x: p.x, y: p.y },
-              startClient: { x: ev.clientX, y: ev.clientY },
-              active: false,
-            };
-            try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
-            notify();
-            return;
-          }
-          // No ancestors: fall through to a plain rotate below.
+        if (action === 'ik' && part.kind === 'bone') {
+          // Grabbing a BONE glyph: FABRIK solves the whole bone chain root→this bone,
+          // driving its tip to the pointer. Every joint in the chain participates, INCLUDING
+          // the grabbed bone's own rotation (the reported "only two joints move" fix). A
+          // grabbed non-bone (plain art with the IK tool, no skin) has no bone chain to
+          // solve, so it falls through to a plain rotate below.
+          startIkDrag(part, p, ev);
+          notify();
+          return;
         }
 
         if (action === 'translate') {
@@ -865,23 +837,35 @@ export function wireInteractions(): void {
       const p = pointerInRoot(ev);
       const t = poseTime();
       d.current = { x: p.x, y: p.y }; // drives the overlay's effector→pointer target line
-      // Current geometry (recomputed every move — the solve is incremental).
-      const e = applyMat(matrixOfTransform(fullPoseTransform(d.grabbed, t)), d.grabLocal.x, d.grabLocal.y);
-      const bPiv = effectivePivot(d.p1, t);
-      const applyDelta = (part: RigPart, delta: number) => {
-        if (Math.abs(delta) < 1e-4) return;
-        if (setup) part.rest.rotate = round1(part.rest.rotate + delta);
-        else {
-          setKeyframe(part.id, 'rotate', round1(channelValue(part, 'rotate', state.currentTime) + delta));
+      const chain = d.chain;
+      if (chain.length > 0) {
+        // Build the joint polyline (root space): every bone's origin, then the effector tip.
+        // FABRIK solves it against the pointer — segment lengths (== bone lengths) preserved,
+        // root pinned, current pose the bend bias.
+        const effectorNow = () =>
+          applyMat(matrixOfTransform(fullPoseTransform(d.grabbed, t)), d.grabLocal.x, d.grabLocal.y);
+        const joints = chain.map((b) => effectivePivot(b, t));
+        joints.push(effectorNow());
+        const solved = solveChainIK(joints, { x: p.x, y: p.y });
+        // Write each bone's rotation from its solved segment direction, ROOT-FIRST: a bone's
+        // rest.rotate is RELATIVE (its parent's rotation reframes it), and rotating a bone
+        // reframes every descendant — so aim bone i from its CURRENT origin/axis, which
+        // already reflects the parents just written this pass, never a stale snapshot. Only
+        // rest.rotate changes (never pivot/boneTip), so every bone length stays byte-exact
+        // and the shared-joint connection (child origin == parent tip) is untouched.
+        for (let i = 0; i < chain.length; i++) {
+          const bone = chain[i];
+          const origin = effectivePivot(bone, t);
+          const axisEnd = i < chain.length - 1 ? effectivePivot(chain[i + 1], t) : effectorNow();
+          const curAng = Math.atan2(axisEnd.y - origin.y, axisEnd.x - origin.x);
+          const wantAng = Math.atan2(solved[i + 1].y - solved[i].y, solved[i + 1].x - solved[i].x);
+          const deltaDeg = (wrapToPi(wantAng - curAng) * 180) / Math.PI;
+          if (Math.abs(deltaDeg) < 1e-4) continue;
+          if (setup) bone.rest.rotate = round1(bone.rest.rotate + deltaDeg);
+          else {
+            setKeyframe(bone.id, 'rotate', round1(channelValue(bone, 'rotate', state.currentTime) + deltaDeg));
+          }
         }
-      };
-      if (d.p2) {
-        const aPiv = effectivePivot(d.p2, t);
-        const { delta1, delta2 } = solveTwoBone(aPiv, bPiv, e, { x: p.x, y: p.y });
-        applyDelta(d.p2, delta1);
-        applyDelta(d.p1, delta2);
-      } else {
-        applyDelta(d.p1, solveAim(bPiv, e, { x: p.x, y: p.y }));
       }
       renderPose();
       notifyTimelineOnly();
@@ -1125,6 +1109,32 @@ export function wireInteractions(): void {
   };
   ctx.svg.addEventListener('pointerup', end);
   ctx.svg.addEventListener('pointercancel', end);
+}
+
+/** Bones ROOT→effector (outermost first) — the full chain a FABRIK IK drag rotates. The
+ *  art a chain roots on is filtered out (only `kind === 'bone'` ancestors), so it's never
+ *  mistaken for a joint. */
+function ikBoneChain(effector: RigPart): RigPart[] {
+  return [...ancestorChain(effector).filter((a) => a.kind === 'bone'), effector];
+}
+
+/**
+ * Start a full-chain IK drag on `effector` (a bone). The FABRIK end-effector is the
+ * effector bone's TIP (its `boneTip` in its own frame → the overlay effector marker /
+ * target line anchor), driven to the pointer; the whole chain root→effector rotates.
+ */
+function startIkDrag(effector: RigPart, p: { x: number; y: number }, ev: PointerEvent): void {
+  const tip = effector.boneTip ?? { x: effector.pivot.x + 5, y: effector.pivot.y };
+  ctx.drag = {
+    kind: 'ik',
+    chain: ikBoneChain(effector),
+    grabbed: effector,
+    grabLocal: { x: tip.x, y: tip.y },
+    current: { x: p.x, y: p.y },
+    startClient: { x: ev.clientX, y: ev.clientY },
+    active: false,
+  };
+  try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
 }
 
 /** The bone whose chain a freeze bone drag edits (any chain member — the helpers resolve

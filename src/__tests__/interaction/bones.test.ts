@@ -26,7 +26,7 @@ import {
   bootRig, resetRig, state, partByLabel, partGroupEl, gestureDrag, click,
   clientCenterOf, overlayEl, overlayCount, expectClose, setEditorMode, repaint,
   enterNodeMode, medialPoints, clientPointOnPart, svgEl, selectByLabel, pressKey, hitAt,
-  rootGEl, pathElById, assertScreenConstant, waitFor,
+  rootGEl, pathElById, assertScreenConstant, waitFor, clipTrack,
 } from './harness';
 
 beforeAll(bootRig);
@@ -172,8 +172,11 @@ describe('scenario B3 — child bone anchors at the parent tip (connected joint)
   });
 });
 
-describe('scenario B4 — IK through the bound chain (grab the tip bone glyph)', () => {
-  it('IK-dragging the chain end rotates both ancestor joints and deforms the art', () => {
+describe('scenario B4 — full-chain IK through the bound chain (grab the tip bone glyph)', () => {
+  it('IK-dragging the chain end rotates EVERY joint incl. the grabbed bone, and deforms the art', () => {
+    // RE-SPEC (full-chain FABRIK): the old analytic solver rotated exactly the grabbed
+    // bone's two nearest ancestors and left the grabbed bone itself rigid. FABRIK rotates
+    // the whole chain root→grabbed — so b3 (grabbed) must ALSO change, not just b1/b2.
     const [b1, b2, b3] = placeChain(LIMB, 3);
     expect(partByLabel(LIMB).skin!.bones.length).toBe(3);
 
@@ -187,6 +190,7 @@ describe('scenario B4 — IK through the bound chain (grab the tip bone glyph)',
 
     const rot1Before = b1.rest.rotate;
     const rot2Before = b2.rest.rotate;
+    const rot3Before = b3.rest.rotate;
     const artBefore = renderedD(LIMB);
 
     const root = clientCenterOf(overlayEl().querySelector(`[data-part-id="${b1.id}"]`)!);
@@ -200,8 +204,11 @@ describe('scenario B4 — IK through the bound chain (grab the tip bone glyph)',
 
     const b1After = state.doc!.parts.find((p) => p.id === b1.id)!;
     const b2After = state.doc!.parts.find((p) => p.id === b2.id)!;
+    const b3After = state.doc!.parts.find((p) => p.id === b3.id)!;
     expect(Math.abs(b1After.rest.rotate - rot1Before), 'root joint rotated').toBeGreaterThan(0.5);
     expect(Math.abs(b2After.rest.rotate - rot2Before), 'mid joint rotated').toBeGreaterThan(0.5);
+    expect(Math.abs(b3After.rest.rotate - rot3Before), 'grabbed bone itself rotated (the fix)')
+      .toBeGreaterThan(0.5);
     expect(renderedD(LIMB), 'skinned art deformed under IK').not.toBe(artBefore);
   });
 });
@@ -385,9 +392,11 @@ describe('scenario B10 — IK on the SKINNED ART bends the chain', () => {
     const grab = clientPointOnPart(LIMB);
     gestureDrag(grab, { x: grab.x - 30, y: grab.y - 40 }, { steps: 12 });
 
-    const bent = Math.abs(cur(b1.id).rest.rotate - r1) > 0.5
-      || Math.abs(cur(b2.id).rest.rotate - r2) > 0.5;
-    expect(bent, 'IK rotated at least one chain joint').toBe(true);
+    // RE-SPEC (full-chain FABRIK): the skinned-art IK path solves the whole bone chain, so
+    // BOTH joints participate (the old two-joint solver would still move both here, but on
+    // a 3+ chain it capped at two — the 4-bone scenario B23 is the mutation-check for that).
+    expect(Math.abs(cur(b1.id).rest.rotate - r1), 'root joint rotated').toBeGreaterThan(0.5);
+    expect(Math.abs(cur(b2.id).rest.rotate - r2), 'tip joint rotated').toBeGreaterThan(0.5);
     expect(renderedD(LIMB), 'skinned art deformed under IK').not.toBe(artBefore);
   });
 });
@@ -809,5 +818,92 @@ describe('scenario B23 — node-editing "bind to bone…" dialog', () => {
     expect(ov.b).toBe(b1.id);
     expectClose(ov.t, 0.5, 1e-9, 'even blend toward the neighbor');
     expect(canUndo(), 'the bind + pin round-trips through undo').toBe(true);
+  });
+});
+
+describe('scenario B24 — full-chain IK on a 4-bone chain (the reported bug: EVERY joint bends)', () => {
+  it('IK-dragging the wrist bends all four bones incl. the immediate parent, lengths byte-stable, one undo restores all rests', () => {
+    // The user's exact complaint (screenshot: a 4-bone chain on an arm): the IK tool rotated
+    // only the grabbed bone's two nearest ancestors — the grabbed bone and its immediate
+    // parent moved as one rigid unit and the root never turned. FABRIK makes every joint
+    // participate. MUTATION CHECK: the old two-joint solver leaves b1 (root) and b4 (grabbed)
+    // unchanged, so those two assertions fail under it (only b2/b3 would move).
+    const [b1, b2, b3, b4] = placeChain(LIMB, 4);
+    expect(partByLabel(LIMB).skin!.bones.length, 'all four bones bound').toBe(4);
+
+    state.tool = 'ik';
+    modelSelectPart(null);
+    repaint();
+
+    const bones = [b1, b2, b3, b4];
+    const rot0 = bones.map((b) => b.rest.rotate);
+    const len0 = bones.map(boneLen);
+
+    const from = clientCenterOf(overlayEl().querySelector(`[data-part-id="${b4.id}"]`)!);
+    const rootC = clientCenterOf(overlayEl().querySelector(`[data-part-id="${b1.id}"]`)!);
+    const dxr = rootC.x - from.x, dyr = rootC.y - from.y; // toward the root
+    const len = Math.hypot(dxr, dyr) || 1;
+    // Curl the whole chain: pull the tip halfway back toward the root AND well off the chain
+    // axis, so no single joint can reach the target alone — every one must turn.
+    const toward = {
+      x: from.x + dxr * 0.5 + (-dyr / len) * 55,
+      y: from.y + dyr * 0.5 + (dxr / len) * 55,
+    };
+    gestureDrag(from, toward, { steps: 14 });
+
+    const cur = (id: string) => state.doc!.parts.find((p) => p.id === id)!;
+    bones.forEach((b, i) => {
+      expect(Math.abs(cur(b.id).rest.rotate - rot0[i]), `bone ${i + 1} rotated (>0.5°)`)
+        .toBeGreaterThan(0.5);
+      expectClose(boneLen(cur(b.id)), len0[i], 1e-9, `bone ${i + 1} length byte-stable`);
+    });
+
+    // The grabbed bone's TIP lands on the pointer ("the hand tracks the pointer").
+    modelSelectPart(b4.id);
+    repaint();
+    const tip = clientCenterOf(overlayEl().querySelector('.bone-tip-handle')!);
+    expectClose(Math.hypot(tip.x - toward.x, tip.y - toward.y), 0, 8, 'tip landed on the pointer');
+
+    // One gesture = one checkpoint: a single undo restores EVERY bone's rest.
+    expect(canUndo()).toBe(true);
+    undo();
+    bones.forEach((b, i) => {
+      expectClose(cur(b.id).rest.rotate, rot0[i], 1e-9, `bone ${i + 1} rest restored by one undo`);
+    });
+  });
+});
+
+describe('scenario B25 — full-chain IK keys every bone at the playhead (Animate)', () => {
+  it('IK-dragging the wrist in Animate writes a rotate keyframe on ALL FOUR bones', () => {
+    const bones = placeChain(LIMB, 4); // placed in Edit
+    const [b1, , , b4] = bones;
+
+    setEditorMode('animate');
+    state.currentTime = 0;
+    state.tool = 'ik';
+    modelSelectPart(null);
+    repaint();
+
+    for (const b of bones) expect(clipTrack(b.id, 'rotate'), 'no rotate track pre-drag').toBeFalsy();
+
+    const from = clientCenterOf(overlayEl().querySelector(`[data-part-id="${b4.id}"]`)!);
+    const rootC = clientCenterOf(overlayEl().querySelector(`[data-part-id="${b1.id}"]`)!);
+    const dxr = rootC.x - from.x, dyr = rootC.y - from.y;
+    const len = Math.hypot(dxr, dyr) || 1;
+    const toward = {
+      x: from.x + dxr * 0.5 + (-dyr / len) * 55,
+      y: from.y + dyr * 0.5 + (dxr / len) * 55,
+    };
+    gestureDrag(from, toward, { steps: 14 });
+
+    // Every bone got a rotate track keyed at the playhead, differing from its rest (it turned).
+    for (const b of bones) {
+      const track = clipTrack(b.id, 'rotate');
+      expect(track, `rotate track created for bone ${b.id}`).toBeTruthy();
+      const key = track!.keyframes.find((k) => k.time === state.currentTime);
+      expect(key, 'keyframe at the playhead').toBeTruthy();
+      expect(Math.abs(key!.value - b.rest.rotate), 'keyed rotation differs from rest')
+        .toBeGreaterThan(0.5);
+    }
   });
 });

@@ -378,11 +378,10 @@ function appendNullGlyph(
   glyph.dataset.partId = part.id;
   const sel = state.selectedPartIds.includes(part.id) ? ' selected' : '';
   const drag = ctx.drag;
-  const ikActive = !!drag && drag.kind === 'ik' && drag.active && (
-    part.id === drag.p1.id
-    || (!!drag.p2 && part.id === drag.p2.id)
-    || (drag.grabbed.kind === 'bone' && part.id === drag.grabbed.id)
-  );
+  // Highlight EVERY bone FABRIK is solving (root→effector), so the whole participating
+  // chain lights up — not just two ancestors.
+  const ikActive = !!drag && drag.kind === 'ik' && drag.active
+    && drag.chain.some((c) => c.id === part.id);
   glyph.setAttribute('class', `null-glyph ${part.kind}${sel}${ikActive ? ' ik-active' : ''}`);
   if (rootTransform) glyph.setAttribute('transform', rootTransform);
   const tip = effectiveTip(part, t);
