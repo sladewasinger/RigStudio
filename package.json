@@ -10,6 +10,7 @@
     "preview": "vite preview",
     "test": "vitest run --project unit",
     "test:interaction": "vitest run --project interaction",
+    "export:take-pill": "vitest run --config scripts/exportPipTakePill.config.ts",
     "pages": "vite build --outDir dist --base=/RigStudio/"
   },
   "dependencies": {

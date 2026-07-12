@@ -554,7 +554,11 @@ export function exportRiv(doc: RigDoc): Uint8Array {
     scene.propDouble(P_NODE_X, baseX + part.rest.tx);
     scene.propDouble(P_NODE_Y, baseY + part.rest.ty);
     if (part.rest.rotate !== 0) scene.propDouble(P_ROTATION, part.rest.rotate * DEG2RAD);
-    // Rest scale/skew are baked into geometry (below), so the Node scale stays 1.
+    // Rest scale/skew are baked into geometry (below), so the STATIC Node scale stays 1.
+    // A part MAY still key sx/sy (see channelSpecs) — an absolute Node scaleX/scaleY that
+    // rides on top of the baked-in rest scale, so a part authored at rest scale 1 keys a
+    // clean 1..0 (e.g. an object shrinking to nothing). Unkeyed parts emit no scale
+    // channel, so this is byte-identical to before for every doc that never keys it.
     scene.end();
   };
 
@@ -623,6 +627,11 @@ export function exportRiv(doc: RigDoc): Uint8Array {
       { target: part.id, channel: 'rotate', propertyKey: P_ROTATION, base: 0, isAngle: true },
       { target: part.id, channel: 'tx', propertyKey: P_NODE_X, base: part.pivot.x - parentRef.x, isAngle: false },
       { target: part.id, channel: 'ty', propertyKey: P_NODE_Y, base: part.pivot.y - parentRef.y, isAngle: false },
+      // sx/sy: absolute Node scale (base 0 -> raw value == the keyed scale). A part with
+      // no scale keyframes produces an empty channel and emits nothing, so this is a
+      // no-op for every doc that never animates part scale (all existing fixtures).
+      { target: part.id, channel: 'sx', propertyKey: P_SCALE_X, base: 0, isAngle: false },
+      { target: part.id, channel: 'sy', propertyKey: P_SCALE_Y, base: 0, isAngle: false },
     );
   }
   const objectIdOf = (target: string): number =>
