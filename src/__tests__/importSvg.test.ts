@@ -157,7 +157,7 @@ describe('importSvg', () => {
       'a.svg',
     );
     for (const part of doc.parts) {
-      expect(part.rest).toEqual({ rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 });
+      expect(part.rest).toEqual({ rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 });
       expect(part.parentId).toBeNull();
     }
     expect(doc.clips).toEqual([{ name: 'idle', duration: 2000, tracks: [] }]);

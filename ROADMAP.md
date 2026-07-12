@@ -386,6 +386,64 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
 - [ ] **Export wave (unblocked — user WIP committed)**: .riv keyed z draw order
   via DrawTarget/DrawRules; .riv + Lottie opacity keys; hidden-part exclusion in
   both exporters; verify against the user's headless rive-android pipeline.
+## AI Animate System v2 (program planned 2026-07-11 with Austin — build in order)
+
+One coherent system, not bolted-on features: every phase feeds the next. Decisions
+locked: root is DEMOTED (groups are the figure controls — the shadow-follows-pip
+bug class dies here); create-vs-modify are two explicit buttons; refinement threads
+are CLIP-scoped; templates are rig-agnostic via a learned Rig Profile; the
+principles pass integrates last as a preset refinement turn.
+
+- [ ] **A0. Targeting & root demotion** — the AI keys `root.tx/ty` and drags the
+  shadow along. Fix: (1) request context gains the SELECTION (id/label of the
+  selected part/group) + the part tree with group structure; (2) prompt rules:
+  NEVER key `root`; whole-figure motion targets the user's selected group or the
+  group covering the moving parts (props/shadows deliberately outside stay
+  untouched); (3) UI: the Figure(root) inspector section is removed from Animate
+  (legacy `root` tracks keep sampling/exporting for back-compat; docs note the
+  deprecation). Also in this wave: the CLEAN-PREVIEW toggle — one Animate-mode
+  button hiding ALL editor chrome (bones, pivots, joints, dashed lines, selection
+  boxes, gizmos) to watch the animation clean.
+- [ ] **A1. Session & intent UX** — prompt text persists across view/mode switches
+  until sent (module state, like the busy flag). TWO actions replace the single
+  button: [Create new animation] → AI returns a clip + a NAME, added to the clips
+  dropdown and selected; [Modify current] → edits the active clip, with a
+  "protect playhead keys" checkbox (keys at the current playhead time are locked:
+  prompt instructs it AND post-apply enforcement restores any protected key the
+  model touched). Duration is pinned: the schema echoes the clip's set duration
+  and validation rejects/clamps drift.
+- [ ] **A2. Preview-before-apply** (idea 4) — AI results NEVER mutate the doc
+  directly: the returned clip renders as a looping preview (pose-sampler
+  playback, the SM-preview infrastructure) with an Apply / Retry / Discard bar.
+  Apply = the existing atomic one-undo path; Retry = posts back into the thread
+  (A4) with the preview visible; Discard = zero trace. Structural changes (new
+  bones) preview as ghost overlays where feasible, else summarized in the bar.
+- [ ] **A3. Filmstrip vision** (idea 1) — replace the single playhead snapshot
+  with a strip of rendered frames (t = 0/25/50/75/100% of the clip, or one per
+  keyframe cluster when denser), downscaled, payload-capped. Sent on BOTH
+  animate and critique calls so Claude sees motion arcs, clipping, dead holds —
+  and on A2 Retry turns it re-renders the CANDIDATE clip so refinement reacts to
+  what the model actually produced.
+- [ ] **A4. Clip-scoped refinement threads** (idea 2) — each clip keeps a
+  conversation thread (app-state + localStorage keyed by doc name + clip name;
+  last N turns): prior clip JSON, user instructions, model changes-summaries.
+  The prompt box becomes the thread composer; A2's Retry is a thread turn;
+  switching clips switches threads. Clearing/deleting a clip drops its thread.
+- [ ] **A5. Rig Profile + motion templates** (idea 5, rig-AGNOSTIC) — an
+  "analyze rig" step (cheap heuristics + optional one AI call) builds a cached
+  RigProfile: bone chains, symmetry pairs (left_/right_ label pairs, mirrored
+  transforms), role guesses (torso/head/limb/face/prop), figure group. Template
+  quick-actions (walk cycle, idle breathing, jump, wave, emphatic gesture) are
+  motion ARCHETYPES parameterized by the profile and beat-mapped to the set
+  duration (anticipation/action/settle/hold percentages). Works on any imported
+  rig; profile invalidates when the hierarchy changes.
+- [ ] **A6. Principles polish pass** (idea 3, LAST — integrates with everything) —
+  a one-click "Polish" preset refinement turn (A4) on the current clip: adds
+  anticipation before large moves, cascades follow-through down bone chains
+  (children lag 40–80ms), settle-with-overshoot easings on arrivals, optional
+  squash-stretch via part scale keys — choreography preserved, quality raised.
+  Uses A3 filmstrips for before/after and A2 preview for acceptance.
+
 - [ ] **FINAL ITEM (do last): swap the default sample to girl_example** — Pip is
   commercial art for the user's app; re-base the interaction-harness fixtures onto
   the girl (or a neutral fixture), remove PIP_MASTER.svg from public/ and the

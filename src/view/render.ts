@@ -8,9 +8,11 @@
  * SMInstance (smPanel's only hook) and repaints.
  */
 
-import { state, activeClip, Channel, RigDoc, RigPart, drawOrder } from '../core/model';
+import {
+  state, activeClip, Channel, RigDoc, RigPart, drawOrder, isEffectivelyHidden,
+} from '../core/model';
 import { ctx, SVG_NS } from './context';
-import { poseTime, rootPoseTransform, groupTransformOf, effectiveZ } from './pose';
+import { poseTime, rootPoseTransform, groupTransformOf, effectiveZ, effectiveOpacity } from './pose';
 import { focusContext, nodeEditSkinSuspendId } from './focus';
 import { renderSkinnedPart } from './skinRender';
 import { renderOverlay } from './overlay';
@@ -47,6 +49,26 @@ function renderPartRigid(part: RigPart, g: SVGGElement, t: number | null): void 
   g.setAttribute('transform', groupTransformOf(part, t));
   for (const p of part.paths) {
     g.querySelector(`[data-path-id="${p.id}"]`)?.setAttribute('d', p.d);
+  }
+}
+
+/**
+ * Set/remove the `opacity` presentation attribute on a part's own group from its
+ * effective (rest-or-keyed) opacity, clamped to 0..1 — but only TOUCH the DOM when the
+ * value actually changed, since this runs every part every frame during playback. Full
+ * opacity (>=1, the overwhelming common case) REMOVES the attribute instead of writing
+ * "1" so a doc that never uses this channel stays byte-identical in the DOM to before it
+ * existed. Composes with `.dimmed`'s CSS opacity by ordinary cascade precedence (a
+ * stylesheet class rule beats a presentation attribute) — dimming still wins outright
+ * while a part is drilled-into-away-from, no extra multiplication logic needed here.
+ */
+function applyOpacity(part: RigPart, g: SVGGElement, t: number | null): void {
+  const val = Math.min(1, Math.max(0, effectiveOpacity(part, t)));
+  const cur = g.getAttribute('opacity');
+  if (val >= 1) {
+    if (cur !== null) g.removeAttribute('opacity');
+  } else if (cur === null || Number(cur) !== val) {
+    g.setAttribute('opacity', String(val));
   }
 }
 
@@ -105,6 +127,15 @@ export function renderPose(): void {
     } else {
       g.setAttribute('transform', groupTransformOf(part, t));
     }
+    applyOpacity(part, g, t);
+    // Layers eye (editor-only, never keyable — see RigPart.hidden's doc comment):
+    // visibility:hidden rather than display:none so getBBox() (align/distribute,
+    // selection boxes, snapping candidates, node-editing suspend hints — several call
+    // sites outside this module) keeps working on a hidden-but-still-selected part
+    // instead of throwing; it's equally dead to elementFromPoint/hit-testing. Computed
+    // per part (not inherited) because the canvas is a FLAT list of part groups, not a
+    // nested DOM tree, so a hidden ancestor's state can't cascade through CSS alone.
+    g.classList.toggle('part-hidden', isEffectivelyHidden(part));
   }
   applyDrawOrder(doc, t);
   renderOnion();
@@ -198,8 +229,16 @@ function renderOnion(): void {
     layer.setAttribute('class', `onion-ghost ${cls}`);
     layer.setAttribute('transform', rootPoseTransform(ghostTime));
     for (const part of doc.parts) {
+      if (isEffectivelyHidden(part)) continue; // a hidden part has no ghost either
       const g = document.createElementNS(SVG_NS, 'g');
       g.setAttribute('transform', groupTransformOf(part, ghostTime));
+      // Each ghost is built FRESH (never cloned from the live part group), so sampling
+      // opacity at ghostTime and setting it once here is a SINGLE application, composed
+      // multiplicatively with the ghost layer's own fixed 0.16 CSS opacity above — not a
+      // double-application of the live/current-time value. A part fading out reads as a
+      // fainter ghost at the time it's more transparent, which is the correct look.
+      const op = Math.min(1, Math.max(0, effectiveOpacity(part, ghostTime)));
+      if (op < 1) g.setAttribute('opacity', String(op));
       for (const p of part.paths) {
         const el = document.createElementNS(SVG_NS, 'path');
         el.setAttribute('d', p.d);

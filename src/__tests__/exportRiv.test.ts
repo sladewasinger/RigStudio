@@ -254,7 +254,7 @@ function path(id: string, o: Partial<RigPath> = {}): RigPath {
 function part(id: string, o: Partial<RigPart> = {}): RigPart {
   return {
     id, label: id, kind: 'art', transform: '', pivot: { x: 0, y: 0 }, pivotHint: null,
-    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 }, parentId: null,
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 }, parentId: null,
     paths: [], ...o,
   };
 }
@@ -271,7 +271,7 @@ function pipDoc(): RigDoc {
   });
   const arm = part('p_arm', {
     label: 'arm', pivot: { x: 70, y: 40 }, parentId: 'p_body',
-    rest: { rotate: 15, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
+    rest: { rotate: 15, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
     paths: [path('arm_path', { stroke: '#000000', strokeWidth: 2 })],
   });
   const idle: Clip = {

@@ -160,12 +160,31 @@
  *     conditions AND with the exit-time gate). flags/exitTime are emitted ONLY when a
  *     transition leaving an ANIMATION state carries an exitFraction; every other transition
  *     omits both keys, so a doc without exit times exports byte-identically to before.
+ *
+ * OPACITY CHANNEL AND LAYERS EYE (not fully mapped this wave):
+ *  - A keyed `opacity` channel / non-1 `RestPose.opacity` is SILENTLY IGNORED — channelSpecs
+ *    below lists only rotate/tx/ty/sx/sy, so no KeyedProperty is ever built for it, and no
+ *    static Node opacity property exists in this schema table to write either. Real export
+ *    (Rive's Shape/Node don't carry opacity directly — it would need Feathering/opacity via
+ *    a Fill/Stroke alpha animation, or per-Shape visibility) is the next wave.
+ *  - The Layers eye (`RigPart.hidden`) IS handled, PARTIALLY: a hidden part's Shapes are
+ *    skipped (the loop below over doc.parts, reversed for draw order), so it paints nothing
+ *    — Shape is the only Drawable typeKey here (see the draw-order comment above), so a
+ *    part with zero Shapes is exactly as invisible as an unbound bone/group already is.
+ *    Its Node, channelSpecs entries (keyed transform tracks), and any state-machine
+ *    listener targeting it are all left INTACT, on purpose: a hidden part may still be a
+ *    parent bone driving VISIBLE children, and dropping its Node would require reindexing
+ *    every descendant's parentId plus re-deriving their base positions relative to a new
+ *    parent — the "nontrivial index remapping" this file's callers were warned to avoid.
+ *    Full object-level removal (Node + tracks + orphan reparenting) is deferred to the
+ *    export wave that also finishes the opacity channel.
  */
 
 import {
   artboardFrame,
   Channel,
   Easing,
+  isEffectivelyHidden,
   Keyframe,
   RigDoc,
   RigPart,
@@ -578,6 +597,9 @@ export function exportRiv(doc: RigDoc): Uint8Array {
   // the animation objectIds (recorded in partIndex at node-emit time) are unaffected.
   for (let pi = doc.parts.length - 1; pi >= 0; pi--) {
     const part = doc.parts[pi];
+    // Layers eye: skip this part's Shapes entirely (see the module doc comment) — its
+    // Node stays so descendants keep their parent chain and base positions.
+    if (isEffectivelyHidden(part)) continue;
     for (let qi = part.paths.length - 1; qi >= 0; qi--) {
       emitShape(scene, part, part.paths[qi], partIndex.get(part.id)!);
     }

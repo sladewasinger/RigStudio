@@ -355,6 +355,7 @@ class Instance implements SMInstance {
       case 'sx': return part.rest.sx;
       case 'sy': return part.rest.sy;
       case 'z': return CHANNEL_DEFAULTS.z; // draw-order offset has no RestPose field (rests at 0)
+      case 'opacity': return part.rest.opacity;
     }
   }
 }

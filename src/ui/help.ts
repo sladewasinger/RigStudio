@@ -163,6 +163,11 @@ export const SHORTCUTS: ShortcutEntry[] = [
     description: 'Range-select from the anchor row to the clicked row (Ctrl+click toggles one)',
     context: 'Mouse',
   },
+  {
+    keys: 'Layers: eye icon',
+    description: 'Hide/show a part on the canvas (editor only — never keyed, never exported)',
+    context: 'Mouse',
+  },
 ];
 
 /** SHORTCUTS grouped by context, in GROUP_ORDER order; empty groups are omitted. */

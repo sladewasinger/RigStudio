@@ -116,7 +116,7 @@ function registerPart(
   const part: RigPart = {
     id: freshId('part'), label: labelOf(el), kind: 'art', transform, pivot, pivotHint,
     paths: [],
-    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
     parentId,
   };
   parts.push(part);

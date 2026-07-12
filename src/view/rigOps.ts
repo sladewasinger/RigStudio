@@ -229,7 +229,9 @@ export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
     }
     part.pivot = effectivePivot(part, null);
     part.transform = '';
-    part.rest = { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 };
+    // Bind bakes/zeroes the GEOMETRIC rest fields (they're now baked into path.d); opacity
+    // is a paint property, not a transform, so it survives the reset untouched.
+    part.rest = { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: part.rest.opacity };
     part.parentId = null;
     part.skin = { bones: freshBones() };
     invalidateSkinCache(part.id);

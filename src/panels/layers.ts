@@ -14,6 +14,7 @@ import { checkpoint } from '../core/history';
 import { dialog } from '../ui/dialogs';
 import { showContextMenu } from '../ui/contextMenu';
 import { buildPartContextMenu } from '../ui/actions';
+import { icon } from './icons';
 
 // ---- Layers tree ----
 
@@ -82,6 +83,7 @@ function partNode(part: RigPart): HTMLElement {
   row.className = 'layer-row part';
   if (part.id === state.selectedPartId) row.classList.add('selected');
   else if (state.selectedPartIds.includes(part.id)) row.classList.add('in-selection');
+  if (part.hidden) row.classList.add('hidden-part');
 
   const isOpen = expanded.has(part.id);
   const children = [...doc.parts].reverse().filter((p) => p.parentId === part.id);
@@ -116,6 +118,24 @@ function partNode(part: RigPart): HTMLElement {
   count.className = 'layer-count';
   count.textContent = children.length > 0 ? `${part.paths.length}+${children.length}` : `${part.paths.length}`;
   row.appendChild(count);
+
+  // Layers eye: editor-only visibility, NEVER keyable — the same `part.hidden` flag in
+  // both Edit and Animate, so toggling it never touches a clip's tracks (unlike the
+  // keyable `opacity` channel just above it in the inspector). stopPropagation so the
+  // click doesn't also run the row's select handler below.
+  const eye = document.createElement('button');
+  eye.type = 'button';
+  eye.className = 'layer-eye';
+  eye.appendChild(icon(part.hidden ? 'eyeClosed' : 'eyeOpen'));
+  eye.title = part.hidden ? 'Show this part' : 'Hide this part (editor only, never exported/keyed)';
+  eye.onclick = (ev) => {
+    ev.stopPropagation();
+    checkpoint();
+    part.hidden = !part.hidden;
+    renderPose();
+    notify();
+  };
+  row.appendChild(eye);
 
   row.onclick = (ev) => {
     // Shift = RANGE select between the anchor (current primary) and this row, in visible

@@ -57,7 +57,7 @@ function machine(opts: {
 /** A RigDoc carrying one part 'p1', the given clips, and one state machine. */
 function docWith(sm: StateMachine, clips: Clip[], restRotate = 0): RigDoc {
   const part = makePart('p1', {
-    rest: { rotate: restRotate, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
+    rest: { rotate: restRotate, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
   });
   const doc = makeDoc([part], clips);
   doc.stateMachines = [sm];
@@ -625,7 +625,7 @@ describe('reset', () => {
 
 describe('channelValue parity with model.channelValue', () => {
   it('matches model.channelValue for a single non-blending animation state', () => {
-    const part = makePart('p1', { rest: { rotate: 30, tx: 7, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 } });
+    const part = makePart('p1', { rest: { rotate: 30, tx: 7, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 } });
     const track = makeTrack('p1', 'rotate', [[0, 10, 'linear'], [1000, 20, 'linear']]);
     const clip = makeClip({ name: 'idle', duration: 100000, tracks: [track] }); // huge → no wrap
     const doc = makeDoc([part], [clip]);
@@ -645,5 +645,35 @@ describe('channelValue parity with model.channelValue', () => {
     // Unkeyed channel → identical rest fallback.
     expect(inst.channelValue('p1', 'tx')).toBe(channelValue(part, 'tx', 500));
     expect(inst.channelValue('p1', 'tx')).toBe(7);
+  });
+
+  it('opacity: unkeyed → the PART\'s own rest.opacity (not CHANNEL_DEFAULTS), keyed → eased sample', () => {
+    const part = makePart('p1', {
+      rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 0.6 },
+    });
+    const opTrack = makeTrack('p1', 'opacity', [[0, 1, 'linear'], [1000, 0, 'linear']]);
+    const clip = makeClip({ name: 'idle', duration: 100000, tracks: [opTrack] });
+    const doc = makeDoc([part], [clip]);
+    const sm = machine({
+      states: [entry(), anyState(), anim('A', 'idle')],
+      transitions: [tr('te', 'entry', 'A')],
+    });
+    doc.stateMachines = [sm];
+
+    resetState(doc);
+    const inst = createSMInstance(doc, sm);
+    inst.advance(500);
+    expect(inst.channelValue('p1', 'opacity')).toBeCloseTo(channelValue(part, 'opacity', 500), 9);
+    expect(inst.channelValue('p1', 'opacity')).toBeCloseTo(0.5, 9); // eased midpoint, not held
+
+    // A second part with no opacity track falls back to ITS rest.opacity through the
+    // rest pseudo-state (evaluator never entered an animation state for it).
+    const bystander = makePart('p2', {
+      rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 0.25 },
+    });
+    doc.parts.push(bystander);
+    resetState(doc);
+    const inst2 = createSMInstance(doc, sm);
+    expect(inst2.channelValue('p2', 'opacity')).toBe(0.25);
   });
 });

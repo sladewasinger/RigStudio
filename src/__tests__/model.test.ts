@@ -21,6 +21,7 @@ import {
   drawOrder,
   duplicateParts,
   groupParts,
+  isEffectivelyHidden,
   keyAt,
   movePartRelativeTo,
   moveSelectedInDrawOrder,
@@ -173,10 +174,116 @@ describe('z-order channel (stepped draw-order offset)', () => {
   });
 });
 
+describe('opacity channel (continuous, keyable — unlike z)', () => {
+  it('sampleChannel EASES opacity normally (mutation guard vs. the stepped z path)', () => {
+    const track = makeTrack('p1', 'opacity', [
+      [0, 1, 'linear'],
+      [1000, 0, 'linear'],
+    ]);
+    resetState(makeDoc([makePart('p1')], [makeClip({ tracks: [track] })]));
+    expect(sampleChannel('p1', 'opacity', 0)).toBe(1);
+    // Interpolated, not held — a stepped read would still be 1 here (z's behavior).
+    expect(sampleChannel('p1', 'opacity', 500)).toBeCloseTo(0.5, 9);
+    expect(sampleChannel('p1', 'opacity', 1000)).toBe(0);
+    // No track/clip → CHANNEL_DEFAULTS.opacity (1), same fallback path as every channel.
+    resetState(makeDoc([makePart('p1')]));
+    expect(sampleChannel('p1', 'opacity', 100)).toBe(1);
+  });
+
+  it('channelValue opacity: rest fallback is the PART\'s own rest.opacity, not a global default', () => {
+    const part = makePart('p1', {
+      rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 0.4 },
+    });
+    resetState(makeDoc([part]));
+    expect(channelValue(part, 'opacity', null)).toBe(0.4); // Setup: bare rest
+    expect(channelValue(part, 'opacity', 500)).toBe(0.4); // Animate, unkeyed → rest
+
+    const track = makeTrack('p1', 'opacity', [[0, 1, 'linear'], [1000, 0.2, 'linear']]);
+    resetState(makeDoc([part], [makeClip({ tracks: [track] })]));
+    expect(channelValue(part, 'opacity', null)).toBe(0.4); // Setup always reads bare rest
+    expect(channelValue(part, 'opacity', 0)).toBe(1); // keyed → ABSOLUTE, ignores rest entirely
+    expect(channelValue(part, 'opacity', 500)).toBeCloseTo(0.6, 9); // eased between 1 and 0.2
+  });
+
+  it('a non-1 rest opacity and an opacity track both survive serialize -> deserialize', () => {
+    const part = makePart('p1', {
+      rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 0.5 },
+    });
+    const track = makeTrack('p1', 'opacity', [[0, 1, 'linear'], [800, 0.3, 'easeOut']]);
+    const doc = makeDoc([part], [makeClip({ tracks: [track] })]);
+    const round = deserializeDoc(serializeDoc(doc));
+    expect(round.parts[0].rest.opacity).toBe(0.5);
+    const opTrack = round.clips[0].tracks.find((t) => t.channel === 'opacity');
+    expect(opTrack).toBeTruthy();
+    expect(opTrack!.keyframes.map((k) => [k.time, k.value])).toEqual([[0, 1], [800, 0.3]]);
+    resetState(round);
+    expect(sampleChannel('p1', 'opacity', 0)).toBe(1);
+    expect(sampleChannel('p1', 'opacity', 800)).toBe(0.3);
+  });
+});
+
+describe('RigPart.hidden / isEffectivelyHidden (Layers eye — editor-only, never a channel)', () => {
+  it('an unparented part is hidden only by its own flag', () => {
+    const a = makePart('a');
+    resetState(makeDoc([a]));
+    expect(isEffectivelyHidden(a)).toBe(false);
+    a.hidden = true;
+    expect(isEffectivelyHidden(a)).toBe(true);
+    a.hidden = false;
+    expect(isEffectivelyHidden(a)).toBe(false);
+  });
+
+  it("cascades DOWN the parent chain: a hidden ancestor's descendants are effectively hidden too", () => {
+    const grandparent = makePart('gp');
+    const parent = makePart('p', { parentId: 'gp' });
+    const child = makePart('c', { parentId: 'p' });
+    resetState(makeDoc([grandparent, parent, child]));
+    expect(isEffectivelyHidden(child)).toBe(false);
+
+    grandparent.hidden = true;
+    expect(isEffectivelyHidden(grandparent)).toBe(true);
+    expect(isEffectivelyHidden(parent)).toBe(true);
+    expect(isEffectivelyHidden(child)).toBe(true);
+    // The flag itself is stored ONLY on the part it was toggled on — cascading is purely
+    // a derived render/export-time computation, never copied onto descendants.
+    expect(parent.hidden).toBeUndefined();
+    expect(child.hidden).toBeUndefined();
+  });
+
+  it('hidden survives serialize -> deserialize (true stays true, absent stays absent)', () => {
+    const a = makePart('a');
+    a.hidden = true;
+    const b = makePart('b');
+    const round = deserializeDoc(serializeDoc(makeDoc([a, b])));
+    expect(round.parts[0].hidden).toBe(true);
+    expect(round.parts[1].hidden).toBeUndefined();
+  });
+
+  it('normalizeDoc heals a corrupt/hand-edited hidden value to a clean true or undefined', () => {
+    const doc = {
+      name: 'old',
+      viewBox: { x: 0, y: 0, w: 10, h: 10 },
+      rootPivot: { x: 5, y: 8 },
+      parts: [
+        { id: 'p_1', label: 'a', transform: '', pivot: { x: 0, y: 0 }, paths: [], hidden: 'yes' },
+        { id: 'p_2', label: 'b', transform: '', pivot: { x: 0, y: 0 }, paths: [], hidden: false },
+        { id: 'p_3', label: 'c', transform: '', pivot: { x: 0, y: 0 }, paths: [] }, // absent
+        { id: 'p_4', label: 'd', transform: '', pivot: { x: 0, y: 0 }, paths: [], hidden: true },
+      ],
+      clips: [{ name: 'idle', duration: 2000, tracks: [] }],
+    } as unknown as RigDoc;
+    const out = normalizeDoc(doc);
+    expect(out.parts[0].hidden).toBeUndefined(); // "yes" is truthy but not === true → healed
+    expect(out.parts[1].hidden).toBeUndefined();
+    expect(out.parts[2].hidden).toBeUndefined();
+    expect(out.parts[3].hidden).toBe(true);
+  });
+});
+
 describe('channelValue', () => {
   function docWithKeyedRotate(): RigDoc {
     const part = makePart('p1', {
-      rest: { rotate: 45, tx: 7, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
+      rest: { rotate: 45, tx: 7, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
     });
     const track = makeTrack('p1', 'rotate', [
       [0, 10, 'linear'],
@@ -206,7 +313,7 @@ describe('channelValue', () => {
   });
 
   it('returns the rest value when the track exists but has no keyframes', () => {
-    const part = makePart('p1', { rest: { rotate: 30, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 } });
+    const part = makePart('p1', { rest: { rotate: 30, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 } });
     const empty = makeTrack('p1', 'rotate', []);
     resetState(makeDoc([part], [makeClip({ tracks: [empty] })]));
     expect(channelValue(part, 'rotate', 500)).toBe(30);
@@ -458,7 +565,7 @@ describe('duplicateParts', () => {
   it('clones fresh ids for the part and every path, without sharing path objects', () => {
     const part = makePart('p1', {
       paths: [makePath('a'), makePath('b')],
-      rest: { rotate: 0, tx: 5, ty: 5, sx: 1, sy: 1, kx: 0, ky: 0 },
+      rest: { rotate: 0, tx: 5, ty: 5, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
     });
     resetState(makeDoc([part, makePart('p2')]));
     const [newId] = duplicateParts(['p1']);
@@ -478,7 +585,7 @@ describe('duplicateParts', () => {
     const parent = makePart('parent');
     const part = makePart('p1', {
       label: 'arm', parentId: 'parent',
-      rest: { rotate: 3, tx: 1, ty: 2, sx: 1, sy: 1, kx: 0, ky: 0 },
+      rest: { rotate: 3, tx: 1, ty: 2, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
     });
     resetState(makeDoc([parent, part]));
     const [newId] = duplicateParts(['p1']);
@@ -582,8 +689,8 @@ describe('normalizeDoc', () => {
     } as unknown as RigDoc;
 
     const out = normalizeDoc(doc);
-    expect(out.parts[0].rest).toEqual({ rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 });
-    expect(out.parts[1].rest).toEqual({ rotate: 5, tx: 1, ty: 2, sx: 1, sy: 1, kx: 0, ky: 0 });
+    expect(out.parts[0].rest).toEqual({ rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 });
+    expect(out.parts[1].rest).toEqual({ rotate: 5, tx: 1, ty: 2, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 });
     expect(out.parts[0].parentId).toBeNull();
     expect(out.parts[0].pivotHint).toBeNull();
     expect(out.parts[0].kind).toBe('art'); // defaulted — field didn't exist pre-bones/groups
@@ -611,7 +718,7 @@ describe('normalizeDoc', () => {
       rootPivot: { x: 5, y: 8 },
       parts: [{
         id: 'p_1', label: 'arm', kind: 'art', transform: '', pivot: { x: 0, y: 0 },
-        rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 }, parentId: null,
+        rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 }, parentId: null,
         paths: [
           { id: 'path_1', d: 'M 0,0', fill: null, fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1, transform: '' },
           { id: 'path_2', d: 'M 0,0', fill: null, fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1, transform: '', nodeTypes: 42 },
@@ -741,7 +848,7 @@ describe('normalizeDoc', () => {
       parts: [
         {
           id: 'p_1', label: 'arm', transform: '', pivot: { x: 0, y: 0 },
-          rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 }, parentId: null,
+          rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 }, parentId: null,
           paths: [
             { id: 'path_1', d: 'M 0,0', fill: null, fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1, transform: '' },
             { id: 'path_2', label: 'named', d: 'M 0,0', fill: null, fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1, transform: '' },
@@ -1320,7 +1427,7 @@ function maximalDoc(): RigDoc {
       {
         id: SKINNED_HAND, label: 'hand', kind: 'art', transform: '',
         pivot: { x: 100, y: 55 }, pivotHint: null, boneTip: null,
-        rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
+        rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: null, // skinning zeroes the parent chain per convention
         skin: {
           bones: [
@@ -1343,19 +1450,19 @@ function maximalDoc(): RigDoc {
       {
         id: ELBOW, label: 'elbow', kind: 'bone', transform: '',
         pivot: { x: 70, y: 55 }, pivotHint: null, boneTip: { x: 90, y: 55 },
-        rest: { rotate: 15, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
+        rest: { rotate: 15, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: SHOULDER, skin: null, paths: [],
       },
       {
         id: GROUP1, label: 'body_group', kind: 'group', transform: '',
         pivot: { x: 50, y: 40 }, pivotHint: null, boneTip: null,
-        rest: { rotate: 5, tx: 1, ty: -1, sx: 1, sy: 1, kx: 0, ky: 0 },
+        rest: { rotate: 5, tx: 1, ty: -1, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: null, skin: null, paths: [],
       },
       {
         id: LEFT_ARM, label: 'left_arm', kind: 'art', transform: '',
         pivot: { x: 90, y: 55 }, pivotHint: null, boneTip: null,
-        rest: { rotate: -8, tx: 2, ty: 3, sx: 1, sy: 1, kx: 0, ky: 0 },
+        rest: { rotate: -8, tx: 2, ty: 3, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: ELBOW, skin: null,
         paths: [makePath2('arm_path_1', 'forearm', 'M 90,50 C 95,50 100,52 100,55 S 95,60 90,60 Z', 'css', {
           fill: '#ffcc99', fillOpacity: 1, stroke: null, strokeWidth: 0, strokeOpacity: 1, transform: '',
@@ -1365,7 +1472,7 @@ function maximalDoc(): RigDoc {
         id: TORSO, label: 'torso', kind: 'art', transform: 'translate(10,10)',
         pivot: { x: 50, y: 50 }, pivotHint: { kind: 'centerOffset', dx: 2.5, dy: -1.5 }, boneTip: null,
         // Negative sx = a flip, kx/ky = rest skew — both innermost-local-transform features.
-        rest: { rotate: 12, tx: 4, ty: -6, sx: -1.2, sy: 1.1, kx: 7.5, ky: -3.25 },
+        rest: { rotate: 12, tx: 4, ty: -6, sx: -1.2, sy: 1.1, kx: 7.5, ky: -3.25, opacity: 1 },
         parentId: GROUP1, skin: null,
         paths: [
           makePath2('torso_path_1', 'body_fill', 'M 0,0 L 10,0 L 10,10 L 0,10 Z', 'cccc', {
@@ -1380,7 +1487,7 @@ function maximalDoc(): RigDoc {
       {
         id: SHOULDER, label: 'shoulder', kind: 'bone', transform: '',
         pivot: { x: 50, y: 55 }, pivotHint: null, boneTip: { x: 70, y: 55 },
-        rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
+        rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: TORSO, skin: null, paths: [],
       },
     ],
@@ -1531,7 +1638,7 @@ describe('serializeDoc / deserializeDoc round trip', () => {
     const shoulder = restored.parts.find((p) => p.id === SHOULDER)!;
     const group = restored.parts.find((p) => p.id === GROUP1)!;
 
-    expect(torso.rest).toEqual({ rotate: 12, tx: 4, ty: -6, sx: -1.2, sy: 1.1, kx: 7.5, ky: -3.25 });
+    expect(torso.rest).toEqual({ rotate: 12, tx: 4, ty: -6, sx: -1.2, sy: 1.1, kx: 7.5, ky: -3.25, opacity: 1 });
     expect(torso.pivotHint).toEqual({ kind: 'centerOffset', dx: 2.5, dy: -1.5 });
     expect(shoulder.kind).toBe('bone');
     expect(shoulder.boneTip).toEqual({ x: 70, y: 55 });

@@ -103,6 +103,11 @@ export function buildInspector(el: HTMLElement): void {
         part.rest.ky = Math.min(85, Math.max(-85, v));
         poseEdited();
       }, 0.5));
+      el.appendChild(numberField('rest opacity', part.rest.opacity, (v) => {
+        checkpoint();
+        part.rest.opacity = Math.min(1, Math.max(0, v));
+        poseEdited();
+      }, 0.05));
       el.appendChild(numberField('pivot x', part.pivot.x, (v) => {
         checkpoint();
         part.pivot.x = v;
@@ -153,6 +158,14 @@ export function buildInspector(el: HTMLElement): void {
       zField.title = 'Draw-order offset (stepped, no easing): 0 = authored stacking, ' +
         'higher = toward the viewer. Snaps at each key.';
       el.appendChild(zField);
+      // Keyable, CONTINUOUS (unlike z — this one eases normally): fade-in/fade-out.
+      el.appendChild(keyableField(
+        'opacity', part.id, 'opacity', () => channelValue(part, 'opacity', t), (v) => {
+          checkpoint();
+          setKeyframe(part.id, 'opacity', Math.min(1, Math.max(0, v)));
+          poseEdited();
+        }, 0.05,
+      ));
     }
 
     if (setup) buildStackingRow(el, part);

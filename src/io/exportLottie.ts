@@ -17,9 +17,24 @@
  * for a composition (there is no animatable stacking property), so animated draw order
  * cannot be represented. Only the authored/rest stacking survives, via the doc.parts layer
  * order below. `trackOf` never looks up 'z', so z tracks simply don't participate.
+ *
+ * A keyed `opacity` channel and a non-1 `RestPose.opacity` are ALSO silently ignored this
+ * wave — every layer's `ks.o` stays the static `{a:0, k:100}` it always was. Real opacity
+ * export (rest AND keyed) is the next wave's work; exporting only the rest value while
+ * dropping keys would silently strand mid-fade poses, a worse partial result than doing
+ * neither yet.
+ *
+ * The Layers-panel eye (`RigPart.hidden`, editor-only, unrelated to the `opacity` channel
+ * above) IS handled here: a hidden part's `shapes` array is emitted empty, so it paints
+ * nothing. Its layer object, parenting, and transform tracks are otherwise untouched —
+ * children may still ride a hidden part's pose (exactly like a bone/group today), so
+ * removing the layer itself and remapping every descendant's `parent` index is left for a
+ * future wave. `isEffectivelyHidden` cascades the flag down the parent chain per part.
  */
 
-import { artboardFrame, Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from '../core/model';
+import {
+  artboardFrame, Channel, Easing, isEffectivelyHidden, Keyframe, RigDoc, RigPart, RigPath, Track,
+} from '../core/model';
 import { parsePath, pathToCubics } from '../geometry/paths';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
 
@@ -80,13 +95,15 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
     const parent = part.parentId && indOf.has(part.parentId)
       ? indOf.get(part.parentId)!
       : NULL_IND;
-    // Lottie draws the first shape item on top, SVG paints the last one on top.
-    const shapes = [...part.paths].reverse().flatMap((p) => {
+    // Lottie draws the first shape item on top, SVG paints the last one on top. A
+    // Layers-eye-hidden part (or one riding a hidden ancestor) emits NO shapes — see the
+    // module doc comment for why the layer itself stays (parenting/transform intact).
+    const shapes = isEffectivelyHidden(part) ? [] : [...part.paths].reverse().flatMap((p) => {
       const group = shapeGroup(part, p, ox, oy);
       return group ? [group] : [];
     });
     const ks = {
-      o: { a: 0, k: 100 },
+      o: { a: 0, k: 100 }, // opacity CHANNEL export deferred — see the module doc comment
       // Keyed values are ABSOLUTE; the rest pose only fills unkeyed channels.
       r: scalarProp(0, part.rest.rotate, trackOf(part.id, 'rotate')),
       p: positionProp(

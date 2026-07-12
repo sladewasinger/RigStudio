@@ -322,6 +322,26 @@ input[type='number'] { width: 90px; }
 .layer-row.selected .layer-count { color: #1a1a1a; }
 .layer-row.path { color: var(--muted); font-size: 12px; }
 .layer-row.path .path-icon { width: 14px; text-align: center; color: var(--accent-2); flex: none; }
+
+/* Layers eye (visibility toggle) */
+.layer-row.hidden-part { opacity: 0.55; }
+.layer-eye {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.layer-eye:hover { background: var(--surface-hover); color: var(--text); }
+.layer-row.selected .layer-eye { color: #1a1a1a; }
+.layer-row.selected .layer-eye:hover { background: rgba(0, 0, 0, 0.12); }
 .unparent-zone {
   margin-top: var(--sp-2);
   padding: 6px;
@@ -754,6 +774,12 @@ button.icon-btn { display: inline-flex; align-items: center; gap: 4px; }
 
 /* Drill-down focus: parts outside the editing context fade and pass clicks through */
 g.dimmed { opacity: 0.22; pointer-events: none; transition: opacity 0.12s ease; }
+
+/* Layers eye (editor-only visibility, never keyable): visibility:hidden rather than
+   display:none so getBBox() keeps working for a hidden-but-selected part (align/
+   distribute, selection boxes, node-editing hints) while still going dead to
+   elementFromPoint/hit-testing and painting nothing. */
+g.part-hidden { visibility: hidden; }
 
 /* Inkscape node shape language: diamond = corner, square = smooth, circle = symmetric */
 .node-handle.nt-c { fill: rgba(122, 162, 247, 0.85); stroke: #fff; stroke-width: 0.5; }

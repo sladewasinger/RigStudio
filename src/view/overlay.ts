@@ -12,7 +12,7 @@
 
 import { ctx, SVG_NS, round1, nodeKey, parseNodeKey } from './context';
 import {
-  state, RigPart, selectedPart, selectedParts, chainBonesOfPart,
+  state, RigPart, selectedPart, selectedParts, chainBonesOfPart, isEffectivelyHidden,
 } from '../core/model';
 import { parsePath } from '../geometry/paths';
 import { applyMat, matrixOfTransform } from '../geometry/transforms';
@@ -72,6 +72,7 @@ export function renderOverlay(): void {
       // hint (render.ts) so it's clear the art is showing its base shape right now.
       let selectedBoneTip: SVGGElement | null = null;
       for (const bone of chainBonesOfPart(doc.parts, part)) {
+        if (isEffectivelyHidden(bone)) continue; // Layers eye
         const tipWrap = appendNullGlyph(bone, t, rootTransform, size, setup);
         if (tipWrap) selectedBoneTip = tipWrap;
       }
@@ -92,6 +93,7 @@ export function renderOverlay(): void {
   // glance. Bones and groups get interactive glyphs below instead.
   for (const part of doc.parts) {
     if (part.id === state.selectedPartId || part.paths.length === 0) continue;
+    if (isEffectivelyHidden(part)) continue; // Layers eye — no floating joint marker
     const p = effectivePivot(part, t);
     const dot = document.createElementNS(SVG_NS, 'circle');
     dot.setAttribute('cx', String(p.x));
@@ -104,6 +106,7 @@ export function renderOverlay(): void {
   // Bone lines: connect each parented part's joint to its parent's joint.
   for (const part of doc.parts) {
     if (!part.parentId) continue;
+    if (isEffectivelyHidden(part)) continue; // Layers eye
     const parent = doc.parts.find((p) => p.id === part.parentId);
     if (!parent) continue;
     const a = effectivePivot(parent, t);
@@ -144,9 +147,14 @@ export function renderOverlay(): void {
   // Bone/group glyphs: partless parts have no artwork to click, so they get an
   // interactive diamond (bone) or square (group) at their live joint. Carrying
   // data-part-id makes the normal part hit-testing, drags and auto-key work on them.
+  // Glyphs render into #overlay, a SEPARATE element from the bone's own (flat, hidden
+  // via CSS) part group — so a hidden ancestor's `visibility:hidden` does NOT hide a
+  // descendant bone's glyph on its own; skip it explicitly ("a hidden limb's rig
+  // shouldn't float").
   let selectedBoneTip: SVGGElement | null = null;
   for (const part of doc.parts) {
     if (part.paths.length > 0) continue;
+    if (isEffectivelyHidden(part)) continue;
     const tipWrap = appendNullGlyph(part, t, rootTransform, size, setup);
     if (tipWrap) selectedBoneTip = tipWrap;
   }
@@ -169,6 +177,9 @@ export function renderOverlay(): void {
   // something different for every selectable KIND — groups used to draw only the
   // passive dashed box with no way to tell scale mode from rotate mode.
   for (const part of selectedParts()) {
+    // Layers eye: a hidden part stays selectable via Layers (the inspector still shows
+    // its fields) but draws NOTHING on canvas — no box, no handles.
+    if (isEffectivelyHidden(part)) continue;
     const isGroup = part.kind === 'group';
     const g = ctx.partGroups.get(part.id);
     let box: { x: number; y: number; width: number; height: number };
@@ -304,9 +315,10 @@ export function renderOverlay(): void {
 
   // The selected pivot: crosshair + ring, with a generous invisible grab circle.
   // Drawn last (and in its own interactive group) so it stays on top; draggable only in
-  // Setup mode — moving a joint is a rig edit, not an animation edit.
+  // Setup mode — moving a joint is a rig edit, not an animation edit. Layers eye: a
+  // hidden part draws NOTHING on canvas, this crosshair included.
   const part = selectedPart();
-  if (part) {
+  if (part && !isEffectivelyHidden(part)) {
     const ep = effectivePivot(part, t);
     const px = ep.x, py = ep.y;
     const cross = document.createElementNS(SVG_NS, 'g');
@@ -457,6 +469,7 @@ function renderSelectGizmo(size: number, t: number | null, rootTransform: string
   if (!ctx.overlay || state.mode !== 'rig' || state.tool !== 'select') return;
   const part = selectedPart();
   if (!part || part.skin) return;
+  if (isEffectivelyHidden(part)) return; // Layers eye — canvas draws nothing for it
 
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'select-gizmo');
@@ -493,6 +506,7 @@ function renderToolGizmo(size: number, t: number | null, rootTransform: string):
   if (state.tool !== 'translate' && state.tool !== 'rotate') return;
   const part = selectedPart();
   if (!part || part.skin) return;
+  if (isEffectivelyHidden(part)) return; // Layers eye
   const p = effectivePivot(part, t);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'tool-gizmo');

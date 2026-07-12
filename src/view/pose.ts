@@ -7,7 +7,9 @@
  * `ctx.poseSampler`, when set by the state-machine editor, overrides normal sampling.
  */
 
-import { state, RigPart, sampleChannel, channelValue, ancestorChain } from '../core/model';
+import {
+  state, RigPart, sampleChannel, channelValue, ancestorChain, isEffectivelyHidden,
+} from '../core/model';
 import { Mat, applyMat, invertMat, matrixOfTransform } from '../geometry/transforms';
 import { ctx } from './context';
 
@@ -67,6 +69,17 @@ export function innerLocalTransform(part: RigPart, pivot = part.pivot): string {
  */
 export function effectiveZ(part: RigPart, t: number | null): number {
   return ctx.poseSampler ? ctx.poseSampler(part.id, 'z') : channelValue(part, 'z', t);
+}
+
+/**
+ * A part's effective opacity right now (keyed `opacity` is ABSOLUTE and CONTINUOUS — it
+ * eases normally, unlike the stepped `z` channel — rest fallback `part.rest.opacity`).
+ * NOT clamped here — render.ts clamps at the point it writes the DOM attribute; this stays
+ * a plain sample so callers that need the raw value (e.g. future export code) get it.
+ * Mirrors effectiveZ's poseSampler-first pattern.
+ */
+export function effectiveOpacity(part: RigPart, t: number | null): number {
+  return ctx.poseSampler ? ctx.poseSampler(part.id, 'opacity') : channelValue(part, 'opacity', t);
 }
 
 /** Ancestor poses composed with the part's own pose (bone hierarchy). */
@@ -148,6 +161,7 @@ export function partRootBoxes(ids: string[]): Map<string, { x: number; y: number
     const part = doc.parts.find((p) => p.id === id);
     const g = part ? ctx.partGroups.get(id) : null;
     if (!part || !g || part.paths.length === 0) continue;
+    if (isEffectivelyHidden(part)) continue; // Layers eye — excluded from bbox unions too
     const box = g.getBBox();
     const m = matrixOfTransform(groupTransformOf(part, t));
     const corners = [

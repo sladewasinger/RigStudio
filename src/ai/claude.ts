@@ -40,7 +40,7 @@ const CLIP_SCHEMA = {
             type: 'string',
             description: "A part label from the rig, or 'root' for the whole figure",
           },
-          channel: { type: 'string', enum: ['rotate', 'tx', 'ty', 'sx', 'sy', 'z'] },
+          channel: { type: 'string', enum: ['rotate', 'tx', 'ty', 'sx', 'sy', 'z', 'opacity'] },
           keyframes: {
             type: 'array',
             items: {
@@ -190,6 +190,10 @@ its own pivot (its joint — e.g. an arm's pivot is the shoulder). Channels per 
   reach-behind / pass-in-front moves: a hand that must swing BEHIND the torso then return in
   FRONT keys z negative while behind and positive while in front; a part that never changes
   its stacking needs no z track at all (omit it — 0 is the default).
+- opacity: 0 (fully transparent) to 1 (fully opaque), ABSOLUTE and CONTINUOUS — it eases
+  normally like rotate/tx/ty (unlike z, it blends smoothly between keys). Use it for
+  fade-in entrances, fade-out exits, or a part that should flicker/dissolve. A part with no
+  opacity track stays at its rest opacity (given as "rest" in the rig JSON — usually 1).
 Keyframed values are ABSOLUTE channel values, not offsets. A channel with NO keyframes
 holds the part's rest value (given as "rest" in the rig JSON) — so to move a part
 relative to how it currently stands, start your keyframes from its rest value; to keep

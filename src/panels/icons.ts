@@ -28,6 +28,11 @@ export const ICON_PATHS: Record<string, string> = {
   distH: '<path d="M2 2v12M14 2v12"/><rect x="6" y="5" width="4" height="6" fill="currentColor" stroke="none"/>',
   distV: '<path d="M2 2h12M2 14h12"/><rect x="5" y="6" width="6" height="4" fill="currentColor" stroke="none"/>',
   snap: '<path d="M4 2.5v4.5a4 4 0 0 0 8 0V2.5"/><path d="M2.4 2.5h3.2M10.4 2.5h3.2"/>',
+  // Layers eye (visibility toggle): open = classic almond eye + pupil; closed = the
+  // same eye with a slash through it (shut/hidden), matching the flip icons' pattern of
+  // reusing one silhouette with a small added mark rather than two unrelated glyphs.
+  eyeOpen: '<path d="M1.3 8S3.8 3.2 8 3.2 14.7 8 14.7 8 12.2 12.8 8 12.8 1.3 8 1.3 8Z"/><circle cx="8" cy="8" r="1.9" fill="currentColor" stroke="none"/>',
+  eyeClosed: '<path d="M1.3 8S3.8 3.2 8 3.2 14.7 8 14.7 8 12.2 12.8 8 12.8 1.3 8 1.3 8Z"/><circle cx="8" cy="8" r="1.9" fill="currentColor" stroke="none"/><path d="M2.3 2.3l11.4 11.4"/>',
 };
 
 /** An inline 16×16 line icon; falls back to the raw name for unknown keys. */

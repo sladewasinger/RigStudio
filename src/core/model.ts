@@ -56,6 +56,12 @@ export interface RestPose {
   /** Skew angles in degrees (Inkscape's rotate-mode side handles), innermost with scale. */
   kx: number;
   ky: number;
+  /**
+   * 0..1, applied to the part's own drawn geometry only (does NOT propagate to children —
+   * same rule as rest scale/skew). This is the KEYABLE channel that maps to a real Rive/
+   * Lottie runtime feature (layer/node opacity) — see the 'opacity' Channel doc below.
+   */
+  opacity: number;
 }
 
 /**
@@ -115,11 +121,22 @@ export interface RigPart {
    */
   skin?: { bones: SkinBone[]; overrides?: Record<string, Record<string, SkinOverride>> } | null;
   paths: RigPath[];
+  /**
+   * Layers-panel visibility (the eye icon). EDITOR-ONLY, doc data but NEVER keyable and
+   * NEVER animated — "Keyable channels must map to Rive runtime features" (CLAUDE.md),
+   * and there is no Rive/Lottie runtime property for "this layer disappears at frame N"
+   * short of a full opacity/visibility keyframe, which is what the `opacity` Channel is
+   * for. Toggling this never touches a clip's tracks in either editor mode. Cascades DOWN
+   * the parent chain at render/export time (`isEffectivelyHidden`) rather than being
+   * copied onto descendants, since the doc is a flat part list, not nested DOM/JSON.
+   * Absent/false = visible (the default for every part that predates this field).
+   */
+  hidden?: boolean;
 }
 
 /**
- * Animatable channels. Parts support rotate/tx/ty (+ the keyable draw-order `z` offset);
- * the root figure also supports scale.
+ * Animatable channels. Parts support rotate/tx/ty/opacity (+ the keyable draw-order `z`
+ * offset); the root figure also supports scale.
  *
  * `z` is special: it is a STACKING OFFSET, not a transform. It never enters a part's
  * rendered matrix — render.ts sorts parts by (effective z ascending, doc.parts index
@@ -127,8 +144,13 @@ export interface RigPart {
  * so an unkeyed doc renders in pure doc.parts order exactly as before. Keyed z is ABSOLUTE
  * like every channel but SAMPLED STEPPED (hold the latest key at-or-before t; easing/bezier
  * ignored — a stacking rank is discrete, not blendable). See sampleKeyList's `stepped` arg.
+ *
+ * `opacity` is a normal CONTINUOUS channel (0..1, eases like rotate/tx/ty — no stepped
+ * flag) backed by `RestPose.opacity`. It is the keyable half of the Layers-panel eye: the
+ * eye toggle (`RigPart.hidden`) is editor-only and never becomes a track, but fading a
+ * part in/out over time is a real Rive/Lottie runtime feature, so it gets a real channel.
  */
-export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy' | 'z';
+export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy' | 'z' | 'opacity';
 
 export type Easing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
 
@@ -313,6 +335,7 @@ export const CHANNEL_DEFAULTS: Record<Channel, number> = {
   sx: 1,
   sy: 1,
   z: 0, // stacking OFFSET rest value; 0 = authored (doc.parts) draw order
+  opacity: 1, // fully opaque; used for the synthetic 'root' target (no RestPose there)
 };
 
 // ---- Application state ----
@@ -528,6 +551,18 @@ export function isAncestorOf(maybeAncestor: RigPart, part: RigPart): boolean {
   return ancestorChain(part).some((p) => p.id === maybeAncestor.id);
 }
 
+/**
+ * Whether a part should render/hit-test as invisible right now: hidden itself, or riding
+ * a hidden ancestor (the Layers eye cascades down the bone hierarchy like a design tool's
+ * layer visibility — "a hidden limb's rig shouldn't float"). The doc stores only the flag
+ * on the part it was toggled on (`RigPart.hidden`); this derives the effective state per
+ * part at render/export time. Parts are a FLAT list (no DOM/JSON nesting), so callers must
+ * apply this per part rather than relying on any kind of inheritance.
+ */
+export function isEffectivelyHidden(part: RigPart): boolean {
+  return !!part.hidden || ancestorChain(part).some((a) => !!a.hidden);
+}
+
 /** Reparent a part; refuses cycles. Returns whether the change was applied. */
 export function setParent(childId: string, parentId: string | null): boolean {
   const child = partById(childId);
@@ -557,7 +592,7 @@ export function addNullPart(
     transform: '',
     pivot: { ...pivot },
     pivotHint: null,
-    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 },
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
     parentId,
     paths: [],
   };
@@ -1134,6 +1169,7 @@ export function channelValue(part: RigPart, channel: Channel, time: number | nul
     : channel === 'ty' ? part.rest.ty
     : channel === 'sx' ? part.rest.sx
     : channel === 'sy' ? part.rest.sy
+    : channel === 'opacity' ? part.rest.opacity
     : 0; // 'z' has no RestPose field — its stacking offset rests at 0 (CHANNEL_DEFAULTS.z)
   if (time === null) return rest;
   const clip = activeClip();
@@ -1423,11 +1459,18 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
   for (const part of doc.parts) {
     trackId(part.id);
     part.kind = part.kind ?? 'art';
-    part.rest = part.rest ?? { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0 };
+    part.rest = part.rest ?? { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 };
     part.rest.sx = part.rest.sx ?? 1;
     part.rest.sy = part.rest.sy ?? 1;
     part.rest.kx = part.rest.kx ?? 0;
     part.rest.ky = part.rest.ky ?? 0;
+    part.rest.opacity = Number.isFinite(part.rest.opacity)
+      ? Math.min(1, Math.max(0, part.rest.opacity))
+      : 1;
+    // Layers eye: keep it a clean true/undefined (never keyable — see the field's doc
+    // comment) so a hand-edited or legacy file can't smuggle a truthy-but-wrong-typed
+    // value through to render.ts's display:none-equivalent toggle.
+    part.hidden = part.hidden === true ? true : undefined;
     part.parentId = part.parentId ?? null;
     part.boneTip = part.boneTip ?? null;
     healDegenerateBoneTip(part); // heals a present-but-degenerate tip in place; a no-op
