@@ -226,6 +226,12 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   public symbols are added to their module AND re-exported there. Overlay render-time
   side effects (handleMode reset, stale node-selection pruning) belong inside the
   render functions — do not "clean them up" out.
+- **GOTCHA — every mode/state change must have a visible counterpart.** Recurring
+  bug class (Animate's second-click rotate mode, group handle sets): internal
+  toggles (handleMode, tool state, freeze) that render nothing different feel
+  broken. Every selectable part KIND renders a handle set for each handleMode —
+  if an operation doesn't apply to a kind, render the applicable subset, never
+  nothing; verification of any mode toggle must assert a DOM difference.
 - **GOTCHA — ALL canvas chrome must be screen-constant under zoom.** This bug has
   shipped repeatedly (pivot rings, gizmo halo, node glyphs, bone kites): any
   overlay/control visual whose GEOMETRY is in doc units grows/shrinks with zoom.

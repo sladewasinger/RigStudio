@@ -354,6 +354,13 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
   moves the shared joint; every descendant's local geometry (length + relative
   direction) is invariant, riding the joint. (Reported with screenshots; child
   currently shortens.)
+- [ ] **Group handle sets** — groups currently draw only the passive dashed union
+  box: no scale/rotate corners, and the second-click mode toggle is invisible.
+  Fix: first click = scale handles implemented as DISTRIBUTED rest edits (scale
+  every descendant's rest size+position about the group pivot, one undo — the
+  flipSelected pattern); second click = rotate handles (group rest.rotate,
+  which genuinely propagates); skew skipped for groups (the set still visibly
+  changes). Backed by the new visible-counterpart GOTCHA in CLAUDE.md.
 - [ ] **FINAL ITEM (do last): swap the default sample to girl_example** — Pip is
   commercial art for the user's app; re-base the interaction-harness fixtures onto
   the girl (or a neutral fixture), remove PIP_MASTER.svg from public/ and the
