@@ -20,8 +20,8 @@
 
 export { buildCanvas } from './canvas';
 export { partRootBoxes } from './pose';
-export { clearGroupEntry, enterGroupsFor, stepOutFocus } from './focus';
-export { renderPose, setPoseSampler } from './render';
+export { clearGroupEntry, enterGroupsFor, stepOutFocus, resetInteractionState } from './focus';
+export { renderPose, setPoseSampler, resetSkinRenderWarnings } from './render';
 export { updatePathAttrs, reorderCanvas, registerPart, unregisterPart } from './partDom';
 export {
   hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, applyNodeOp,

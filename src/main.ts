@@ -8,7 +8,8 @@ import { importSvg } from './io/importSvg';
 import {
   buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, stepOutFocus,
   hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, nudgeSelectedParts,
-  zoomBy, selectAllNodes, enterGroupsFor,
+  zoomBy, selectAllNodes, enterGroupsFor, clearGroupEntry, resetInteractionState,
+  resetSkinRenderWarnings,
 } from './view';
 import { checkpoint } from './core/history';
 import {
@@ -21,7 +22,7 @@ import {
 } from './timeline/timeline';
 import { exportLottie } from './io/exportLottie';
 import { exportRiv } from './io/exportRiv';
-import { smHandleEscape, smHandleDelete } from './panels/smPanel';
+import { smHandleEscape, smHandleDelete, stopPreview } from './panels/smPanel';
 import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './core/history';
 import { toggleHelp, closeHelp, isHelpOpen } from './ui/help';
 import { dialog, isDialogOpen, closeActiveDialog } from './ui/dialogs';
@@ -39,13 +40,34 @@ const fileInput = document.getElementById('file-input') as HTMLInputElement;
 
 const AUTOSAVE_KEY = 'rig-studio-autosave';
 
+/**
+ * The single doc-swap path (New / Open / Load sample / loadProjectText, incl. the
+ * autosave-driven interaction-test harness's resetRig). Resets EVERY piece of
+ * session-only editing state, not just the doc-level selection: a confirmed live bug
+ * had `state.mode` ('nodes') and `state.selectedPathId` survive Load Sample into the
+ * fresh doc (a stale path id from the OLD doc). Order: tear down anything that still
+ * references the old doc (SM preview, entered groups, in-flight drag/node selection,
+ * an armed bone placement) BEFORE buildCanvas discards the old DOM.
+ */
 function afterDocReplaced(): void {
   state.selectedPartId = null;
   state.selectedPartIds = [];
+  state.selectedPathId = null;
+  state.mode = 'rig'; // no node/path scope survives a doc swap — the old ids are gone
+  state.freezeMode = false; // momentary app state (CLAUDE.md) — never carries across docs
   state.activeClipIndex = 0;
   state.currentTime = 0;
   state.playing = false;
   clearKeySelection();
+  clearGroupEntry(); // entered-group ids from the old doc don't resolve in the new one
+  cancelBonePlacement(); // an armed placement mid-gesture makes no sense across a swap
+  resetInteractionState(); // node selection, in-flight drag, handle mode, snap marker
+  // A running SM preview owns the OLD doc's SMInstance AND capture-phase listeners on
+  // #canvas that survive buildCanvas (the container itself isn't recreated) — left
+  // running, every canvas click after the swap is silently swallowed (zombie input).
+  stopPreview();
+  resetSkinRenderWarnings(); // a fresh doc's parts get their own first warning, never
+  // silently suppressed by a same-id part from a prior document.
   resetHistory(); // no undoing past a document swap
   buildCanvas(canvasEl);
   resetView(); // fit the fresh document (zoom/pan otherwise survives rebuilds)

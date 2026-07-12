@@ -96,10 +96,26 @@ interface BoneXform {
 const STRETCH_MIN = 0.2;
 const STRETCH_MAX = 5;
 
-/** Per-frame linear-blend deformation: rewrite each path's d attribute. */
-export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | null): void {
+/**
+ * Per-frame linear-blend deformation: rewrite each path's d attribute.
+ *
+ * Returns whether the deformation was fully numerically sound. `false` means at least
+ * one bone list was unusable (empty/malformed) or at least one computed point came out
+ * non-finite (poisoned bind data, e.g. a NaN restWorldInv reaching a live session
+ * without going through normalizeDoc) — the caller (render.ts) treats `false` as a
+ * signal to log ONE warning and re-render this part rigidly from rest instead. This
+ * function never THROWS on bad per-bone/per-point data by design (every arithmetic
+ * path here is guarded); a thrown exception instead means something structural broke
+ * (e.g. malformed path `d`, inside skinDataFor) — render.ts wraps the call in a
+ * try/catch for that class so ONE broken part can never abort the whole renderPose.
+ */
+export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | null): boolean {
   const skin = part.skin;
-  if (!skin) return;
+  if (!skin) return true;
+  if (!Array.isArray(skin.bones) || skin.bones.length === 0) return false; // nothing to
+  // deform against — every point would collapse to the origin rather than throw, which
+  // reads as "invisible", not "broken"; treat it as a failure so the caller falls back
+  // to the (correct, visible) rigid rest render instead.
   const data = skinDataFor(part);
 
   // Each bone's rigid delta from its bind pose (identity at rest → rest geometry) plus a
@@ -117,11 +133,16 @@ export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | nul
       const pv = effectivePivot(bone, t);
       const tp = effectiveTip(bone, t);
       const curLen = tp ? Math.hypot(tp.x - pv.x, tp.y - pv.y) : bindLen;
-      s = Math.min(STRETCH_MAX, Math.max(STRETCH_MIN, curLen / bindLen));
+      // 0/0 (or any other non-finite input, e.g. a NaN pivot from poisoned data) guards
+      // to the neutral factor 1 rather than propagating NaN into every deformed point.
+      s = Number.isFinite(curLen)
+        ? Math.min(STRETCH_MAX, Math.max(STRETCH_MIN, curLen / bindLen))
+        : 1;
     }
     return { m, bx: b.bindSeg.p.x, by: b.bindSeg.p.y, ax, ay, s };
   });
 
+  let allFinite = true;
   for (const pd of data.paths) {
     let k = 0;
     const out: PathCmd[] = pd.cmds.map((c, i) => {
@@ -140,6 +161,16 @@ export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | nul
           x += w[bi] * (m.a * sx + m.c * sy + m.e);
           y += w[bi] * (m.b * sx + m.d * sy + m.f);
         }
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          // Last-resort per-point safety net: a NaN/Infinity coordinate must never reach
+          // serializePath (it would emit literal "NaN" into the d attribute, an INVALID
+          // path the browser drops — same invisible-canvas symptom as an aborted
+          // renderPose). Fall back to the point's own rest coordinate and flag the whole
+          // part as unsound; render.ts discards this output wholesale and re-renders
+          // rigidly, so this substitution only matters for the brief window before that.
+          allFinite = false;
+          return { x: pt.x, y: pt.y };
+        }
         return { x, y };
       });
       if (c.cmd === 'C') {
@@ -156,4 +187,5 @@ export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | nul
     const el = g.querySelector(`[data-path-id="${pd.id}"]`);
     el?.setAttribute('d', serializePath(out));
   }
+  return allFinite;
 }

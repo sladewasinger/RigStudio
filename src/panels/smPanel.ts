@@ -1536,6 +1536,16 @@ if (typeof window !== 'undefined') {
   (window as unknown as { __smPanel: unknown }).__smPanel = {
     previewStatus: () => (preview ? preview.instance.status() : null),
     isPreviewActive: () => !!preview,
+    // Test-only entry point for starting a preview WITHOUT driving the panel UI —
+    // exists so the doc-replace teardown fix (main.ts's afterDocReplaced calling
+    // stopPreview) can be exercised headlessly: a preview left running owns capture-
+    // phase listeners on #canvas that survive a buildCanvas rebuild (the container
+    // itself isn't recreated), so a doc swap without teardown leaves the canvas
+    // permanently inert to clicks. No-ops if the machine id doesn't resolve.
+    startPreviewByMachineId: (id: string) => {
+      const sm = state.doc?.stateMachines?.find((m) => m.id === id);
+      if (sm) startPreview(sm);
+    },
     // Deterministic tick for headless verification (mirrors the rAF loop's per-frame work,
     // since requestAnimationFrame is throttled/paused in an unfocused automation tab).
     tick: (dtMs: number) => {

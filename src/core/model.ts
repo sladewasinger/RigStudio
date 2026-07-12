@@ -704,6 +704,47 @@ export function boneChain(parts: RigPart[], boneId: string): RigPart[] {
 // canvas tip drag: length/angle are read from the pivot→tip vector in the bone's own
 // frame (rigid chain transforms preserve distance, so it matches the on-canvas length).
 
+/**
+ * Minimum doc-space length a bone's `boneTip` may sit from its `pivot`. This is NOT a
+ * float-noise guard — the skin/render math already tolerates a literal zero-length bind
+ * segment gracefully (`geometry/skin.ts` `distToSegment`'s point-distance fallback, the
+ * LBS stretch factor's `s=1` default). It exists to keep the bone's AXIS direction
+ * well-conditioned (IK aim, LBS along-axis stretch, `boneAxisAngle`) and the bone
+ * visually/interactively meaningful — a "bone" a user can't see or grab isn't one.
+ * Small relative to any real limb segment, comfortably above float-rounding noise.
+ */
+export const MIN_BONE_LENGTH = 0.5;
+
+/** Whether a proposed bone tip is far enough from its pivot to form a real segment
+ *  (finite and at least MIN_BONE_LENGTH away). Pure. */
+export function isUsableBoneTip(pivot: Vec2, tip: Vec2): boolean {
+  return (
+    Number.isFinite(tip.x) && Number.isFinite(tip.y)
+    && Math.hypot(tip.x - pivot.x, tip.y - pivot.y) >= MIN_BONE_LENGTH
+  );
+}
+
+/**
+ * Heal a bone whose `boneTip` is PRESENT but degenerate (non-finite, or within
+ * MIN_BONE_LENGTH of its pivot) by nudging it out along +x in the bone's own frame —
+ * the same "default axis" `boneTipForLength` already falls back to for a lengthless
+ * bone. No-op for a non-bone part, a bone with `boneTip: null` (the well-defined
+ * "partless joint, no visible length yet" state — nothing to heal), or a bone whose
+ * tip is already usable. Returns whether it healed anything.
+ *
+ * HEAL, not drop: a degenerate tip is almost always a numeric artifact (hand-edited
+ * file, a placement/AI request landing on its own pivot) on an otherwise-intentional
+ * bone. Dropping the bone's skin participation instead would cascade into orphaned
+ * per-node overrides and shrink chain coverage for no numeric necessity — the skin
+ * math tolerates a zero-length bind segment fine; healing just keeps the AXIS sane.
+ */
+export function healDegenerateBoneTip(part: RigPart): boolean {
+  if (part.kind !== 'bone' || !part.boneTip) return false;
+  if (isUsableBoneTip(part.pivot, part.boneTip)) return false;
+  part.boneTip = { x: part.pivot.x + MIN_BONE_LENGTH, y: part.pivot.y };
+  return true;
+}
+
 /** A bone's length: the pivot→tip distance in its own frame (0 when it has no tip). Pure. */
 export function boneLength(bone: RigPart): number {
   if (!bone.boneTip) return 0;
@@ -860,7 +901,11 @@ export function applyRigChanges(changes: RigChanges): Map<string, string> {
     if (byLabel.has(b.label)) continue; // labels must stay unique
     const parentId = b.parent ? (byLabel.get(b.parent) ?? null) : null;
     const bone = addNullPart('bone', b.pivot, parentId, b.label.replace(/\s+/g, '_'));
-    if (b.tip) bone.boneTip = { x: b.tip.x, y: b.tip.y };
+    // A degenerate requested tip (on/near its own pivot — seen from AI-generated
+    // requests) is treated the same as an omitted one: boneTip stays null, the
+    // already-documented "partless joint, no visible length" state, rather than
+    // fabricating a length the caller never asked for.
+    if (b.tip && isUsableBoneTip(b.pivot, b.tip)) bone.boneTip = { x: b.tip.x, y: b.tip.y };
     byLabel.set(bone.label, bone.id);
   }
   for (const r of changes.reparent ?? []) {
@@ -879,8 +924,9 @@ export function applyRigChanges(changes: RigChanges): Map<string, string> {
 /**
  * Delete parts (layers). Children of a deleted part re-adopt its nearest SURVIVING
  * ancestor (artwork is never deleted implicitly), the parts' tracks vanish from every
- * clip, and skin bindings referencing deleted bones are dropped. Returns deleted ids
- * so the canvas can unregister their groups.
+ * clip, and skin bindings (bones AND any per-node overrides pinned to them) referencing
+ * deleted bones are dropped. Returns deleted ids so the canvas can unregister their
+ * groups.
  */
 export function deleteParts(ids: string[]): string[] {
   const doc = state.doc;
@@ -899,9 +945,22 @@ export function deleteParts(ids: string[]): string[] {
     clip.tracks = clip.tracks.filter((t) => !dead.has(t.target));
   }
   for (const part of doc.parts) {
-    if (part.skin) {
-      part.skin.bones = part.skin.bones.filter((b) => !dead.has(b.id));
-      if (part.skin.bones.length === 0) part.skin = null;
+    if (!part.skin) continue;
+    part.skin.bones = part.skin.bones.filter((b) => !dead.has(b.id));
+    if (part.skin.bones.length === 0) { part.skin = null; continue; }
+    // A deleted bone can still be pinned by a per-node override even though it's gone
+    // from skin.bones above — prune those too (mirrors normalizeDoc's dangling-ref
+    // pruning, but live: this runs on an in-session mutation, not just on load).
+    if (part.skin.overrides) {
+      for (const pathId of Object.keys(part.skin.overrides)) {
+        const rec = part.skin.overrides[pathId];
+        for (const key of Object.keys(rec)) {
+          const ov = rec[key];
+          if (dead.has(ov.a) || (ov.b != null && dead.has(ov.b))) delete rec[key];
+        }
+        if (Object.keys(rec).length === 0) delete part.skin.overrides[pathId];
+      }
+      if (Object.keys(part.skin.overrides).length === 0) delete part.skin.overrides;
     }
   }
   if (state.selectedPartId && dead.has(state.selectedPartId)) selectPart(null);
@@ -1282,6 +1341,32 @@ export function deserializeDoc(json: string): RigDoc {
   return normalizeDoc(doc);
 }
 
+function isFiniteMat(m: unknown): m is Mat {
+  if (!m || typeof m !== 'object') return false;
+  const mm = m as Record<string, unknown>;
+  return (['a', 'b', 'c', 'd', 'e', 'f'] as const).every(
+    (k) => typeof mm[k] === 'number' && Number.isFinite(mm[k] as number),
+  );
+}
+
+function isFiniteVec2(v: unknown): v is Vec2 {
+  if (!v || typeof v !== 'object') return false;
+  const vv = v as Record<string, unknown>;
+  return (
+    typeof vv.x === 'number' && Number.isFinite(vv.x)
+    && typeof vv.y === 'number' && Number.isFinite(vv.y)
+  );
+}
+
+/** Shape/finiteness check for one SkinBone bind record (normalizeDoc healing). */
+function isValidSkinBone(b: unknown): b is SkinBone {
+  if (!b || typeof b !== 'object') return false;
+  const bb = b as Record<string, unknown>;
+  if (typeof bb.id !== 'string' || !isFiniteMat(bb.restWorldInv)) return false;
+  const seg = bb.bindSeg as Record<string, unknown> | undefined;
+  return !!seg && isFiniteVec2(seg.p) && isFiniteVec2(seg.q);
+}
+
 /** Fill defaults for fields added after a document was serialized. */
 export function normalizeDoc(doc: RigDoc): RigDoc {
   let maxId = 0;
@@ -1299,6 +1384,8 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     part.rest.ky = part.rest.ky ?? 0;
     part.parentId = part.parentId ?? null;
     part.boneTip = part.boneTip ?? null;
+    healDegenerateBoneTip(part); // heals a present-but-degenerate tip in place; a no-op
+    // for boneTip:null (nothing to heal) or an already-usable tip.
     part.skin = part.skin ?? null;
     if (part.skin && !Array.isArray(part.skin.bones)) part.skin = null;
     part.pivotHint = part.pivotHint ?? null;
@@ -1310,10 +1397,17 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
   }
   // Drop dangling parent references (e.g. hand-edited files).
   const ids = new Set(doc.parts.map((p) => p.id));
+  const boneKindIds = new Set(doc.parts.filter((p) => p.kind === 'bone').map((p) => p.id));
   for (const part of doc.parts) {
     if (part.parentId && !ids.has(part.parentId)) part.parentId = null;
     if (part.skin) {
-      part.skin.bones = part.skin.bones.filter((b) => ids.has(b.id));
+      // Drop a skin.bones entry when its id doesn't resolve to a BONE part (missing
+      // entirely, or retyped/ungrouped away from kind:'bone' since bind time) or its
+      // bind record is malformed/non-finite (hand-edited file, or a corrupted
+      // in-session mutation that reached save) — any of those would poison the
+      // per-frame LBS math. render.ts's render-time resilience net catches the LIVE
+      // (un-saved) version of this; this is the load-time equivalent.
+      part.skin.bones = part.skin.bones.filter((b) => boneKindIds.has(b.id) && isValidSkinBone(b));
       if (part.skin.bones.length === 0) part.skin = null;
     }
     // Prune per-node weight overrides: drop entries whose bone refs no longer resolve

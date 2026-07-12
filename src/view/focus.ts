@@ -17,6 +17,30 @@ export function clearGroupEntry(): void {
 }
 
 /**
+ * Doc-replace hook (main.ts's afterDocReplaced, the SINGLE doc-swap path incl.
+ * loadProjectText/New/Open/Load-sample): every piece of session-only editing state
+ * below can reference a part/path id from the OLD document, or sit mid-gesture over
+ * DOM elements buildCanvas is about to discard wholesale. A stale SELECTION id is
+ * cosmetic (selectedPart()/selectedParts() already resolve a miss to "nothing"), but a
+ * stale node/handle SELECTION, an armed bone placement, or an in-flight drag object is
+ * not — it is read by the very next pointer/render pass against the NEW doc. Resets
+ * every such flag so a doc swap always lands in a clean, fully interactive state
+ * (confirmed live bug: node mode + a selected path id surviving Load Sample into the
+ * fresh doc). `enteredGroups` is intentionally NOT touched here — callers pair this
+ * with clearGroupEntry() (already a separate, reusable Escape/blank-click hook).
+ */
+export function resetInteractionState(): void {
+  ctx.selectedNodes.clear();
+  ctx.selectedNode = null;
+  ctx.placingBone = false;
+  ctx.drag = null;
+  ctx.handleMode = 'scale';
+  ctx.handlePartId = null;
+  ctx.snapMarker = null;
+  if (ctx.svg) ctx.svg.style.cursor = '';
+}
+
+/**
  * The deepest currently-entered group (the one with the longest ancestor chain).
  * Dives are strictly nested — dimming + click-through prevents entering a group whose
  * parent isn't entered — so "deepest" is the innermost dive level. `enterGroupsFor`

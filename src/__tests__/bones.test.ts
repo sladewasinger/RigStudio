@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { boneChain, normalizeDoc, RigDoc, SkinOverride } from '../core/model';
-import { overrideWeightRow, segIntersectsBox, skinWeights } from '../geometry/skin';
+import { distToSegment, overrideWeightRow, segIntersectsBox, skinWeights } from '../geometry/skin';
 import { makeDoc, makePart, makePath } from './helpers';
 
 describe('boneChain', () => {
@@ -115,6 +115,41 @@ describe('skinWeights sharpening', () => {
   it('still splits an equidistant point evenly at any power', () => {
     const [mid] = skinWeights([{ x: 5, y: 10 }], segs, 4);
     expect(mid[0]).toBeCloseTo(0.5, 9);
+  });
+});
+
+// Render resilience (hardening wave): a bad bone bind — a zero-length bind segment or
+// literally non-finite input — must degrade to a sane, finite result rather than NaN
+// propagating into the rendered path. Mutation check: deleting the `len2 < 1e-12` early
+// return in distToSegment turns the first test below into a NaN/Infinity assertion
+// failure (0/0 in the projection-parameter divide).
+describe('skinWeights / distToSegment tolerate degenerate input (render resilience)', () => {
+  it('distToSegment treats a zero-length segment as a point distance, never NaN/Infinity', () => {
+    const seg = { p: { x: 5, y: 5 }, q: { x: 5, y: 5 } }; // zero length
+    const d = distToSegment({ x: 8, y: 9 }, seg);
+    expect(d).toBeCloseTo(5, 9); // hypot(3,4)
+    expect(Number.isFinite(d)).toBe(true);
+  });
+
+  it('skinWeights normalizes to 1 across bones even when one bind segment is zero-length', () => {
+    const segs = [
+      { p: { x: 0, y: 0 }, q: { x: 0, y: 0 } }, // degenerate — bind-time bone with no length
+      { p: { x: 10, y: 0 }, q: { x: 20, y: 0 } },
+    ];
+    const [row] = skinWeights([{ x: 1, y: 0 }], segs, 4);
+    expect(row.every((w) => Number.isFinite(w))).toBe(true);
+    expect(row[0] + row[1]).toBeCloseTo(1, 9);
+    expect(row[0]).toBeGreaterThan(row[1]); // point sits right next to the degenerate bone
+  });
+
+  it('skinWeights falls back to a uniform split rather than propagating NaN from a non-finite point', () => {
+    const segs = [
+      { p: { x: 0, y: 0 }, q: { x: 10, y: 0 } },
+      { p: { x: 0, y: 20 }, q: { x: 10, y: 20 } },
+    ];
+    const [row] = skinWeights([{ x: NaN, y: 0 }], segs, 4);
+    expect(row.every((w) => Number.isFinite(w))).toBe(true);
+    expect(row[0] + row[1]).toBeCloseTo(1, 9);
   });
 });
 

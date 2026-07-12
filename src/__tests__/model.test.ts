@@ -16,6 +16,7 @@ import {
   copyKeys,
   copyPoseAt,
   deleteKeyframe,
+  deleteParts,
   deserializeDoc,
   duplicateParts,
   groupParts,
@@ -44,6 +45,9 @@ import {
   setBoneLength,
   translateBoneChain,
   newBlankDoc,
+  healDegenerateBoneTip,
+  isUsableBoneTip,
+  MIN_BONE_LENGTH,
 } from '../core/model';
 import { multiply, rotationMat, translationMat } from '../geometry/transforms';
 import { makeClip, makeDoc, makePart, makePath, makeTrack, resetState } from './helpers';
@@ -539,7 +543,7 @@ describe('normalizeDoc', () => {
 
   it('drops skin bones referencing missing part ids, clearing skin entirely once none remain', () => {
     const doc = makeDoc([
-      makePart('bone1'),
+      makePart('bone1', { kind: 'bone' }),
       makePart('skinned', {
         skin: {
           bones: [
@@ -557,6 +561,68 @@ describe('normalizeDoc', () => {
     expect(skinned.skin?.bones.map((b) => b.id)).toEqual(['bone1']);
     const allDangling = out.parts.find((p) => p.id === 'skinned_all_dangling')!;
     expect(allDangling.skin).toBeNull();
+  });
+
+  it('drops a skin.bones entry whose id resolves to a part that is not kind:"bone"', () => {
+    const doc = makeDoc([
+      makePart('real_bone', { kind: 'bone' }),
+      makePart('not_a_bone', { kind: 'art' }), // e.g. retyped/ungrouped since bind time
+      makePart('skinned', {
+        skin: {
+          bones: [
+            { id: 'real_bone', restWorldInv: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, bindSeg: { p: { x: 0, y: 0 }, q: { x: 1, y: 0 } } },
+            { id: 'not_a_bone', restWorldInv: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, bindSeg: { p: { x: 0, y: 0 }, q: { x: 1, y: 0 } } },
+          ],
+        },
+      }),
+    ]);
+    const out = normalizeDoc(doc);
+    const skinned = out.parts.find((p) => p.id === 'skinned')!;
+    expect(skinned.skin?.bones.map((b) => b.id)).toEqual(['real_bone']);
+  });
+
+  it('drops skin.bones entries with a malformed restWorldInv or bindSeg (wrong shape / non-finite)', () => {
+    const doc = makeDoc([
+      makePart('good_bone', { kind: 'bone' }),
+      makePart('bad_mat_bone', { kind: 'bone' }),
+      makePart('bad_seg_bone', { kind: 'bone' }),
+      makePart('nan_bone', { kind: 'bone' }),
+      makePart('skinned', {
+        skin: {
+          bones: [
+            { id: 'good_bone', restWorldInv: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, bindSeg: { p: { x: 0, y: 0 }, q: { x: 1, y: 0 } } },
+            // restWorldInv missing fields (wrong shape).
+            { id: 'bad_mat_bone', restWorldInv: { a: 1, b: 0 } as unknown as { a: number; b: number; c: number; d: number; e: number; f: number }, bindSeg: { p: { x: 0, y: 0 }, q: { x: 1, y: 0 } } },
+            // bindSeg missing q (wrong shape).
+            { id: 'bad_seg_bone', restWorldInv: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, bindSeg: { p: { x: 0, y: 0 } } as unknown as { p: { x: number; y: number }; q: { x: number; y: number } } },
+            // Non-finite entry inside an otherwise well-shaped matrix.
+            { id: 'nan_bone', restWorldInv: { a: NaN, b: 0, c: 0, d: 1, e: 0, f: 0 }, bindSeg: { p: { x: 0, y: 0 }, q: { x: 1, y: 0 } } },
+          ],
+        },
+      }),
+    ]);
+    const out = normalizeDoc(doc);
+    const skinned = out.parts.find((p) => p.id === 'skinned')!;
+    expect(skinned.skin?.bones.map((b) => b.id)).toEqual(['good_bone']);
+  });
+
+  it('heals a present-but-degenerate bone tip (zero-length or non-finite) to a usable length, and leaves boneTip:null alone', () => {
+    const doc = makeDoc([
+      makePart('zero_len', { kind: 'bone', pivot: { x: 10, y: 20 }, boneTip: { x: 10, y: 20 } }),
+      makePart('nan_tip', { kind: 'bone', pivot: { x: 5, y: 5 }, boneTip: { x: NaN, y: 5 } }),
+      makePart('no_tip', { kind: 'bone', pivot: { x: 0, y: 0 }, boneTip: null }),
+      makePart('fine_tip', { kind: 'bone', pivot: { x: 0, y: 0 }, boneTip: { x: 20, y: 0 } }),
+    ]);
+    const out = normalizeDoc(doc);
+    const zeroLen = out.parts.find((p) => p.id === 'zero_len')!;
+    expect(isUsableBoneTip(zeroLen.pivot, zeroLen.boneTip!)).toBe(true);
+    expect(zeroLen.boneTip).toEqual({ x: 10 + MIN_BONE_LENGTH, y: 20 }); // healed along +x
+    const nanTip = out.parts.find((p) => p.id === 'nan_tip')!;
+    expect(isUsableBoneTip(nanTip.pivot, nanTip.boneTip!)).toBe(true);
+    const noTip = out.parts.find((p) => p.id === 'no_tip')!;
+    expect(noTip.boneTip).toBeNull(); // never fabricated — this is a valid "no length yet" state
+    const fineTip = out.parts.find((p) => p.id === 'fine_tip')!;
+    expect(fineTip.boneTip).toEqual({ x: 20, y: 0 }); // untouched
   });
 
   it("coerces an invalid keyframe bezier to null, clamps a valid one's x components, and tolerates an absent bezier", () => {
@@ -1103,6 +1169,22 @@ describe('bones, groups, structural edits', () => {
     expect(wrist.boneTip).toBeUndefined(); // addNullPart defaults boneTip unset; no tip given
   });
 
+  it('applyRigChanges ignores a degenerate requested tip (on/near its own pivot) rather than creating a zero-length bone', () => {
+    resetState(makeDoc([makePart('p1')]));
+    applyRigChanges({
+      addBones: [
+        { label: 'zero', pivot: { x: 5, y: 5 }, parent: null, tip: { x: 5, y: 5 } }, // == pivot
+        { label: 'tiny', pivot: { x: 0, y: 0 }, parent: null, tip: { x: 0.01, y: 0 } }, // < MIN_BONE_LENGTH
+        { label: 'real', pivot: { x: 0, y: 0 }, parent: null, tip: { x: 10, y: 0 } },
+      ],
+      reparent: [], movePivots: [],
+    });
+    const doc = state.doc!;
+    expect(doc.parts.find((p) => p.label === 'zero')!.boneTip).toBeUndefined();
+    expect(doc.parts.find((p) => p.label === 'tiny')!.boneTip).toBeUndefined();
+    expect(doc.parts.find((p) => p.label === 'real')!.boneTip).toEqual({ x: 10, y: 0 });
+  });
+
   it('applyRigChanges carries bindParts through the label→id map (binding itself is applied by the caller)', () => {
     resetState(makeDoc([makePart('p1', { label: 'forearm' })]));
     const changes = {
@@ -1496,6 +1578,86 @@ describe('bone position model (length/rotation helpers)', () => {
     expect(b2.pivot).toEqual({ x: 35, y: 17 }); // still on the parent tip
     expect(b2.boneTip).toEqual({ x: 50, y: 17 });
     expect(art.pivot).toEqual({ x: 0, y: 0 }); // non-bone unaffected
+  });
+});
+
+describe('isUsableBoneTip / healDegenerateBoneTip', () => {
+  it('isUsableBoneTip rejects non-finite or sub-MIN_BONE_LENGTH tips, accepts the rest', () => {
+    const pivot = { x: 0, y: 0 };
+    expect(isUsableBoneTip(pivot, { x: 0, y: 0 })).toBe(false); // exactly on the pivot
+    expect(isUsableBoneTip(pivot, { x: MIN_BONE_LENGTH / 2, y: 0 })).toBe(false); // too short
+    expect(isUsableBoneTip(pivot, { x: NaN, y: 0 })).toBe(false);
+    expect(isUsableBoneTip(pivot, { x: MIN_BONE_LENGTH, y: 0 })).toBe(true); // exactly at the floor
+    expect(isUsableBoneTip(pivot, { x: 10, y: 0 })).toBe(true);
+  });
+
+  it('healDegenerateBoneTip is a no-op for a non-bone part, a null tip, or an already-usable tip', () => {
+    const art = makePart('a', { kind: 'art', boneTip: { x: 0, y: 0 } });
+    expect(healDegenerateBoneTip(art)).toBe(false);
+    const noTip = makePart('b', { kind: 'bone', boneTip: null });
+    expect(healDegenerateBoneTip(noTip)).toBe(false);
+    expect(noTip.boneTip).toBeNull();
+    const fine = makePart('c', { kind: 'bone', pivot: { x: 1, y: 1 }, boneTip: { x: 11, y: 1 } });
+    expect(healDegenerateBoneTip(fine)).toBe(false);
+    expect(fine.boneTip).toEqual({ x: 11, y: 1 });
+  });
+
+  it('healDegenerateBoneTip nudges a zero-length or non-finite tip out along +x, preserving the pivot', () => {
+    const zero = makePart('z', { kind: 'bone', pivot: { x: 7, y: -2 }, boneTip: { x: 7, y: -2 } });
+    expect(healDegenerateBoneTip(zero)).toBe(true);
+    expect(zero.boneTip).toEqual({ x: 7 + MIN_BONE_LENGTH, y: -2 });
+    expect(isUsableBoneTip(zero.pivot, zero.boneTip!)).toBe(true);
+
+    const nan = makePart('n', { kind: 'bone', pivot: { x: 0, y: 0 }, boneTip: { x: Infinity, y: 0 } });
+    expect(healDegenerateBoneTip(nan)).toBe(true);
+    expect(isUsableBoneTip(nan.pivot, nan.boneTip!)).toBe(true);
+  });
+});
+
+describe('deleteParts scrubs skin references (live mutation)', () => {
+  it('drops a deleted bone from another part\'s skin.bones, clearing skin once none remain', () => {
+    const bone1 = makePart('bone1', { kind: 'bone' });
+    const bone2 = makePart('bone2', { kind: 'bone' });
+    const skinned = makePart('skinned', {
+      skin: {
+        bones: [
+          { id: 'bone1', restWorldInv: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, bindSeg: { p: { x: 0, y: 0 }, q: { x: 1, y: 0 } } },
+          { id: 'bone2', restWorldInv: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, bindSeg: { p: { x: 1, y: 0 }, q: { x: 2, y: 0 } } },
+        ],
+      },
+    });
+    resetState(makeDoc([bone1, bone2, skinned]));
+    deleteParts(['bone1']);
+    const after = state.doc!.parts.find((p) => p.id === 'skinned')!;
+    expect(after.skin?.bones.map((b) => b.id)).toEqual(['bone2']);
+
+    deleteParts(['bone2']);
+    const after2 = state.doc!.parts.find((p) => p.id === 'skinned')!;
+    expect(after2.skin).toBeNull(); // no bones left — skin cleared entirely
+  });
+
+  it('prunes per-node overrides that pinned a just-deleted bone', () => {
+    const bone1 = makePart('bone1', { kind: 'bone' });
+    const bone2 = makePart('bone2', { kind: 'bone' });
+    const skinned = makePart('skinned', {
+      skin: {
+        bones: [
+          { id: 'bone1', restWorldInv: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, bindSeg: { p: { x: 0, y: 0 }, q: { x: 1, y: 0 } } },
+          { id: 'bone2', restWorldInv: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, bindSeg: { p: { x: 1, y: 0 }, q: { x: 2, y: 0 } } },
+        ],
+        overrides: {
+          p1: {
+            '0': { a: 'bone1', b: 'bone2', t: 0.5 }, // references the doomed bone1 (as `a`)
+            '1': { a: 'bone2', b: null, t: 0 }, // untouched — no reference to bone1
+          },
+        },
+      },
+    });
+    resetState(makeDoc([bone1, bone2, skinned]));
+    deleteParts(['bone1']);
+    const after = state.doc!.parts.find((p) => p.id === 'skinned')!;
+    expect(after.skin?.overrides?.p1?.['0']).toBeUndefined(); // pruned — dangled onto `a`
+    expect(after.skin?.overrides?.p1?.['1']).toEqual({ a: 'bone2', b: null, t: 0 }); // survives
   });
 });
 

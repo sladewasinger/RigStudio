@@ -7,7 +7,7 @@
 
 import {
   state, selectedParts, selectedPart, setKeyframe, channelValue, boneChain, chainBonesOfPart,
-  ancestorChain, RigPart, SkinBone, SkinOverride,
+  ancestorChain, RigPart, SkinBone, SkinOverride, healDegenerateBoneTip,
 } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from '../geometry/transforms';
@@ -351,10 +351,20 @@ const AUTO_BIND_COVERAGE = 0.34;
  *      the old far-too-eager segment↔bbox test that bound anything the joint grazed.
  * Binds nothing when no art qualifies (silent). Does NOT checkpoint/render — the
  * placement gesture owns the single checkpoint and final repaint.
+ *
+ * ZERO-LENGTH GUARD: also heals the just-placed bone's own tip if it's degenerate
+ * (`healDegenerateBoneTip` — model.ts) before resolving the chain. interactions.ts's
+ * placement gesture already substitutes a sane default tip for a near-zero drag, so
+ * this is defense-in-depth for whatever reaches this, the one hook every placement
+ * runs through under the SAME checkpoint as the creation (one undo reverts both) — not
+ * a cancel/delete-the-part path, since the bone's already been selected by the time
+ * this returns and un-creating it here would leave that selection dangling.
  */
 export function autoBindPlacedBone(boneId: string): void {
   const doc = state.doc;
   if (!doc) return;
+  const placed = doc.parts.find((p) => p.id === boneId);
+  if (placed) healDegenerateBoneTip(placed);
   const chain = boneChain(doc.parts, boneId);
   if (chain.length === 0) return;
   const chainIds = new Set(chain.map((b) => b.id));
