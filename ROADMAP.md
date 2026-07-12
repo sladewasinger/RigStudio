@@ -399,6 +399,16 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
   GROUP, or a bind entry point that never got the fold — node bind / AI bindParts
   / frozen rebind), fix, and pin parentId stability through EVERY bind path.
 
+## Group-level auto-bind (user-blocked — IMMEDIATE, parallel with A0)
+
+- [x] **Chains on a group bind ALL its art descendants** (7742f8c) — completing the locked
+  strict-hierarchy design ("multi-object cases group first"): when a chain's
+  parent/selection is a group (or any part with child art), auto-bind expands to
+  every art descendant — each part gets its own weights from its own geometry
+  against the same chain (binding is already multi-part capable; only TARGETING
+  stops at one part today). Render-neutral per part; per-node overrides stay
+  per-part; undo = one step with the chain.
+
 ## Post-A bone feel fixes (user-reported — build AFTER the A program, BEFORE H)
 
 - [ ] **Freeze origin-drag rotates unselected bones** — origin/joint handles only
@@ -420,7 +430,7 @@ bug class dies here); create-vs-modify are two explicit buttons; refinement thre
 are CLIP-scoped; templates are rig-agnostic via a learned Rig Profile; the
 principles pass integrates last as a preset refinement turn.
 
-- [ ] **A0. Targeting & root demotion** — the AI keys `root.tx/ty` and drags the
+- [x] **A0. Targeting & root demotion** (3226dbf) — the AI keys `root.tx/ty` and drags the
   shadow along. Fix: (1) request context gains the SELECTION (id/label of the
   selected part/group) + the part tree with group structure; (2) prompt rules:
   NEVER key `root`; whole-figure motion targets the user's selected group or the
