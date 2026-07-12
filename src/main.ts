@@ -1,7 +1,7 @@
 import {
   state, notify, subscribe, activeClip, serializeDoc, deserializeDoc, EditorMode,
   selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder,
-  setSnapEnabled, setFreezeMode, selectAllParts, partById, newBlankDoc,
+  setSnapEnabled, setFreezeMode, setCleanPreview, selectAllParts, partById, newBlankDoc,
   markClean,
 } from './core/model';
 import { importSvg } from './io/importSvg';
@@ -489,6 +489,18 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'F1') {
     ev.preventDefault();
     toggleHelp();
+    return;
+  }
+  // Clean-preview toggle (C, Animate only): hides all editor chrome to watch the
+  // final animation product. Guarded like the tool keys.
+  if (
+    ev.key.toLowerCase() === 'c' && !ev.ctrlKey && !ev.metaKey && !ev.altKey &&
+    !ev.shiftKey && state.editorMode === 'animate'
+  ) {
+    ev.preventDefault();
+    setCleanPreview(!state.cleanPreview);
+    notify();
+    renderPose();
     return;
   }
   // Snapping toggle (%): Inkscape's binding. On US layouts % is Shift+5, so match the

@@ -70,6 +70,17 @@ describe('doc replace resets session-only editing state (hardening wave, class 3
     expect(state.freezeMode).toBe(false);
   });
 
+  it('clean preview does not survive a replace (AI Animate System v2 A0)', () => {
+    // cleanPreview has no explicit reset call in main.ts's afterDocReplaced (see the
+    // field's doc comment on AppState) — render.ts's renderPose() detects the replace
+    // itself via the history stacks resetHistory() just emptied. Set it directly (no
+    // canvas-tools button needed — Animate mode isn't even required for this check)
+    // exactly like the freeze-mode case above.
+    state.cleanPreview = true;
+    hook().loadProjectText(currentProjectText());
+    expect(state.cleanPreview).toBe(false);
+  });
+
   it('an entered group (drill-down dimming) does not survive a replace', () => {
     // Build + dive into a group (mirrors selection-focus.test.ts scenario 9).
     let p = clientPointOnPart('left_arm');

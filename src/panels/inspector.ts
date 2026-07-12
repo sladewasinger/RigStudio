@@ -6,7 +6,7 @@
  */
 
 import {
-  state, notify, selectedPart, selectedPath, sampleChannel, channelValue,
+  state, notify, selectedPart, selectedPath, channelValue,
   setKeyframe, isAncestorOf, setParent, RigPart, Channel, ensureArtboard,
   keyAt, removeKeyAt, boneLength, setBoneLength, translateBoneChain, chainBonesOfPart,
   canMoveSelectedInDrawOrder, moveSelectedInDrawOrder,
@@ -211,11 +211,20 @@ export function buildInspector(el: HTMLElement): void {
     if (setup) buildArtboardSection(el);
   }
 
-  // Root (whole figure) — animated channels in Animate mode, its pivot in Setup mode.
-  const rootTitle = document.createElement('h3');
-  rootTitle.textContent = 'Figure (root)';
-  el.appendChild(rootTitle);
+  // Root (whole figure) — Setup-mode PIVOT fields only (AI Animate System v2 A0 "root
+  // demotion"). The Animate section that used to key root.ty/sx/sy is REMOVED: keying
+  // root moved the whole figure by dragging along every part with no track of its own —
+  // including a shadow or prop never meant to move (the "shadow follows the figure"
+  // bug). Whole-figure motion now targets a GROUP part instead, which only carries its
+  // own descendants — use the normal per-part fields above on that group. Legacy 'root'
+  // tracks from older projects are untouched by this: they still SAMPLE (model.ts),
+  // RENDER (view/pose.ts), and EXPORT (both exporters) exactly as before — this only
+  // removes the UI that lets NEW clips key them. rootPivot itself still anchors those
+  // legacy tracks, so its Setup-mode fields stay.
   if (setup) {
+    const rootTitle = document.createElement('h3');
+    rootTitle.textContent = 'Figure (root)';
+    el.appendChild(rootTitle);
     el.appendChild(numberField('root pivot x', doc.rootPivot.x, (v) => {
       checkpoint();
       doc.rootPivot.x = v;
@@ -226,29 +235,6 @@ export function buildInspector(el: HTMLElement): void {
       doc.rootPivot.y = v;
       renderPose();
     }));
-  } else {
-    const t = state.currentTime;
-    el.appendChild(keyableField(
-      'jump y', 'root', 'ty', () => sampleChannel('root', 'ty', t), (v) => {
-        checkpoint();
-        setKeyframe('root', 'ty', v);
-        poseEdited();
-      },
-    ));
-    el.appendChild(keyableField(
-      'scale x', 'root', 'sx', () => sampleChannel('root', 'sx', t), (v) => {
-        checkpoint();
-        setKeyframe('root', 'sx', v);
-        poseEdited();
-      }, 0.01,
-    ));
-    el.appendChild(keyableField(
-      'scale y', 'root', 'sy', () => sampleChannel('root', 'sy', t), (v) => {
-        checkpoint();
-        setKeyframe('root', 'sy', v);
-        poseEdited();
-      }, 0.01,
-    ));
   }
 
   buildAiPanel(el);

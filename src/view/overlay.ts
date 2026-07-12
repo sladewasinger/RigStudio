@@ -50,6 +50,16 @@ export function renderOverlay(): void {
   const doc = state.doc;
   if (!doc) return;
 
+  // Clean-preview (Animate-mode "watch the final animation" toggle, AI Animate System
+  // v2 A0): every one of this function's remaining lines draws editor-only chrome
+  // (selection boxes, handles, pivots, bone/group glyphs+lines, gizmos, snap markers,
+  // hints, node handles) — none of it is part of the actual rendered animation, which
+  // lives entirely in the doc.parts loop in render.ts, outside #overlay. The innerHTML
+  // clear above already ran, so a stale overlay from before the toggle flipped ON
+  // can't linger; bail out and draw nothing else. Setup mode is unaffected (the toggle
+  // only ever applies in Animate — see canvasTools.ts).
+  if (state.cleanPreview && state.editorMode === 'animate') return;
+
   const setup = state.editorMode === 'setup';
 
   // Reset the handle cycle when the primary selection changes.

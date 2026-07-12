@@ -14,7 +14,7 @@
 
 import {
   state, notify, selectedPart, selectedParts, selectPart, groupParts,
-  ungroupPart, setSnapEnabled, setFreezeMode,
+  ungroupPart, setSnapEnabled, setFreezeMode, setCleanPreview,
 } from '../core/model';
 import {
   renderPose, partRootBoxes, registerPart, unregisterPart, startBonePlacement,
@@ -157,6 +157,31 @@ export function buildCanvasTools(el: HTMLElement): void {
   };
   controls.appendChild(freezeBtn);
   sep();
+
+  // Clean preview (Animate-only, AI Animate System v2 A0): hide every piece of editor
+  // chrome (selection boxes, handles, pivots, bone/group glyphs+lines, gizmos, snap
+  // markers, hints, artboard rect, onion ghosts — see view/overlay.ts and
+  // view/render.ts) to watch the animation the way it will actually play/export.
+  // Selection and drag interactions keep working exactly as before; only what's DRAWN
+  // changes. Momentary app state (setCleanPreview), never serialized — resets itself on
+  // a doc replace (see the `cleanPreview` field's doc comment on AppState).
+  if (!setup) {
+    const cleanBtn = iconButton(
+      state.cleanPreview ? 'eyeClosed' : 'eyeOpen', '',
+      state.cleanPreview
+        ? 'Clean preview is ON — editor chrome is hidden. Click to show it again.'
+        : 'Clean preview — hide all editor chrome (handles, pivots, bones, gizmos, ' +
+          'artboard, onion) to watch the animation. Selection and drags still work.',
+      () => {
+        setCleanPreview(!state.cleanPreview);
+        notify();
+        renderPose();
+      },
+    );
+    if (state.cleanPreview) cleanBtn.classList.add('active');
+    controls.appendChild(cleanBtn);
+    sep();
+  }
 
   const part = selectedPart();
   if (setup) {

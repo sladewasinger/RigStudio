@@ -386,6 +386,22 @@ export interface AppState {
    */
   freezeMode: boolean;
   /**
+   * Clean-preview (Animate-mode "watch the final animation" toggle, AI Animate System
+   * v2 A0): while TRUE every overlay chrome element (selection boxes, handles, pivots,
+   * bone/group glyphs+lines, gizmos, snap markers, hints) plus the artboard rect and
+   * onion ghosts are hidden — everything that is editor metadata, never part of the
+   * exported/played animation. Artwork itself, and selection/drag interactions, are
+   * UNCHANGED (chrome just isn't drawn) — see view/overlay.ts and view/render.ts. A
+   * MOMENTARY app-state flag exactly like freezeMode: never serialized into a project,
+   * never persisted to localStorage. UNLIKE freezeMode it has no explicit reset call in
+   * main.ts's afterDocReplaced (main.ts is owned by a different work stream) — instead
+   * view/render.ts's renderPose() detects a genuine doc REPLACE (as opposed to an
+   * undo/redo, which also swaps `state.doc`'s reference) by checking that the history
+   * stacks were just emptied by resetHistory(), which only afterDocReplaced calls, and
+   * clears this flag itself at that moment. See render.ts for the detection.
+   */
+  cleanPreview: boolean;
+  /**
    * Unsaved-changes flag backing main.ts's "replace project" confirm guard and the
    * beforeunload warning. Set by history.ts's checkpoint() — the single chokepoint
    * every doc mutation already flows through per this codebase's convention
@@ -443,12 +459,19 @@ export const state: AppState = {
   onionSkin: false,
   snapEnabled: readSnapEnabled(),
   freezeMode: false,
+  cleanPreview: false,
   dirty: false,
 };
 
 /** Toggle freeze (origin-editing) mode. App state only — never serialized or persisted. */
 export function setFreezeMode(on: boolean): void {
   state.freezeMode = on;
+}
+
+/** Toggle clean-preview mode. App state only — never serialized or persisted; see the
+ *  `cleanPreview` field's doc comment on AppState for the reset-on-doc-replace rule. */
+export function setCleanPreview(on: boolean): void {
+  state.cleanPreview = on;
 }
 
 /** Mark the document as having unsaved changes. Called from history.ts's

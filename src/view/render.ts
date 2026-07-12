@@ -11,6 +11,7 @@
 import {
   state, activeClip, Channel, RigDoc, RigPart, drawOrder, isEffectivelyHidden,
 } from '../core/model';
+import { canUndo, canRedo } from '../core/history';
 import { ctx, SVG_NS } from './context';
 import { poseTime, rootPoseTransform, groupTransformOf, effectiveZ, effectiveOpacity } from './pose';
 import { focusContext, nodeEditSkinSuspendId } from './focus';
@@ -78,11 +79,32 @@ function applyOpacity(part: RigPart, g: SVGGElement, t: number | null): void {
   }
 }
 
+/**
+ * Doc-identity tracker backing the clean-preview auto-reset below — see the
+ * `cleanPreview` field's doc comment on AppState (core/model.ts) for the full rationale.
+ */
+let lastPoseDoc: RigDoc | null = null;
+
 /** Applies the sampled pose at the current time to every part group. */
 export function renderPose(): void {
   const doc = state.doc;
   if (!doc || !ctx.rootGroup) return;
   const t = poseTime();
+
+  // Clean-preview is momentary app state that must not survive a doc REPLACE (New /
+  // Open / Load sample / loadProjectText — main.ts's afterDocReplaced), exactly like
+  // freezeMode. Doc identity also changes on every undo/redo (core/history.ts swaps
+  // `state.doc` for a structuredClone snapshot each time), which must NOT clear it — an
+  // undo mid-preview shouldn't silently bring the chrome back. resetHistory() (called
+  // ONLY by afterDocReplaced, never by undo/redo) empties both history stacks, so
+  // "doc reference changed AND both stacks are empty" uniquely identifies a fresh
+  // replace: undo/redo always leaves at least one stack non-empty (whatever it just
+  // pushed the prior doc onto), and once any checkpoint has ever been made, the only
+  // way back to empty-both is resetHistory() itself.
+  if (doc !== lastPoseDoc) {
+    lastPoseDoc = doc;
+    if (!canUndo() && !canRedo()) state.cleanPreview = false;
+  }
 
   updateArtboardRect(doc);
   // Freeze (origin-editing) mode: toggle the class that drives the canvas banner + tint
@@ -198,7 +220,11 @@ function updateArtboardRect(doc: RigDoc): void {
   const rect = ctx.svg?.querySelector<SVGRectElement>('#rig-artboard-rect');
   if (!rect) return;
   const ab = doc.artboard;
-  if (!ab || !ab.enabled) {
+  // Clean preview (Animate only): the artboard rect is a reference-frame overlay for
+  // editing/export sizing, not part of the rendered animation itself — hide it, like
+  // every other piece of editor chrome.
+  const cleanHidden = state.cleanPreview && state.editorMode === 'animate';
+  if (!ab || !ab.enabled || cleanHidden) {
     rect.style.display = 'none';
     return;
   }
@@ -216,7 +242,9 @@ function renderOnion(): void {
   if (!ctx.onionGroup) return;
   ctx.onionGroup.innerHTML = '';
   const doc = state.doc;
-  if (!doc || !state.onionSkin || state.editorMode !== 'animate') return;
+  // Onion ghosts are an EDITING aid (prev/next keyed pose at a glance), not part of the
+  // clip as it actually plays at any single frame — clean preview hides them too.
+  if (!doc || !state.onionSkin || state.editorMode !== 'animate' || state.cleanPreview) return;
   const clip = activeClip();
   if (!clip) return;
 

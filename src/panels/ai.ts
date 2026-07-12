@@ -245,8 +245,8 @@ export function buildAiPanel(el: HTMLElement): void {
     try {
       const image = shotToggle.checked ? await snapshotPose() : null;
       const result = await animateWithClaude(
-        ctxv.apiKey, ctxv.doc, clip, promptBox.value.trim(), image, rigToggle.checked,
-        controller.signal,
+        ctxv.apiKey, ctxv.doc, clip, promptBox.value.trim(), state.selectedPartIds,
+        image, rigToggle.checked, controller.signal,
       );
       // The doc is untouched up to this point — an abort before this line leaves no
       // trace (checkpoint() only happens once applyAnimateResult starts applying).
@@ -293,7 +293,9 @@ export function buildAiPanel(el: HTMLElement): void {
     setBusy(true);
     try {
       const image = shotToggle.checked ? await snapshotPose() : null;
-      const text = await critiqueWithClaude(ctxv.apiKey, ctxv.doc, clip, image, controller.signal);
+      const text = await critiqueWithClaude(
+        ctxv.apiKey, ctxv.doc, clip, state.selectedPartIds, image, controller.signal,
+      );
       ai.critiqueText = text;
       ai.status = '';
     } catch (err) {
