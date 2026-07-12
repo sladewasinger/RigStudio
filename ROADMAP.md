@@ -466,14 +466,19 @@ principles pass integrates last as a preset refinement turn.
   last N turns): prior clip JSON, user instructions, model changes-summaries.
   The prompt box becomes the thread composer; A2's Retry is a thread turn;
   switching clips switches threads. Clearing/deleting a clip drops its thread.
-- [ ] **A5. Rig Profile + motion templates** (idea 5, rig-AGNOSTIC) — an
-  "analyze rig" step (cheap heuristics + optional one AI call) builds a cached
-  RigProfile: bone chains, symmetry pairs (left_/right_ label pairs, mirrored
-  transforms), role guesses (torso/head/limb/face/prop), figure group. Template
-  quick-actions (walk cycle, idle breathing, jump, wave, emphatic gesture) are
-  motion ARCHETYPES parameterized by the profile and beat-mapped to the set
-  duration (anticipation/action/settle/hold percentages). Works on any imported
-  rig; profile invalidates when the hierarchy changes.
+- [x] **A5. Rig Profile + motion templates** (2faf597) (idea 5, rig-AGNOSTIC) —
+  `ai/rigProfile.ts` builds a cached RigProfile from pure heuristics (bone
+  chains with deformed art, left/right symmetry pairs incl. matrix-mirror
+  detection, role guesses torso/head/limb/face/shadow/prop, figure group),
+  memoized on a hierarchy signature. Five template quick-actions (walk cycle,
+  idle breathing, jump, wave, emphatic gesture) are motion ARCHETYPES that
+  FILL the prompt box (never auto-send) with profile-resolved targets and a
+  beat map in absolute ms from the set duration; sending routes through the
+  normal Create flow so A2 preview / A3 filmstrip / A4 threads apply for
+  free. Every Create/Modify request leads with a compact RIG PROFILE block
+  (`ai/profileBlock.ts` leaf — claude.ts stays at its ratchet ceiling).
+  Rig-agnosticism is test-enforced: a source grep bans sample part names and
+  the girl fixture drives the same buttons naming HER structure.
 - [ ] **A6. Principles polish pass** (idea 3, LAST — integrates with everything) —
   a one-click "Polish" preset refinement turn (A4) on the current clip: adds
   anticipation before large moves, cascades follow-through down bone chains
