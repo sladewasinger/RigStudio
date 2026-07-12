@@ -12,6 +12,11 @@
  * previous key. Lottie shares SVG's conventions (+y down, clockwise rotation), so no
  * axis flipping is needed; the reference frame's origin (the artboard rect when the
  * doc has one enabled, else the viewBox) is baked into geometry and pivots.
+ *
+ * A keyed `z` (draw-order) channel is SILENTLY IGNORED here: Lottie layer order is fixed
+ * for a composition (there is no animatable stacking property), so animated draw order
+ * cannot be represented. Only the authored/rest stacking survives, via the doc.parts layer
+ * order below. `trackOf` never looks up 'z', so z tracks simply don't participate.
  */
 
 import { artboardFrame, Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from '../core/model';

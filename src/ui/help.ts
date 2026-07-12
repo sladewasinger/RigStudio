@@ -58,7 +58,8 @@ export const SHORTCUTS: ShortcutEntry[] = [
   },
   {
     keys: 'PageUp / PageDown',
-    description: 'Bring the selected part (or entered path) forward / send it backward in draw order',
+    description: 'Bring the selected part (or entered path) forward / send it backward in draw order ' +
+      '(rest stacking; animate a per-part z offset in Animate mode to restack over time)',
     context: 'Edit',
   },
 

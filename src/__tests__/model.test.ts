@@ -18,6 +18,7 @@ import {
   deleteKeyframe,
   deleteParts,
   deserializeDoc,
+  drawOrder,
   duplicateParts,
   groupParts,
   keyAt,
@@ -48,6 +49,7 @@ import {
   healDegenerateBoneTip,
   isUsableBoneTip,
   MIN_BONE_LENGTH,
+  sampleKeyList,
 } from '../core/model';
 import { multiply, rotationMat, translationMat } from '../geometry/transforms';
 import { makeClip, makeDoc, makePart, makePath, makeTrack, resetState } from './helpers';
@@ -87,6 +89,87 @@ describe('sampleChannel', () => {
     resetState(null);
     expect(sampleChannel('p1', 'tx', 100)).toBe(0);
     expect(sampleChannel('p1', 'sx', 100)).toBe(1);
+  });
+});
+
+describe('z-order channel (stepped draw-order offset)', () => {
+  it('sampleKeyList stepped: rest before the first key, then holds the latest key (no interp)', () => {
+    const keys = [
+      { time: 500, value: 1, easing: 'easeInOut' as Easing },
+      { time: 1000, value: 5, easing: 'linear' as Easing },
+    ];
+    // Stepped: before the first key there is no rank yet → the fallback (rest), NOT a
+    // backward hold of the first key.
+    expect(sampleKeyList(keys, 0, 0, true)).toBe(0);
+    expect(sampleKeyList(keys, 499, 0, true)).toBe(0);
+    expect(sampleKeyList(keys, 500, 0, true)).toBe(1);
+    // Between keys: hold the EARLIER key exactly — easing/interpolation are ignored (an
+    // interpolated read at t=750 would be 1 + (5−1)*0.5 = 3; stepped stays 1). This is the
+    // mutation guard for the stepped path.
+    expect(sampleKeyList(keys, 750, 0, true)).toBe(1);
+    expect(sampleKeyList(keys, 999, 0, true)).toBe(1);
+    expect(sampleKeyList(keys, 1000, 0, true)).toBe(5);
+    expect(sampleKeyList(keys, 5000, 0, true)).toBe(5);
+    // The default (non-stepped) path still interpolates the same keys.
+    expect(sampleKeyList(keys, 750, 0, false)).toBe(3);
+  });
+
+  it('sampleChannel routes the z channel through stepped sampling', () => {
+    const track = makeTrack('p1', 'z', [
+      [0, 0, 'easeInOut'],
+      [500, 2, 'easeInOut'],
+    ]);
+    resetState(makeDoc([makePart('p1')], [makeClip({ tracks: [track] })]));
+    expect(sampleChannel('p1', 'z', 0)).toBe(0);
+    expect(sampleChannel('p1', 'z', 250)).toBe(0); // holds the t=0 key, no easing toward 2
+    expect(sampleChannel('p1', 'z', 500)).toBe(2);
+    // rest fallback 0 when unkeyed (both no-track and no-clip cases).
+    resetState(makeDoc([makePart('p1')]));
+    expect(sampleChannel('p1', 'z', 100)).toBe(0);
+  });
+
+  it("channelValue z: rest 0 in Setup (time null) and Animate when unkeyed; keyed reads stepped", () => {
+    const track = makeTrack('p1', 'z', [[300, 4, 'linear']]);
+    resetState(makeDoc([makePart('p1')], [makeClip({ tracks: [track] })]));
+    const part = state.doc!.parts[0];
+    expect(channelValue(part, 'z', null)).toBe(0); // Setup: bare rest (there is no rest.z)
+    expect(channelValue(part, 'z', 0)).toBe(0);    // Animate before the key → rest 0
+    expect(channelValue(part, 'z', 300)).toBe(4);
+    expect(channelValue(part, 'z', 900)).toBe(4);  // held (stepped)
+    // Unkeyed part → rest 0 at any time.
+    const bare = makePart('p2');
+    resetState(makeDoc([bare]));
+    expect(channelValue(state.doc!.parts[0], 'z', 500)).toBe(0);
+  });
+
+  it('drawOrder is stable (equal z → doc.parts order) and reorders by z', () => {
+    const a = makePart('a');
+    const b = makePart('b');
+    const c = makePart('c');
+    const parts = [a, b, c];
+    // All-zero z → byte-identical to doc.parts order (unkeyed docs render unchanged).
+    expect(drawOrder(parts, () => 0).map((p) => p.id)).toEqual(['a', 'b', 'c']);
+    // A positive z lifts a part to the front (later in paint order = drawn on top).
+    const zMap: Record<string, number> = { a: 5, b: 0, c: 0 };
+    expect(drawOrder(parts, (p) => zMap[p.id]).map((p) => p.id)).toEqual(['b', 'c', 'a']);
+    // A negative z pushes a part behind; ties (b,c both 0) keep authored order.
+    const zMap2: Record<string, number> = { a: 0, b: -3, c: 0 };
+    expect(drawOrder(parts, (p) => zMap2[p.id]).map((p) => p.id)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('a z track survives serialize → deserialize and still samples stepped', () => {
+    const track = makeTrack('p1', 'z', [
+      [0, 0, 'easeInOut'],
+      [1000, 3, 'linear'],
+    ]);
+    const doc = makeDoc([makePart('p1')], [makeClip({ tracks: [track] })]);
+    const round = deserializeDoc(serializeDoc(doc));
+    const zTrack = round.clips[0].tracks.find((t) => t.channel === 'z');
+    expect(zTrack).toBeTruthy();
+    expect(zTrack!.keyframes.map((k) => [k.time, k.value])).toEqual([[0, 0], [1000, 3]]);
+    resetState(round);
+    expect(sampleChannel('p1', 'z', 500)).toBe(0); // stepped after round-trip, not 1.5
+    expect(sampleChannel('p1', 'z', 1000)).toBe(3);
   });
 });
 

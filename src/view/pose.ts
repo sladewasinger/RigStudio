@@ -59,6 +59,16 @@ export function innerLocalTransform(part: RigPart, pivot = part.pivot): string {
   return ops.join(' ');
 }
 
+/**
+ * A part's effective draw-order OFFSET right now (keyed `z` is ABSOLUTE + stepped, rest
+ * fallback 0). This governs paint-order SORTING only (render.ts's applyDrawOrder) — it
+ * never enters the rendered transform. Mirrors the pose.ts pattern of deferring to the
+ * state-machine preview sampler when one is installed.
+ */
+export function effectiveZ(part: RigPart, t: number | null): number {
+  return ctx.poseSampler ? ctx.poseSampler(part.id, 'z') : channelValue(part, 'z', t);
+}
+
 /** Ancestor poses composed with the part's own pose (bone hierarchy). */
 export function fullPoseTransform(part: RigPart, t: number | null): string {
   const pieces = ancestorChain(part).map((a) => ownPoseTransform(a, t));

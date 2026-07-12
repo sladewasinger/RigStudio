@@ -117,8 +117,18 @@ export interface RigPart {
   paths: RigPath[];
 }
 
-/** Animatable channels. Parts support all three; the root figure also supports scale. */
-export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy';
+/**
+ * Animatable channels. Parts support rotate/tx/ty (+ the keyable draw-order `z` offset);
+ * the root figure also supports scale.
+ *
+ * `z` is special: it is a STACKING OFFSET, not a transform. It never enters a part's
+ * rendered matrix — render.ts sorts parts by (effective z ascending, doc.parts index
+ * ascending) to decide paint order. Its rest value is a fixed 0 (there is no RestPose.z),
+ * so an unkeyed doc renders in pure doc.parts order exactly as before. Keyed z is ABSOLUTE
+ * like every channel but SAMPLED STEPPED (hold the latest key at-or-before t; easing/bezier
+ * ignored — a stacking rank is discrete, not blendable). See sampleKeyList's `stepped` arg.
+ */
+export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy' | 'z';
 
 export type Easing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
 
@@ -302,6 +312,7 @@ export const CHANNEL_DEFAULTS: Record<Channel, number> = {
   ty: 0,
   sx: 1,
   sy: 1,
+  z: 0, // stacking OFFSET rest value; 0 = authored (doc.parts) draw order
 };
 
 // ---- Application state ----
@@ -999,8 +1010,24 @@ export function duplicateParts(ids: string[]): string[] {
 }
 
 // ---- Draw order (z-order) ----
-// doc.parts array order IS the paint order: last = drawn on top. The layers panel
-// lists topmost first, so "up the layer list" means "later in doc.parts".
+// doc.parts array order IS the AUTHORED paint order: last = drawn on top. The layers panel
+// lists topmost first, so "up the layer list" means "later in doc.parts". On top of that,
+// every part carries a keyable `z` OFFSET channel (stepped, absolute, rest 0) that lifts it
+// forward/back per frame; the rendered order sorts by (effective z, doc.parts index).
+
+/**
+ * Parts in paint order for a given effective-z map: sorted by (z ascending, doc.parts index
+ * ascending). PURE and STABLE — equal z preserves authored order, so an all-zero z map
+ * returns exactly `parts` order (an unkeyed doc renders byte-identically to the pre-z-channel
+ * behavior). render.ts feeds this the per-frame effective z (view/pose.ts's `effectiveZ`);
+ * keeping the rule here makes it a single unit-testable function instead of inline DOM code.
+ */
+export function drawOrder(parts: RigPart[], zOf: (part: RigPart) => number): RigPart[] {
+  return parts
+    .map((part, i) => ({ part, z: zOf(part), i }))
+    .sort((a, b) => a.z - b.z || a.i - b.i)
+    .map((e) => e.part);
+}
 
 /** Whether the current selection (entered path, else part) can move a step in z. */
 export function canMoveSelectedInDrawOrder(delta: 1 | -1): boolean {
@@ -1106,7 +1133,8 @@ export function channelValue(part: RigPart, channel: Channel, time: number | nul
     : channel === 'tx' ? part.rest.tx
     : channel === 'ty' ? part.rest.ty
     : channel === 'sx' ? part.rest.sx
-    : part.rest.sy;
+    : channel === 'sy' ? part.rest.sy
+    : 0; // 'z' has no RestPose field — its stacking offset rests at 0 (CHANNEL_DEFAULTS.z)
   if (time === null) return rest;
   const clip = activeClip();
   const track = clip?.tracks.find((t) => t.target === part.id && t.channel === channel);
@@ -1114,9 +1142,27 @@ export function channelValue(part: RigPart, channel: Channel, time: number | nul
   return sampleChannel(part.id, channel, time);
 }
 
-/** Interpolate a sorted keyframe list at a time (pure — no state lookup). */
-export function sampleKeyList(keys: Keyframe[], time: number, fallback: number): number {
+/**
+ * Interpolate a sorted keyframe list at a time (pure — no state lookup).
+ *
+ * `stepped` (the draw-order `z` channel) switches to HOLD semantics: return the value of
+ * the latest key at-or-before `time`, with easing/bezier ignored (a stacking rank is
+ * discrete, not blendable). BEFORE the first key there is no rank yet, so it falls back to
+ * `fallback` (rest 0) — unlike the interpolated path, which holds the first key backward.
+ */
+export function sampleKeyList(
+  keys: Keyframe[], time: number, fallback: number, stepped = false,
+): number {
   if (keys.length === 0) return fallback;
+  if (stepped) {
+    if (time < keys[0].time) return fallback; // no key has occurred yet → rest
+    let v = keys[0].value;
+    for (const k of keys) {
+      if (k.time <= time) v = k.value;
+      else break;
+    }
+    return v;
+  }
   if (time <= keys[0].time) return keys[0].value;
   const last = keys[keys.length - 1];
   if (time >= last.time) return last.value;
@@ -1143,7 +1189,7 @@ export function sampleChannel(target: string, channel: Channel, time: number): n
   if (!clip) return fallback;
   const track = clip.tracks.find((t) => t.target === target && t.channel === channel);
   if (!track) return fallback;
-  return sampleKeyList(track.keyframes, time, fallback);
+  return sampleKeyList(track.keyframes, time, fallback, channel === 'z');
 }
 
 /**

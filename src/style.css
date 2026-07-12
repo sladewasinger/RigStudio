@@ -666,6 +666,17 @@ input[type='number'] { width: 90px; }
 .align-grid { display: flex; gap: var(--sp-1); flex-wrap: wrap; margin: 6px 0; }
 .align-grid button { padding: 0 var(--sp-2); font-size: 12px; min-width: 34px; }
 
+/* Draw-order (z) stacking row in the inspector */
+.stacking-controls { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.stacking-pos { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.stacking-step {
+  padding: 0;
+  width: var(--ctrl-h-sm);
+  min-width: var(--ctrl-h-sm);
+  height: var(--ctrl-h-sm);
+  font-size: 11px;
+}
+
 /* Graph (curve) editor */
 .graph-panel { margin-top: var(--sp-2); border-top: 1px solid var(--border); padding-top: 6px; }
 .graph-header { display: flex; gap: 10px; align-items: center; margin-bottom: var(--sp-1); }

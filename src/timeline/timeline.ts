@@ -549,6 +549,14 @@ export function render(): void {
 
     const easingSel = document.createElement('select');
     easingSel.title = 'Easing of the segment arriving at the key';
+    // The draw-order `z` channel samples STEPPED — easing/bezier are ignored for it — so
+    // the dropdown is inert for an all-z selection. Disable it (with a why) rather than
+    // let the user set an easing that silently does nothing.
+    const allZ = [...selectedKeys].every((k) => trackOfKey.get(k)?.channel === 'z');
+    if (allZ) {
+      easingSel.disabled = true;
+      easingSel.title = 'z is a stepped draw-order channel — easing does not apply to it.';
+    }
     const values = new Set([...selectedKeys].map((k) => k.easing));
     if (values.size > 1) {
       const mixed = document.createElement('option');

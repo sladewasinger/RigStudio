@@ -8,9 +8,9 @@
  * SMInstance (smPanel's only hook) and repaints.
  */
 
-import { state, activeClip, Channel, RigDoc, RigPart } from '../core/model';
+import { state, activeClip, Channel, RigDoc, RigPart, drawOrder } from '../core/model';
 import { ctx, SVG_NS } from './context';
-import { poseTime, rootPoseTransform, groupTransformOf } from './pose';
+import { poseTime, rootPoseTransform, groupTransformOf, effectiveZ } from './pose';
 import { focusContext, nodeEditSkinSuspendId } from './focus';
 import { renderSkinnedPart } from './skinRender';
 import { renderOverlay } from './overlay';
@@ -106,8 +106,48 @@ export function renderPose(): void {
       g.setAttribute('transform', groupTransformOf(part, t));
     }
   }
+  applyDrawOrder(doc, t);
   renderOnion();
   renderOverlay();
+}
+
+// ---- Keyframeable z-order (paint order) ----
+//
+// doc.parts array order is the AUTHORED (rest) stacking; on top of it every part carries a
+// keyable `z` OFFSET (stepped, absolute, rest 0 — see model.ts's Channel doc). The rendered
+// paint order sorts parts by (effective z ascending, doc.parts index ascending), so an
+// unkeyed doc paints in pure doc.parts order exactly as before, and a keyed z lifts a part
+// forward/back relative to that. This is EDITOR-side only; the .riv exporter maps animated
+// draw order separately (phase 2), and Lottie can't animate layer order at all.
+
+/**
+ * Reconcile the canvas part-group paint order with the current effective z-order, moving
+ * groups only when it actually changed. rootGroup's children ARE the part groups (onion +
+ * overlay are separate sibling groups), so the live child order is read back cheaply and
+ * compared to the desired order — self-correcting across buildCanvas rebuilds and
+ * reorderCanvas (no external cache to invalidate). appendChild MOVES existing nodes, so a
+ * reorder is a handful of DOM moves, never a rebuild; an unchanged order does zero DOM work,
+ * which matters because this runs every frame during playback.
+ */
+function applyDrawOrder(doc: RigDoc, t: number | null): void {
+  const root = ctx.rootGroup;
+  if (!root) return;
+  const desired = drawOrder(doc.parts, (part) => effectiveZ(part, t))
+    .map((part) => part.id)
+    .filter((id) => ctx.partGroups.has(id));
+  const current: string[] = [];
+  for (const child of Array.from(root.children)) {
+    const id = (child as SVGElement).dataset?.partId;
+    if (id) current.push(id);
+  }
+  if (sameOrder(desired, current)) return;
+  for (const id of desired) root.appendChild(ctx.partGroups.get(id)!);
+}
+
+function sameOrder(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 // ---- Artboard (page) rect ----

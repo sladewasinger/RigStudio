@@ -40,7 +40,7 @@ const CLIP_SCHEMA = {
             type: 'string',
             description: "A part label from the rig, or 'root' for the whole figure",
           },
-          channel: { type: 'string', enum: ['rotate', 'tx', 'ty', 'sx', 'sy'] },
+          channel: { type: 'string', enum: ['rotate', 'tx', 'ty', 'sx', 'sy', 'z'] },
           keyframes: {
             type: 'array',
             items: {
@@ -183,6 +183,13 @@ Rotations are in degrees, POSITIVE = CLOCKWISE on screen, and each part rotates 
 its own pivot (its joint — e.g. an arm's pivot is the shoulder). Channels per part:
 - rotate: degrees, ABSOLUTE
 - tx / ty: translation in document units, ABSOLUTE (+y is down, so a jump is NEGATIVE ty)
+- z: draw-order OFFSET (stacking rank), ABSOLUTE and STEPPED — easing is IGNORED, the part
+  jumps to the new rank exactly at the keyframe (no blending between ranks). 0 = the
+  authored stacking; a POSITIVE z lifts the part toward the viewer (draws in front of parts
+  at lower z), NEGATIVE pushes it behind. Use small integer-ish values. This is the tool for
+  reach-behind / pass-in-front moves: a hand that must swing BEHIND the torso then return in
+  FRONT keys z negative while behind and positive while in front; a part that never changes
+  its stacking needs no z track at all (omit it — 0 is the default).
 Keyframed values are ABSOLUTE channel values, not offsets. A channel with NO keyframes
 holds the part's rest value (given as "rest" in the rig JSON) — so to move a part
 relative to how it currently stands, start your keyframes from its rest value; to keep

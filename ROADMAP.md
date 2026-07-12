@@ -368,6 +368,24 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
   rotation, lengths preserved, current-pose bias (no flips), deterministic
   iterations; Edit writes rests, Animate keys; chain highlight covers all
   participating bones.
+- [ ] **Keyframeable z-order** — paint order stays flat/hierarchy-independent (by
+  design); add a keyable `z` offset channel per part (STEPPED sampling — no easing
+  between stacking ranks), rendering sorts by (z, rest index); inspector shows
+  stacking position + up/down in Edit and the keyable offset in Animate; AI schema
+  learns the channel (the reach-behind-grab-pill use case). Phase 2 (blocked on
+  the user's uncommitted exportRiv.ts WIP): .riv export via Rive DrawTarget/
+  DrawRules keyed draw order; Lottie cannot animate layer order — documented
+  limitation.
+- [ ] **Opacity channel + layers eye (revised per Rive-parity principle)** —
+  `opacity` becomes a keyable continuous channel (rest opacity in Edit, keyed in
+  Animate; Rive-native, Lottie `o`). The layers EYE is editor-only and NEVER
+  keyable (user decision — no visibility channel; animated invisibility = opacity
+  0): `part.hidden` serializes, hidden parts don't render and are excluded from
+  exports. New convention in CLAUDE.md: keyable channels must map to Rive runtime
+  features.
+- [ ] **Export wave (unblocked — user WIP committed)**: .riv keyed z draw order
+  via DrawTarget/DrawRules; .riv + Lottie opacity keys; hidden-part exclusion in
+  both exporters; verify against the user's headless rive-android pipeline.
 - [ ] **FINAL ITEM (do last): swap the default sample to girl_example** — Pip is
   commercial art for the user's app; re-base the interaction-harness fixtures onto
   the girl (or a neutral fixture), remove PIP_MASTER.svg from public/ and the

@@ -203,6 +203,12 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   compound paths — buttons disable via `canJoinNodes`/`canDeleteSegment`.
 - **`help.ts`'s `SHORTCUTS` list is the user-facing shortcut documentation** — any
   binding change in `main.ts` must update it in the same change.
+- **Keyable channels must map to Rive runtime features** (user decision 2026-07-11:
+  Rive is the target framework). Editor conveniences that Rive cannot animate
+  (e.g. layer visibility) stay editor-only — never a channel, never keyed.
+  Animated invisibility is OPACITY (Rive-native). The layers eye (`part.hidden`)
+  is a workspace flag: hidden parts don't render and are EXCLUDED from exports
+  entirely, but it is not animatable.
 - **State machines mirror Rive's semantics deliberately** (`model.ts` SM types →
   `exportRiv.ts` maps 1:1): inputs addressed by NAME at runtime, conditions AND,
   easing crossfades, any-state priority, and **exit time**
