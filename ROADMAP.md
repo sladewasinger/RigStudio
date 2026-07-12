@@ -440,7 +440,7 @@ principles pass integrates last as a preset refinement turn.
   deprecation). Also in this wave: the CLEAN-PREVIEW toggle — one Animate-mode
   button hiding ALL editor chrome (bones, pivots, joints, dashed lines, selection
   boxes, gizmos) to watch the animation clean.
-- [ ] **A1. Session & intent UX** — prompt text persists across view/mode switches
+- [x] **A1. Session & intent UX** (e4f3ac6) — prompt text persists across view/mode switches
   until sent (module state, like the busy flag). TWO actions replace the single
   button: [Create new animation] → AI returns a clip + a NAME, added to the clips
   dropdown and selected; [Modify current] → edits the active clip, with a
@@ -483,6 +483,12 @@ principles pass integrates last as a preset refinement turn.
 (The former "swap default sample to girl_example" FINAL item was CANCELLED
 2026-07-11 — user decision: Pip stays as the permanent public demo sample.
 girl_example.svg remains a nested-import test fixture only.)
+
+- [ ] **Extract path → own part** — a context-menu op wrapping a path in its own
+  part with frame compensation (geometry stays put), so imported single-path
+  details (e.g. a body's shadow path) become independently animatable/reorderable
+  across parts. (Follow-on to the path-row select/reorder fix; cross-part path
+  drags stay rejected until this exists.)
 
 Category B — nice-to-have (untracked):
 - [ ] **Find/search parts** in the Layers tree. (S–M)
