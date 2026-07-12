@@ -388,16 +388,29 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
   both exporters; verify against the user's headless rive-android pipeline.
 ## Pre-A0 bones fixes (user-reported, build BEFORE the AI program)
 
-- [ ] **Pen-tool bone chains** — click sets the origin, move shows a live preview
+- [x] **Pen-tool bone chains** (cd277af) — click sets the origin, move shows a live preview
   bone, click sets the tip AND starts the next bone at that joint; repeat to grow
   the chain; Escape/Enter/double-click ends chain mode. One checkpoint for the
   whole chain (single undo removes it); auto-bind fires ONCE at chain completion.
   Replaces press-drag-release + per-bone rearming.
-- [ ] **Bones hoisted to root on bind (regression)** — bones are again leaving
+- [x] **Bones hoisted to root on bind (regression)** (cd277af — root cause: bindPartsToBones zeroed the ART part's parentId since P4; latent until nested import) — bones are again leaving
   their parent object when assigned. a374dbd's in-place world-preserving fold was
   supposed to keep parentId; reproduce the user's flow (suspect: art nested in a
   GROUP, or a bind entry point that never got the fold — node bind / AI bindParts
   / frozen rebind), fix, and pin parentId stability through EVERY bind path.
+
+## Post-A bone feel fixes (user-reported — build AFTER the A program, BEFORE H)
+
+- [ ] **Freeze origin-drag rotates unselected bones** — origin/joint handles only
+  hit-test on the SELECTED bone, so a click-drag on an unselected bone's origin
+  falls through to the body-drag (rotate) pipeline; user must select first. Fix:
+  in freeze mode the origin/joint press on ANY bone selects + starts the joint
+  drag in one gesture. Rotation stays on body/gizmo-ring drags.
+- [ ] **Grab-point-relative IK (no tip snap)** — the IK drag always uses the TIP
+  as effector, so grabbing the bone body teleports the tip to the cursor. Fix:
+  the grabbed point (tip, or any body point) is the effector anchor and follows
+  the cursor exactly; grabbing mid-body reads as "translate this bone, chain
+  solves parents along" — same FABRIK, cursor-anchored at the grab offset.
 
 ## AI Animate System v2 (program planned 2026-07-11 with Austin — build in order)
 
