@@ -7,9 +7,9 @@
 
 import {
   state, notify, selectedPart, selectPart, setParent, movePartRelativeTo,
-  ancestorChain, RigPart,
+  ancestorChain, moveSelectedInDrawOrder, RigPart, RigPath,
 } from '../core/model';
-import { renderPose, reorderCanvas, enterGroupsFor } from '../view';
+import { renderPose, reorderCanvas, enterGroupsFor, syncPartPathDom } from '../view';
 import { checkpoint } from '../core/history';
 import { dialog } from '../ui/dialogs';
 import { showContextMenu } from '../ui/contextMenu';
@@ -72,7 +72,7 @@ export function buildLayersPanel(el: HTMLElement): void {
   hint.className = 'hint';
   hint.textContent =
     'Click ▸ to fold parts open. Drag one part onto another to parent it (limbs chain). ' +
-    'Double-click renames.';
+    'Drag a path onto its siblings to reorder paint order within the part. Double-click renames.';
   el.appendChild(hint);
 }
 
@@ -81,8 +81,14 @@ function partNode(part: RigPart): HTMLElement {
   const li = document.createElement('li');
   const row = document.createElement('div');
   row.className = 'layer-row part';
-  if (part.id === state.selectedPartId) row.classList.add('selected');
-  else if (state.selectedPartIds.includes(part.id)) row.classList.add('in-selection');
+  row.dataset.partId = part.id; // unambiguous lookup — labels aren't unique (nested same-name groups)
+  // A selected PATH inside this part (state.selectedPathId) is the real selection target
+  // — the inspector/node scoping key off it, not the part row. Give the part row only the
+  // muted "contains the selection" affordance in that case, never the full .selected fill,
+  // so clicking a path never reads as "the path AND its parent are both selected."
+  const pathSelectedHere = part.id === state.selectedPartId && !!state.selectedPathId;
+  if (part.id === state.selectedPartId && !pathSelectedHere) row.classList.add('selected');
+  else if (pathSelectedHere || state.selectedPartIds.includes(part.id)) row.classList.add('in-selection');
   if (part.hidden) row.classList.add('hidden-part');
 
   const isOpen = expanded.has(part.id);
@@ -201,6 +207,7 @@ function partNode(part: RigPart): HTMLElement {
       const pathLi = document.createElement('li');
       const pathRow = document.createElement('div');
       pathRow.className = 'layer-row path';
+      pathRow.dataset.pathId = path.id; // unambiguous lookup, mirrors row.dataset.partId above
       if (state.selectedPathId === path.id) pathRow.classList.add('selected');
       pathRow.innerHTML = `<span class="path-icon">◇</span>`;
       const pathName = document.createElement('span');
@@ -219,6 +226,15 @@ function partNode(part: RigPart): HTMLElement {
         ev.stopPropagation();
         beginInlineRename(pathRow, pathName, path);
       };
+      pathRow.draggable = true;
+      pathRow.addEventListener('dragstart', (ev) => {
+        ev.stopPropagation();
+        draggingPath = { partId: part.id, pathId: path.id };
+        ev.dataTransfer?.setData('text/rig-path', path.id);
+        if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
+      });
+      pathRow.addEventListener('dragend', () => { draggingPath = null; });
+      wirePathRowDrop(pathRow, part, path);
       pathLi.appendChild(pathRow);
       kids.appendChild(pathLi);
     }
@@ -335,6 +351,107 @@ function wirePartRowDrop(row: HTMLElement, part: RigPart): void {
     }
     if (zone === 'into') expanded.add(part.id);
     reorderCanvas();
+    notify();
+  });
+}
+
+// ---- Path reordering (drag within a part's own paths) ----
+
+/**
+ * The path currently mid-drag, tracked in-module. `dataTransfer.getData` is only readable
+ * on 'drop' (browsers protect it during dragover/dragenter), but the drop feedback and the
+ * same-part gate both need to know the source RIGHT AWAY as the pointer crosses rows — so
+ * dragstart stashes it here and every path row's dragover/drop reads it back. dragend always
+ * fires (success, cancel, or drop-elsewhere) so this can't get stuck set.
+ */
+let draggingPath: { partId: string; pathId: string } | null = null;
+
+/** Paths don't nest, so there's no "into" zone — just above/below, split at the row's midline. */
+function pathDropZoneOf(ev: DragEvent, el: HTMLElement): 'above' | 'below' {
+  const r = el.getBoundingClientRect();
+  return (ev.clientY - r.top) / r.height < 0.5 ? 'above' : 'below';
+}
+
+/**
+ * The `part.paths` (model-order) index the dragged path should land at for a drop at `zone`
+ * relative to `refPathId`, computed in the ON-SCREEN list order the tree actually renders
+ * (`[...part.paths].reverse()` — row 0 = last in the array = topmost/drawn-last, mirroring
+ * the parts tree's own topmost-first convention). Pure; returns -1 if either id is missing.
+ */
+function pathDropTargetIndex(
+  part: RigPart, draggedId: string, refPathId: string, zone: 'above' | 'below',
+): number {
+  const visual = [...part.paths].reverse();
+  const n = visual.length;
+  const srcV = visual.findIndex((p) => p.id === draggedId);
+  const refV = visual.findIndex((p) => p.id === refPathId);
+  if (srcV < 0 || refV < 0) return -1;
+  const withoutSrc = visual.filter((_, i) => i !== srcV);
+  let insertV = withoutSrc.findIndex((p) => p.id === refPathId);
+  if (zone === 'below') insertV += 1;
+  return n - 1 - insertV;
+}
+
+/**
+ * Move `pathId` to `targetIndex` within `part.paths` by reusing the EXACT adjacent-swap
+ * mutation PageUp/PageDown drives on an entered path (`moveSelectedInDrawOrder`), one step
+ * at a time — a drag reorder ends up byte-identical to pressing that key N times rather than
+ * a second array-splice mutation. Temporarily borrows the entered-path selection to drive
+ * it (that function reads `state.selectedPartId`/`selectedPathId`), then restores whatever
+ * was selected before the drag — a reorder drag doesn't change selection, matching
+ * `wirePartRowDrop`'s reorder branch above.
+ */
+function movePathTo(part: RigPart, pathId: string, targetIndex: number): boolean {
+  const from = part.paths.findIndex((p) => p.id === pathId);
+  if (from < 0 || targetIndex < 0 || targetIndex >= part.paths.length) return false;
+  const prevPartId = state.selectedPartId;
+  const prevPathId = state.selectedPathId;
+  state.selectedPartId = part.id;
+  state.selectedPathId = pathId;
+  const step = targetIndex > from ? 1 : -1;
+  let i = from;
+  let ok = true;
+  while (i !== targetIndex) {
+    if (!moveSelectedInDrawOrder(step)) { ok = false; break; }
+    i += step;
+  }
+  state.selectedPartId = prevPartId;
+  state.selectedPathId = prevPathId;
+  return ok;
+}
+
+/**
+ * Path rows accept drops from another path row of the SAME part only. Paths live baked
+ * into their part's frame, so a cross-part move would teleport geometry (a future "extract
+ * path to part" op is the real answer — out of scope here). A cross-part hover never claims
+ * the dragover (no preventDefault), so the browser shows its native "can't drop here" cursor
+ * and no 'drop' event fires at all — the rejection is a structural non-event, not a branch
+ * that could accidentally mutate.
+ */
+function wirePathRowDrop(row: HTMLElement, part: RigPart, path: RigPath): void {
+  row.addEventListener('dragover', (ev) => {
+    if (!ev.dataTransfer?.types.includes('text/rig-path')) return;
+    if (!draggingPath || draggingPath.partId !== part.id || draggingPath.pathId === path.id) return;
+    ev.preventDefault();
+    const zone = pathDropZoneOf(ev, row);
+    row.classList.toggle('drop-above', zone === 'above');
+    row.classList.toggle('drop-below', zone === 'below');
+  });
+  row.addEventListener('dragleave', () => row.classList.remove('drop-above', 'drop-below'));
+  row.addEventListener('drop', (ev) => {
+    ev.preventDefault();
+    row.classList.remove('drop-above', 'drop-below');
+    const dragged = draggingPath;
+    draggingPath = null;
+    if (!dragged || dragged.partId !== part.id || dragged.pathId === path.id) return;
+    const zone = pathDropZoneOf(ev, row);
+    const from = part.paths.findIndex((p) => p.id === dragged.pathId);
+    const targetIndex = pathDropTargetIndex(part, dragged.pathId, path.id, zone);
+    if (targetIndex < 0 || targetIndex === from) return; // no-op drop: nothing to checkpoint
+    checkpoint();
+    if (!movePathTo(part, dragged.pathId, targetIndex)) return;
+    syncPartPathDom(part);
+    renderPose();
     notify();
   });
 }

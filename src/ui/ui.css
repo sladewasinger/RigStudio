@@ -247,3 +247,7 @@
   font-weight: 600;
 }
 .ai-preview-apply:hover:not(:disabled) { background: var(--accent-2); filter: brightness(1.1); }
+
+/* [hidden] must actually hide inside the AI panel — the display rules on buttons
+   otherwise outrank the UA hidden rule (same fight .ai-busy-indicator[hidden] won). */
+.ai-panel [hidden] { display: none !important; }

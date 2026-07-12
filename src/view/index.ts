@@ -22,7 +22,9 @@ export { buildCanvas } from './canvas';
 export { partRootBoxes } from './pose';
 export { clearGroupEntry, enterGroupsFor, stepOutFocus, resetInteractionState } from './focus';
 export { renderPose, setPoseSampler, resetSkinRenderWarnings } from './render';
-export { updatePathAttrs, reorderCanvas, registerPart, unregisterPart } from './partDom';
+export {
+  updatePathAttrs, reorderCanvas, registerPart, unregisterPart, syncPartPathDom,
+} from './partDom';
 export {
   hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, applyNodeOp,
   deleteSelectedNodes, nudgeSelectedNodes, canDeleteSegment, canJoinNodes,

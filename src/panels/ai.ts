@@ -389,6 +389,18 @@ function tickPreview(dtMs: number): void {
   renderPose();
 }
 
+/**
+ * Escape tier for main.ts: discard an active AI preview and report whether one was
+ * consumed (mirrors smHandleEscape's contract — main.ts calls this ahead of the
+ * focus/deselect tiers so Escape never both discards a preview AND deselects).
+ */
+export function aiHandleEscape(): boolean {
+  if (!preview) return false;
+  exitPreviewCommon();
+  notify();
+  return true;
+}
+
 function rafTick(now: number): void {
   if (!preview) return;
   if (shouldAutoDiscardPreview()) { exitPreviewCommon(); notify(); return; }

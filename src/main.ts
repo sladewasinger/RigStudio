@@ -23,6 +23,7 @@ import {
 import { exportLottie } from './io/exportLottie';
 import { exportRiv } from './io/exportRiv';
 import { smHandleEscape, smHandleDelete, stopPreview } from './panels/smPanel';
+import { aiHandleEscape } from './panels/ai';
 import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './core/history';
 import { toggleHelp, closeHelp, isHelpOpen } from './ui/help';
 import { dialog, isDialogOpen, closeActiveDialog } from './ui/dialogs';
@@ -460,6 +461,12 @@ document.addEventListener('keydown', (ev) => {
       setFreezeMode(false);
       notify();
       renderPose();
+      return;
+    }
+    // AI preview next: Escape discards an active preview-before-apply candidate
+    // (doc untouched) without also deselecting or stepping out of anything.
+    if (aiHandleEscape()) {
+      ev.preventDefault();
       return;
     }
     // State-machine editor next: cancel an armed transition or stop a running preview.

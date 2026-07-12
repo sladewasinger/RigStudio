@@ -451,6 +451,29 @@ export function dragOnElement(
   el.dispatchEvent(pointer('pointerup', to.x, to.y, 0, 0, {}));
 }
 
+/**
+ * Simulates one native HTML5 drag-and-drop gesture (dragstart → dragover → drop → dragend)
+ * between two DOM elements, sharing a single real `DataTransfer` across all four events —
+ * only meaningful in a genuine browser engine (Vitest Browser Mode), not jsdom, which lacks
+ * `DataTransfer`/`DragEvent` entirely. `clientPoint` positions the dragover/drop (defaults to
+ * `target`'s own center) so a listener's above/below drop-zone math resolves correctly.
+ * dragend always fires last, mirroring the real event order, so app code relying on it to
+ * clear drag-tracking state (layers.ts's `draggingPath`) behaves exactly as in a real drag.
+ */
+export function simulateDragDrop(
+  source: Element, target: Element, clientPoint?: { x: number; y: number },
+): void {
+  const dt = new DataTransfer();
+  const pt = clientPoint ?? clientCenterOf(target);
+  const fire = (el: Element, type: string) => el.dispatchEvent(new DragEvent(type, {
+    bubbles: true, cancelable: true, dataTransfer: dt, clientX: pt.x, clientY: pt.y,
+  }));
+  fire(source, 'dragstart');
+  fire(target, 'dragover');
+  fire(target, 'drop');
+  fire(source, 'dragend');
+}
+
 /** A single down/up click at a client point (no movement → no drag, no checkpoint). */
 export function click(x: number, y: number, mods: Mods = {}): void {
   hitAt(x, y).dispatchEvent(pointer('pointerdown', x, y, 0, 1, mods));
