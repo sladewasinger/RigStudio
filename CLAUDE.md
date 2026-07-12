@@ -112,11 +112,17 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   animation — this was an explicit bug fix, do not regress it. Both exporters mirror
   the rule: Lottie and .riv emit rest as the static value only when a channel has no
   keyframes.
-- **Rest scale (`rest.sx/sy`) applies innermost — after the baked transform — around
+- **Part scale (`sx`/`sy`) applies innermost — after the baked transform — around
   the pivot mapped into pre-baked local space**, so artwork resizes along its own axes
-  and the joint never moves. Like baked transforms, it does NOT propagate to children.
-  Both exporters bake it into the flattened geometry (layer/node-scale axes would be
-  wrong for rotated art).
+  and the joint never moves. Rest scale fills unkeyed frames; `sx`/`sy` are KEYABLE
+  channels (absolute, rest-fallback) rendered in the same innermost slot
+  (`effectiveScaleX/Y` in view/pose.ts — Edit mode always shows rest via the
+  `poseTime()` null discriminator). Like baked transforms, part scale does NOT
+  propagate to children in the editor. REST scale bakes into exported geometry;
+  KEYED scale exports as .riv Node scaleX/scaleY anchored at the pivot — note the
+  latent divergence: Rive Node scale DOES propagate to children at runtime, so
+  keyed scale on a part with children may differ editor-vs-runtime (fine for leaf
+  parts; revisit if it bites).
 - **Part parenting composes like a bone hierarchy.** A part's rendered transform is its
   ancestors' pose transforms (outermost first) followed by its own; `ancestorChain()` is
   cycle-safe and `setParent()` refuses to create one. Effective pivots for gizmos/bone

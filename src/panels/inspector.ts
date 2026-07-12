@@ -145,6 +145,25 @@ export function buildInspector(el: HTMLElement): void {
           poseEdited();
         },
       ));
+      // Keyable part scale (absolute sx/sy, rest.sx/sy fallback): the innermost slot rest
+      // scale occupies (around the pivot, not propagating to children) — Animate scrub
+      // shows it, and the .riv export replays it as an absolute Node scale. Shown for every
+      // part like the other pose fields; a skinned part deforms by its bones so its own
+      // scale is inert, exactly as its rotate/translate fields already are.
+      el.appendChild(keyableField(
+        'scale x', part.id, 'sx', () => channelValue(part, 'sx', t), (v) => {
+          checkpoint();
+          setKeyframe(part.id, 'sx', v);
+          poseEdited();
+        }, 0.01,
+      ));
+      el.appendChild(keyableField(
+        'scale y', part.id, 'sy', () => channelValue(part, 'sy', t), (v) => {
+          checkpoint();
+          setKeyframe(part.id, 'sy', v);
+          poseEdited();
+        }, 0.01,
+      ));
       // Keyable draw-order OFFSET (stepped, absolute): higher = toward the viewer, 0 = the
       // authored stacking. Sampling holds the latest key (no easing), so it snaps between
       // ranks — the reach-behind-then-in-front use case.

@@ -318,6 +318,22 @@ describe('channelValue', () => {
     resetState(makeDoc([part], [makeClip({ tracks: [empty] })]));
     expect(channelValue(part, 'rotate', 500)).toBe(30);
   });
+
+  it('part sx/sy: keyed values are ABSOLUTE (interpolated); unkeyed and time=null fall back to rest scale', () => {
+    // rest.sy 1.2 is deliberately NON-default so a bug that ignores the keyed track and
+    // returns rest would land on 1.2, not silently pass on a coincidental 1.
+    const part = makePart('p1', {
+      rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1.2, kx: 0, ky: 0, opacity: 1 },
+    });
+    const syTrack = makeTrack('p1', 'sy', [[0, 1, 'linear'], [1000, 1.6, 'linear']]);
+    resetState(makeDoc([part], [makeClip({ tracks: [syTrack] })]));
+
+    expect(channelValue(part, 'sy', 0)).toBe(1);          // first key, ABSOLUTE (not 1.2)
+    expect(channelValue(part, 'sy', 500)).toBeCloseTo(1.3, 9); // linear midpoint 1 → 1.6
+    expect(channelValue(part, 'sy', 1000)).toBe(1.6);     // last key
+    expect(channelValue(part, 'sy', null)).toBe(1.2);     // Setup: bare rest, ignores the track
+    expect(channelValue(part, 'sx', 500)).toBe(1);        // sx unkeyed → rest fallback (1)
+  });
 });
 
 describe('setKeyframeAt', () => {

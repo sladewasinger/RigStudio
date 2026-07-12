@@ -2,7 +2,10 @@
  * Pose evaluation: the transform strings and matrices that place each part in the scene.
  *
  * A part's rendered transform is its ancestors' poses (outermost first) followed by its
- * own pose, then the baked SVG transform, then the innermost rest scale/skew. Keyed
+ * own pose, then the baked SVG transform, then the innermost scale/skew. The innermost
+ * SCALE is keyable (channels 'sx'/'sy', absolute with rest.sx/sy as the unkeyed
+ * fallback — model.channelValue), so Animate playback/scrub shows part scale exactly as
+ * the .riv export replays it; SKEW (kx/ky) stays REST-ONLY (not a channel). Keyed
  * channels are ABSOLUTE; the rest pose only fills unkeyed channels (model.channelValue).
  * `ctx.poseSampler`, when set by the state-machine editor, overrides normal sampling.
  */
@@ -45,12 +48,31 @@ export function localPivotOf(part: RigPart, pivot = part.pivot): { x: number; y:
 }
 
 /**
- * Rest scale AND skew, applied innermost (after the baked transform) around the local
- * pivot: the artwork reshapes along its own axes and the joint stays exactly in place.
- * `pivot` overrides the stored pivot (pivot drags evaluate candidate positions).
+ * A part's effective scale x/y right now: the ABSOLUTE keyed value when 'sx'/'sy' is
+ * keyed in the active clip, otherwise rest.sx/sy (channelValue's rule). This is the SAME
+ * innermost slot the .riv export scales at (an absolute Node scaleX/scaleY anchored at
+ * the pivot), so editor and runtime agree. Defers to the state-machine preview sampler
+ * when installed — mirrors effectiveZ/effectiveOpacity.
  */
-export function innerLocalTransform(part: RigPart, pivot = part.pivot): string {
-  const { sx, sy, kx, ky } = part.rest;
+export function effectiveScaleX(part: RigPart, t: number | null): number {
+  return ctx.poseSampler ? ctx.poseSampler(part.id, 'sx') : channelValue(part, 'sx', t);
+}
+
+export function effectiveScaleY(part: RigPart, t: number | null): number {
+  return ctx.poseSampler ? ctx.poseSampler(part.id, 'sy') : channelValue(part, 'sy', t);
+}
+
+/**
+ * Scale AND skew, applied innermost (after the baked transform) around the local pivot:
+ * the artwork reshapes along its own axes and the joint stays exactly in place. Scale is
+ * time-sampled (keyed sx/sy absolute, rest fallback) so Animate scrub shows keyed scale;
+ * SKEW is rest-only (kx/ky are not channels). Pass t = null for the bare rest pose
+ * (Setup). `pivot` overrides the stored pivot (pivot drags evaluate candidate positions).
+ */
+export function innerLocalTransform(part: RigPart, t: number | null, pivot = part.pivot): string {
+  const sx = effectiveScaleX(part, t);
+  const sy = effectiveScaleY(part, t);
+  const { kx, ky } = part.rest;
   if (sx === 1 && sy === 1 && kx === 0 && ky === 0) return '';
   const pl = localPivotOf(part, pivot);
   const ops = [`translate(${pl.x},${pl.y})`];
@@ -91,7 +113,7 @@ export function fullPoseTransform(part: RigPart, t: number | null): string {
 
 /** The complete transform string a part group renders with. */
 export function groupTransformOf(part: RigPart, t: number | null): string {
-  return [fullPoseTransform(part, t), part.transform, innerLocalTransform(part)]
+  return [fullPoseTransform(part, t), part.transform, innerLocalTransform(part, t)]
     .filter(Boolean)
     .join(' ');
 }

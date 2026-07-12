@@ -928,7 +928,10 @@ export function wireInteractions(): void {
         const rot = channelValue(part, 'rotate', t);
         const ownMat = (pv: { x: number; y: number }): Mat =>
           matrixOfTransform(
-            [`rotate(${rot},${pv.x},${pv.y})`, part.transform, innerLocalTransform(part, pv)]
+            // t is poseTime() — null in Setup (where art-pivot drags live), so this reads
+            // rest scale; if ever reached in Animate it uses the same effective scale the
+            // render shows, keeping the pivot-compensation consistent with the artwork.
+            [`rotate(${rot},${pv.x},${pv.y})`, part.transform, innerLocalTransform(part, t, pv)]
               .filter(Boolean)
               .join(' '),
           );

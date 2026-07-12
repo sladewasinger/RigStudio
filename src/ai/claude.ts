@@ -183,6 +183,11 @@ Rotations are in degrees, POSITIVE = CLOCKWISE on screen, and each part rotates 
 its own pivot (its joint — e.g. an arm's pivot is the shoulder). Channels per part:
 - rotate: degrees, ABSOLUTE
 - tx / ty: translation in document units, ABSOLUTE (+y is down, so a jump is NEGATIVE ty)
+- sx / sy: per-part scale factors, ABSOLUTE and CONTINUOUS (rest 1 = unscaled). Scales the
+  part around its OWN pivot, along its own axes, and does NOT propagate to children — use it
+  to squash/stretch or grow/shrink a single part (e.g. blinking eyes flattening sy toward 0,
+  a breathing chest, a bouncing ball's contact squash). Volume-preserving squash pairs sx and
+  sy inversely. A part with no sx/sy track stays at its rest scale.
 - z: draw-order OFFSET (stacking rank), ABSOLUTE and STEPPED — easing is IGNORED, the part
   jumps to the new rank exactly at the keyframe (no blending between ranks). 0 = the
   authored stacking; a POSITIVE z lifts the part toward the viewer (draws in front of parts

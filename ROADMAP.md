@@ -386,6 +386,19 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
 - [ ] **Export wave (unblocked — user WIP committed)**: .riv keyed z draw order
   via DrawTarget/DrawRules; .riv + Lottie opacity keys; hidden-part exclusion in
   both exporters; verify against the user's headless rive-android pipeline.
+## Pre-A0 bones fixes (user-reported, build BEFORE the AI program)
+
+- [ ] **Pen-tool bone chains** — click sets the origin, move shows a live preview
+  bone, click sets the tip AND starts the next bone at that joint; repeat to grow
+  the chain; Escape/Enter/double-click ends chain mode. One checkpoint for the
+  whole chain (single undo removes it); auto-bind fires ONCE at chain completion.
+  Replaces press-drag-release + per-bone rearming.
+- [ ] **Bones hoisted to root on bind (regression)** — bones are again leaving
+  their parent object when assigned. a374dbd's in-place world-preserving fold was
+  supposed to keep parentId; reproduce the user's flow (suspect: art nested in a
+  GROUP, or a bind entry point that never got the fold — node bind / AI bindParts
+  / frozen rebind), fix, and pin parentId stability through EVERY bind path.
+
 ## AI Animate System v2 (program planned 2026-07-11 with Austin — build in order)
 
 One coherent system, not bolted-on features: every phase feeds the next. Decisions
