@@ -477,6 +477,30 @@ Category B — nice-to-have (untracked):
 marquee part-select, layers visibility/lock/opacity, playback range/work area,
 key-pose + auto-key, SVG-import error surfacing.)
 
+## Headless engine + MCP server (planned with Austin 2026-07-11 — NOT scheduled;
+## build after/alongside the AI program, sharing its components)
+
+Goal: agents (Claude Code, Codex, any MCP client) create and edit rigs/animations
+in chat without the website, producing .rig.json the editor opens (and .riv
+directly). Feasible because core/, geometry/, io/ are already DOM-free (the unit
+suite runs in Node); the user's scripts/ take-pill pipeline is the proof-of-
+concept seed.
+
+- [ ] **H1. `rig-studio-core` headless package + CLI** — expose model/normalize/
+  sampling/evaluator/exporters as a package entry; jsdom-assisted `rig import
+  art.svg`; `rig validate` (normalizeDoc + round-trip guarantees editor
+  compatibility by construction); `rig export-riv`; `rig render-frames --clip X`
+  (resvg/sharp rasterization — gives agents visual feedback; shares A3's
+  filmstrip renderer). Known caveat: geometric auto-bind uses DOM isPointInFill —
+  headless binding either implements a pure point-in-fill test or requires
+  explicit part targets (agents name parts anyway).
+- [ ] **H2. `rig-studio-mcp` server** — tools: import_svg, list_parts/analyze_rig
+  (A5's RigProfile), add_bones/bind, apply_clip (the SAME structured schema as
+  the in-app assistant — one schema, two front doors), add_state_machine,
+  render_filmstrip, export_riv, save/load. Output files open directly in the
+  editor for review/refinement. One brain (the AI-animate system), two mouths
+  (in-app panel, MCP).
+
 ## Testing conventions (hard-learned)
 
 - **Dispatch to the true hit target**: interaction tests must target
