@@ -18,26 +18,26 @@ import { join, relative, sep } from 'node:path';
 const SRC = join(__dirname, '..');
 const NEW_FILE_MAX = 300;
 
-/** Ceilings recorded at introduction (2026-07-11). Shrink-only. */
+/** CODE-line ceilings recorded at introduction (2026-07-11). Shrink-only. Note that
+ *  stateMachine.ts and dialogs.ts fell off the original raw-line list once comments
+ *  became free — documentation-heavy files are the goal, not a violation. */
 const GRANDFATHERED = new Map<string, number>([
-  ['ai/claude.ts', 666],
-  ['core/model.ts', 1768],
-  ['core/stateMachine.ts', 376],
-  ['geometry/paths.ts', 553],
-  ['io/exportLottie.ts', 449],
-  ['io/exportRiv.ts', 1205],
-  ['main.ts', 667],
-  ['panels/ai.ts', 1004],
-  ['panels/inspector.ts', 1065],
-  ['panels/layers.ts', 457],
-  ['panels/smPanel.ts', 1566],
-  ['timeline/graph.ts', 511],
-  ['timeline/timeline.ts', 902],
-  ['ui/dialogs.ts', 339],
-  ['view/interactions.ts', 1217],
-  ['view/nodeEditing.ts', 681],
-  ['view/overlay.ts', 848],
-  ['view/rigOps.ts', 812],
+  ['ai/claude.ts', 489],
+  ['core/model.ts', 1089],
+  ['geometry/paths.ts', 434],
+  ['io/exportLottie.ts', 327],
+  ['io/exportRiv.ts', 660],
+  ['main.ts', 522],
+  ['panels/ai.ts', 647],
+  ['panels/inspector.ts', 867],
+  ['panels/layers.ts', 347],
+  ['panels/smPanel.ts', 1254],
+  ['timeline/graph.ts', 395],
+  ['timeline/timeline.ts', 720],
+  ['view/interactions.ts', 958],
+  ['view/nodeEditing.ts', 560],
+  ['view/overlay.ts', 637],
+  ['view/rigOps.ts', 470],
 ]);
 
 function sourceFiles(dir: string): string[] {
@@ -54,16 +54,31 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-function lineCount(file: string): number {
+/**
+ * CODE lines only — comments and blank lines are FREE (user ruling 2026-07-11 after
+ * an agent trimmed comment blocks to fit a ceiling: measuring raw lines incentivized
+ * deleting documentation, the opposite of the goal). Heuristic, deliberately simple:
+ * block comments are stripped textually (rare pathological strings containing comment
+ * markers may miscount by a line or two — acceptable for a budget gate); a line counts
+ * as code if anything non-comment, non-blank remains. Trailing comments on code lines
+ * cost nothing extra; full-line comments cost nothing at all.
+ */
+function codeLineCount(file: string): number {
   const text = readFileSync(file, 'utf8');
   if (text.length === 0) return 0;
-  return text.split('\n').filter((_, i, arr) => i < arr.length - 1 || arr[i] !== '').length;
+  const noBlocks = text.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ''));
+  return noBlocks
+    .split('\n')
+    .filter((line) => {
+      const t = line.trim();
+      return t !== '' && !t.startsWith('//');
+    }).length;
 }
 
 describe('architecture: file-size ratchet', () => {
   const files = sourceFiles(SRC).map((f) => ({
     rel: relative(SRC, f).split(sep).join('/'),
-    lines: lineCount(f),
+    lines: codeLineCount(f),
   }));
 
   it('finds the source tree (sanity)', () => {
