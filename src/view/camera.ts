@@ -36,13 +36,18 @@ export function applyViewRect(): void {
 
 /**
  * Core viewBox zoom: scale around the SVG-user-space point (px,py) by `factor` (>1
- * zooms in), clamped to the same 1/60..12x document-size bounds as wheel zoom. Shared
- * by the wheel handler (cursor-anchored) and zoomBy (keyboard, canvas-center-anchored).
+ * zooms in), clamped to 1/800..12x document-size bounds. Shared by the wheel handler
+ * (cursor-anchored) and zoomBy (keyboard, canvas-center-anchored). The zoom-IN bound
+ * must be DEEP: detail work (sub-unit bezier handles, hairline strokes from
+ * Illustrator exports) needs viewports of a doc-unit or less — a 500-unit viewBox at
+ * the old /60 clamp bottomed out at an 8-unit viewport, too shallow to edit a face
+ * (user-reported on girl_example). Also floor the clamp at 0.05 absolute units so
+ * tiny-viewBox docs can't degenerate to zero.
  */
 export function zoomAround(px: number, py: number, factor: number): void {
   if (!ctx.svg || !ctx.viewRect) return;
   const doc = state.doc;
-  const minW = doc ? doc.viewBox.w / 60 : 1;
+  const minW = doc ? Math.max(doc.viewBox.w / 800, 0.05) : 1;
   const maxW = doc ? doc.viewBox.w * 12 : 10000;
   const newW = Math.min(maxW, Math.max(minW, ctx.viewRect.w / factor));
   const applied = ctx.viewRect.w / newW;
