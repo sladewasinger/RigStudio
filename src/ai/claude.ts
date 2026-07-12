@@ -315,9 +315,55 @@ cleanliness. Point at concrete tracks/keyframe times when something is off and s
 specific fixes (times in ms, values in degrees/units). Be direct and useful, not
 flattering. Keep it under ~300 words.`;
 
-type ContentBlock =
+export type ContentBlock =
   | { type: 'text'; text: string }
   | { type: 'image'; source: { type: 'base64'; media_type: 'image/png'; data: string } };
+
+/**
+ * One rendered frame of a clip (AI Animate System v2 A3 "filmstrip vision") — structurally
+ * identical to `ui/snapshot.ts`'s `FilmstripFrame`, duplicated here rather than imported
+ * since `ai/` is a leaf module that doesn't depend on `ui/` (see the architecture table's
+ * folder layering). `dataUrl` is a full `data:image/png;base64,...` string, same shape
+ * `rasterizeSvg` produces — `frameBlocks` below strips the prefix.
+ */
+export interface FilmstripFrame {
+  timeMs: number;
+  dataUrl: string;
+}
+
+/**
+ * Payload budget: filmstrip frames are capped at MAX_FILMSTRIP_FRAMES (mirrors
+ * `ui/snapshot.ts`'s `FILMSTRIP_MAX_FRAMES` — that module already caps what it returns,
+ * this is a defensive second cap in case a caller ever passes more), each already
+ * downscaled by the renderer to at most 320px on the long edge. A simple flat-color
+ * vector rasterizes to roughly 5-30KB of PNG; six such frames base64-encode to well
+ * under 300KB of request body — far inside Anthropic's per-image (~5MB) and
+ * per-request payload limits, so the filmstrip is not a meaningful cost/latency concern
+ * even at the cap.
+ */
+const MAX_FILMSTRIP_FRAMES = 6;
+
+const FILMSTRIP_INTRO =
+  'You are seeing RENDERED FRAMES of the CURRENT animation (not a target to match — ' +
+  "this is what the clip actually looks like right now), sampled across its duration. " +
+  'Critique or modify based on what you actually SEE: motion arcs, held poses, ' +
+  'clipping/overlap, dead time between poses — not just the raw keyframe numbers below.';
+
+/** Text+image block pairs for a filmstrip: one intro line, then one "frame at Xms of
+ *  Yms" text block immediately followed by its image per frame, in time order — replaces
+ *  the single pose-snapshot block when frames are provided (see `userContent`). Exported
+ *  (alongside `userContent`) purely so the unit suite can assert on request payload
+ *  shape without a live API call — no other caller needs it directly. */
+export function frameBlocks(frames: FilmstripFrame[], totalDurationMs: number): ContentBlock[] {
+  const blocks: ContentBlock[] = [{ type: 'text', text: FILMSTRIP_INTRO }];
+  for (const f of frames.slice(0, MAX_FILMSTRIP_FRAMES)) {
+    blocks.push({ type: 'text', text: `Frame at ${f.timeMs}ms of ${totalDurationMs}ms:` });
+    const comma = f.dataUrl.indexOf(',');
+    const base64 = comma >= 0 ? f.dataUrl.slice(comma + 1) : f.dataUrl;
+    blocks.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } });
+  }
+  return blocks;
+}
 
 /**
  * The part hierarchy as an indented tree ("label (kind)" per line, two spaces per depth
@@ -392,12 +438,30 @@ function sceneJson(doc: RigDoc, clip: Clip, selectedPartIds: string[]): string {
   return JSON.stringify(buildScenePayload(doc, clip, selectedPartIds), null, 2);
 }
 
-function userContent(scene: string, tail: string, imageBase64?: string | null): ContentBlock[] {
+/** Visual grounding for a request: EITHER a filmstrip (preferred whenever frames were
+ *  successfully rendered — see the two call sites below) OR the older single pose
+ *  snapshot as a fallback, never both (frames REPLACE the snapshot when present, per
+ *  the A3 spec). */
+export interface VisualAttachment {
+  imageBase64?: string | null;
+  frames?: FilmstripFrame[];
+  /** Required alongside `frames` (the "of Yms" half of each frame's caption); ignored
+   *  otherwise. */
+  totalDurationMs?: number;
+}
+
+/** Assembles a request's full user-message content: visual grounding blocks (a
+ *  filmstrip, a single snapshot, or neither — see `VisualAttachment`) followed by the
+ *  scene JSON + per-request instructions. Exported for the unit suite (see
+ *  `frameBlocks`'s doc comment); not itself a network call. */
+export function userContent(scene: string, tail: string, visuals: VisualAttachment = {}): ContentBlock[] {
   const blocks: ContentBlock[] = [];
-  if (imageBase64) {
+  if (visuals.frames && visuals.frames.length > 0) {
+    blocks.push(...frameBlocks(visuals.frames, visuals.totalDurationMs ?? 0));
+  } else if (visuals.imageBase64) {
     blocks.push({
       type: 'image',
-      source: { type: 'base64', media_type: 'image/png', data: imageBase64 },
+      source: { type: 'base64', media_type: 'image/png', data: visuals.imageBase64 },
     });
     blocks.push({ type: 'text', text: 'Rendered snapshot of the current pose above.' });
   }
@@ -476,6 +540,12 @@ export function clampRawClip(raw: RawClip, duration: number): { clip: RawClip; c
 
 export interface AnimateCallOptions {
   imageBase64?: string | null;
+  /** A3 filmstrip: replaces `imageBase64` when non-empty (see `userContent`). For mode
+   *  'modify' this is the ACTIVE clip's own filmstrip (what's about to be edited); for
+   *  'new' it's the active clip's filmstrip as reference context; on an A2 Retry with a
+   *  preview active, the caller (panels/ai.ts) renders this from the CANDIDATE instead,
+   *  so refinement reacts to what the model actually produced. */
+  frames?: FilmstripFrame[];
   /** Opt-in structural rig edits (bones/reparenting/pivots) — same toggle as before,
    *  now shared by both Create-new and Modify requests. */
   allowRigChanges?: boolean;
@@ -523,7 +593,7 @@ export async function animateWithClaude(
           content: userContent(
             sceneJson(doc, clip, selectedPartIds),
             buildRequestNotes(opts.mode, pinnedDuration, opts.protectedKeys, instruction),
-            opts.imageBase64,
+            { imageBase64: opts.imageBase64, frames: opts.frames, totalDurationMs: pinnedDuration },
           ),
         },
       ],
@@ -546,14 +616,22 @@ export async function animateWithClaude(
   return { clip: clamped, rig: allowRigChanges ? (raw.rig ?? null) : null, clampedCount };
 }
 
+export interface CritiqueCallOptions {
+  imageBase64?: string | null;
+  /** A3 filmstrip of the clip being critiqued — replaces `imageBase64` when non-empty
+   *  (see `userContent`). Critique has no candidate/preview concept, so this is always
+   *  the DOC's active clip. */
+  frames?: FilmstripFrame[];
+  signal?: AbortSignal;
+}
+
 /** Plain-text animation review of the active clip. */
 export async function critiqueWithClaude(
   apiKey: string,
   doc: RigDoc,
   clip: Clip,
   selectedPartIds: string[],
-  imageBase64?: string | null,
-  signal?: AbortSignal,
+  opts: CritiqueCallOptions = {},
 ): Promise<string> {
   const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
 
@@ -568,12 +646,12 @@ export async function critiqueWithClaude(
           content: userContent(
             sceneJson(doc, clip, selectedPartIds),
             'Critique this clip. What works, what reads poorly, and what specific keyframe changes would improve it?',
-            imageBase64,
+            { imageBase64: opts.imageBase64, frames: opts.frames, totalDurationMs: clip.duration },
           ),
         },
       ],
     },
-    { signal },
+    { signal: opts.signal },
   );
 
   if (response.stop_reason === 'refusal') {

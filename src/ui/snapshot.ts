@@ -6,8 +6,17 @@
  * overlay/onion chrome always, and the artboard highlight rect optionally, then
  * either serializes the clone to SVG text or rasterizes it to a PNG data URL via an
  * off-screen `<canvas>`.
+ *
+ * AI Animate System v2 A3 ("filmstrip vision") also lives here: rendering N frames of a
+ * clip across its duration, downscaled, for the assistant to see motion instead of a
+ * single pose. `selectFilmstripTimes` (pure, keyframe-cluster-aware) picks WHEN to
+ * sample; `renderClipFilmstrip` (DOC path — scrubs `state.currentTime`) and
+ * `captureFilmstripFrame` (the single-frame capture primitive, shared with A2's
+ * CANDIDATE path in panels/ai.ts, which scrubs its own preview clock instead — see that
+ * file's `renderCandidateFilmstrip`) do the actual rendering.
  */
-import { state } from '../core/model';
+import { state, Clip } from '../core/model';
+import { renderPose } from '../view';
 
 export interface CloneOptions {
   /** Also strip #rig-artboard-rect (the faint page-bounds highlight). The AI
@@ -70,4 +79,146 @@ export async function rasterizeSvg(
   }
   c.drawImage(img, 0, 0, outW, outH);
   return canvas.toDataURL('image/png');
+}
+
+// =====================================================================================
+// AI Animate System v2 A3: filmstrip vision — render N frames of a clip across its
+// duration instead of a single playhead snapshot, so the assistant sees motion arcs,
+// held poses, and clipping instead of one instant.
+// =====================================================================================
+
+/** Max frames a filmstrip ever returns. Payload budget (documented in full at
+ *  ai/claude.ts's frame-attachment code, which mirrors this as a defensive cap since
+ *  ai/ doesn't import ui/): 6 frames at FILMSTRIP_MAX_DIM px each stays well under any
+ *  request-size concern. */
+export const FILMSTRIP_MAX_FRAMES = 6;
+/** Long-edge cap for a filmstrip frame, in px — small enough that 6 of them cost little
+ *  bandwidth/latency, large enough to read a pose. */
+const FILMSTRIP_MAX_DIM = 320;
+/** Keyframe times within this many ms of their neighbor merge into one cluster (one
+ *  "moment" the pose changes) — collapses e.g. an arrival + its overshoot settle into a
+ *  single representative frame instead of two near-duplicates. */
+const FILMSTRIP_CLUSTER_MS = 150;
+/** Below this many distinct clusters the clip reads as too sparse for cluster-driven
+ *  sampling to mean anything (e.g. a bare in/out pair, or an unkeyed clip with zero
+ *  clusters) — fall back to a plain evenly-spaced strip across the whole duration. */
+const FILMSTRIP_MIN_CLUSTERS = 4;
+
+export interface FilmstripFrame {
+  timeMs: number;
+  dataUrl: string;
+}
+
+/** Minimal shape `selectFilmstripTimes` needs — satisfied structurally by both a real
+ *  `Clip` and the A2 preview's candidate `{duration, tracks}` (panels/ai.ts's
+ *  `AiPreviewState`), so one function serves the doc path and the candidate path. */
+export interface FilmstripTimingInput {
+  duration: number;
+  tracks: { keyframes: { time: number }[] }[];
+}
+
+/**
+ * Pick the frame times for a clip's filmstrip: keyframe-cluster-aware when the clip has
+ * enough distinct motion, evenly-spaced otherwise. Pure (no DOM/state) — exported for
+ * direct unit testing; the rendering step (`renderClipFilmstrip` below) is what actually
+ * samples the doc/candidate at these times.
+ *
+ * Algorithm: collect every distinct keyframe time across all tracks, sort ascending,
+ * then single-linkage cluster consecutive times within FILMSTRIP_CLUSTER_MS of their
+ * immediate neighbor (a cluster's representative = the mean of its members, rounded to
+ * the nearest ms). Fewer than FILMSTRIP_MIN_CLUSTERS clusters (including zero, an
+ * unkeyed clip) is too sparse to be meaningful — fall back to 0/25/50/75/100% of the
+ * duration instead (which trivially always includes both 0 and the duration, deduped
+ * down to one frame when duration is 0). Otherwise, more than FILMSTRIP_MAX_FRAMES
+ * clusters are downsampled to exactly that many by picking evenly spaced INDICES into
+ * the sorted cluster list — index 0 and the last index always survive, so the strip
+ * still spans the full first→last cluster range.
+ */
+export function selectFilmstripTimes(clip: FilmstripTimingInput): number[] {
+  const duration = Math.max(0, clip.duration);
+  const keyTimes = [...new Set(clip.tracks.flatMap((t) => t.keyframes.map((k) => k.time)))]
+    .sort((a, b) => a - b);
+
+  const clusters: number[] = [];
+  let bucket: number[] = [];
+  const flushBucket = () => {
+    if (bucket.length === 0) return;
+    clusters.push(Math.round(bucket.reduce((a, b) => a + b, 0) / bucket.length));
+    bucket = [];
+  };
+  for (const time of keyTimes) {
+    if (bucket.length > 0 && time - bucket[bucket.length - 1] > FILMSTRIP_CLUSTER_MS) flushBucket();
+    bucket.push(time);
+  }
+  flushBucket();
+
+  if (clusters.length < FILMSTRIP_MIN_CLUSTERS) {
+    const fractions = [0, 0.25, 0.5, 0.75, 1];
+    return [...new Set(fractions.map((f) => Math.round(duration * f)))];
+  }
+
+  if (clusters.length <= FILMSTRIP_MAX_FRAMES) return clusters;
+
+  const lastIdx = clusters.length - 1;
+  const picked = new Set<number>();
+  for (let i = 0; i < FILMSTRIP_MAX_FRAMES; i++) {
+    picked.add(Math.round((i * lastIdx) / (FILMSTRIP_MAX_FRAMES - 1)));
+  }
+  return [...picked].sort((a, b) => a - b).map((idx) => clusters[idx]);
+}
+
+/**
+ * Rasterize the canvas's CURRENTLY RENDERED pose (whatever the caller already set + drew
+ * via `renderPose()` — this function paints nothing itself) to a filmstrip-sized PNG
+ * frame, downscaled to at most FILMSTRIP_MAX_DIM px on the long edge. Shares
+ * `cloneArtworkSvg`/`rasterizeSvg` above, so overlay/onion chrome is already stripped
+ * (and the artboard rect kept, matching the existing single-snapshot look). White
+ * background, matching `panels/ai.ts`'s `snapshotPose`. Returns null (never throws) when
+ * there's no live canvas/doc or a zero-size viewBox — callers treat that as "no frame".
+ */
+export async function captureFilmstripFrame(timeMs: number): Promise<FilmstripFrame | null> {
+  const doc = state.doc;
+  const clone = cloneArtworkSvg();
+  if (!clone || !doc) return null;
+  const { w, h } = doc.viewBox;
+  if (!(w > 0) || !(h > 0)) return null;
+  const scale = FILMSTRIP_MAX_DIM / Math.max(w, h);
+  const outW = Math.max(1, Math.round(w * scale));
+  const outH = Math.max(1, Math.round(h * scale));
+  const dataUrl = await rasterizeSvg(clone, outW, outH, '#ffffff');
+  return { timeMs, dataUrl };
+}
+
+/**
+ * Render a filmstrip of the DOC's ACTIVE CLIP: temporarily scrubs `state.currentTime`
+ * across the clip's selected frame times (`selectFilmstripTimes`), capturing each via
+ * `renderPose()` + `captureFilmstripFrame`, then restores the EXACT original
+ * `currentTime` and repaints — byte-exact, even if a frame's rasterization throws
+ * partway through (try/finally covers it). Never calls `notify()`: this is DOM-only
+ * scrubbing, not a state change the rest of the app should react to (no
+ * timeline/inspector rebuild mid-capture, no notify storm).
+ *
+ * Poses only actually change across frames in Animate mode (`view/pose.ts`'s `poseTime`
+ * reads `state.currentTime` only when `state.editorMode === 'animate'`) — the only mode
+ * the AI panel that calls this exists in, so this is never exercised from Setup in
+ * practice. A rasterization failure on one frame is swallowed by the caller (see
+ * `panels/ai.ts`'s `runAnimate`), never by this function — it always finishes its
+ * restore.
+ */
+export async function renderClipFilmstrip(clip: Clip): Promise<FilmstripFrame[]> {
+  const times = selectFilmstripTimes(clip);
+  const savedTime = state.currentTime;
+  const frames: FilmstripFrame[] = [];
+  try {
+    for (const t of times) {
+      state.currentTime = t;
+      renderPose();
+      const frame = await captureFilmstripFrame(t);
+      if (frame) frames.push(frame);
+    }
+  } finally {
+    state.currentTime = savedTime;
+    renderPose();
+  }
+  return frames;
 }

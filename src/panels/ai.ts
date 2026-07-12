@@ -24,7 +24,10 @@ import {
 import { renderPose, registerPart, bindPartsToBones, setPoseSampler } from '../view';
 import { animateWithClaude, critiqueWithClaude, AnimateResult } from '../ai/claude';
 import { checkpoint, canUndo, canRedo } from '../core/history';
-import { cloneArtworkSvg, rasterizeSvg } from '../ui/snapshot';
+import {
+  cloneArtworkSvg, rasterizeSvg, renderClipFilmstrip, captureFilmstripFrame,
+  selectFilmstripTimes, FilmstripFrame,
+} from '../ui/snapshot';
 
 /**
  * Test-only seam (mirrors core/history.ts's `setRestoreHandler` pattern): production
@@ -410,6 +413,45 @@ function rafTick(now: number): void {
   preview.rafId = requestAnimationFrame(rafTick);
 }
 
+/**
+ * AI Animate System v2 A3×A2 synergy: render a filmstrip from the CANDIDATE preview
+ * (not the doc) — used by the Retry button so refinement reacts to what the model
+ * actually produced, not a stale doc pose. Stops the preview's own rAF loop for the
+ * duration of the capture (each frame needs a synchronous, stable `preview.timeMs` at
+ * the moment `captureFilmstripFrame` clones the live SVG — see `renderClipFilmstrip`'s
+ * doc comment in ui/snapshot.ts for why the clone must happen before any await lets
+ * another tick interleave) and restarts it afterward at the ORIGINAL timeMs, byte-exact,
+ * even if a frame's rasterization throws partway through (try/finally). Returns [] if no
+ * preview is active (defensive — the only caller already checks).
+ */
+async function renderCandidateFilmstrip(): Promise<FilmstripFrame[]> {
+  if (!preview) return [];
+  const times = selectFilmstripTimes({ duration: preview.duration, tracks: preview.tracks });
+  cancelAnimationFrame(preview.rafId);
+  const savedTimeMs = preview.timeMs;
+  const frames: FilmstripFrame[] = [];
+  try {
+    for (const t of times) {
+      preview.timeMs = t;
+      renderPose();
+      const frame = await captureFilmstripFrame(t);
+      if (frame) frames.push(frame);
+    }
+  } finally {
+    // Defensive: nothing in this module currently discards `preview` mid-await (the
+    // sole caller disables the preview bar's own buttons for the duration — see the
+    // Retry handler below), but restoring against a doc that moved on from under us
+    // would be worse than skipping the restore.
+    if (preview) {
+      preview.timeMs = savedTimeMs;
+      renderPose();
+      preview.last = performance.now();
+      preview.rafId = requestAnimationFrame(rafTick);
+    }
+  }
+  return frames;
+}
+
 /** Enter a preview for a just-received AnimateResult. Discards any preview already
  *  running first (a new request always wins). No-ops if the doc vanished between the
  *  request starting and returning (defensive — callers already guard this). */
@@ -504,6 +546,12 @@ if (typeof window !== 'undefined') {
     apply: (): void => applyPreviewNow(),
     discard: (): void => discardPreviewNow(),
     busy: (): boolean => ai.busy,
+    /** AI Animate System v2 A3: renders a filmstrip from the CANDIDATE preview via the
+     *  exact function the Retry button uses (`renderCandidateFilmstrip`) — lets a
+     *  headless test or live console session verify frame sampling/restoration without
+     *  clicking Retry through a real (or fabricated) second request. Resolves `[]` when
+     *  no preview is active. */
+    renderFilmstrip: (): Promise<FilmstripFrame[]> => renderCandidateFilmstrip(),
     /** Console/live-verification convenience wrapping `__setAnimateCallForTest`: the
      *  NEXT Create/Modify click resolves with `result` instead of calling the network
      *  — lets a real browser session exercise the preview flow without an API key. */
@@ -584,13 +632,15 @@ export function buildAiPanel(el: HTMLElement): void {
   shotToggle.onchange = () =>
     localStorage.setItem('rig-studio-attach-shot', shotToggle.checked ? '1' : '0');
   const shotSpan = document.createElement('span');
-  shotSpan.textContent = 'attach pose snapshot (current playhead)';
+  shotSpan.textContent = 'attach rendered frames (filmstrip)';
   const shotInfo = document.createElement('span');
   shotInfo.className = 'ai-info';
   shotInfo.textContent = 'ⓘ'; // circled "i"
   shotInfo.title =
-    'Renders the canvas at the CURRENT PLAYHEAD TIME — exactly the pose showing on ' +
-    'screen right now — and sends that image to Claude for visual grounding.';
+    'Renders up to 6 frames across the clip (denser where its motion actually changes) ' +
+    'and sends them to Claude so it sees the animation, not just one pose. On Retry with ' +
+    'a candidate showing, the frames come from the CANDIDATE instead of the document. ' +
+    'Falls back to a single current-pose snapshot if rendering fails.';
   shotSpan.appendChild(document.createTextNode(' '));
   shotSpan.appendChild(shotInfo);
   shotLabel.appendChild(shotSpan);
@@ -699,7 +749,16 @@ export function buildAiPanel(el: HTMLElement): void {
   // waiting for the next notify()-driven rebuild.
   let previewBarEl: HTMLElement | null = null;
 
-  const runAnimate = async (mode: 'new' | 'modify'): Promise<void> => {
+  const runAnimate = async (
+    mode: 'new' | 'modify',
+    /** A2×A3 synergy: on Retry with a preview active, the caller pre-renders the
+     *  CANDIDATE's filmstrip before discarding the preview (see the Retry handler
+     *  below) and passes it here, so this request reacts to what the model actually
+     *  produced instead of the doc's stale pose. undefined = render the DOC's active
+     *  clip fresh here (the normal Create/Modify path, and a Retry with the checkbox
+     *  off at retry time). */
+    retryFrames?: FilmstripFrame[],
+  ): Promise<void> => {
     const ctxv = requireCtx();
     const clip = activeClip();
     if (!ctxv || !clip) return;
@@ -724,7 +783,29 @@ export function buildAiPanel(el: HTMLElement): void {
     status.textContent = ai.status;
     setBusy(true);
     try {
-      const image = shotToggle.checked ? await snapshotPose() : null;
+      // A3 filmstrip: prefer N rendered frames across the clip over a single pose
+      // snapshot — replaces it entirely when frames are available (never both).
+      // Failure-soft: any rasterization error degrades to the old single-snapshot
+      // fallback (never both empty when the checkbox is on and a canvas exists), and
+      // never blocks the request either way.
+      let frames: FilmstripFrame[] = [];
+      let image: string | null = null;
+      let framesFailed = false;
+      if (shotToggle.checked) {
+        if (retryFrames !== undefined) {
+          frames = retryFrames; // A2×A3: candidate frames, already rendered by Retry
+        } else {
+          try {
+            frames = await renderClipFilmstrip(clip);
+          } catch {
+            frames = [];
+          }
+        }
+        if (frames.length === 0) {
+          framesFailed = true;
+          image = await snapshotPose().catch(() => null);
+        }
+      }
 
       // "protect playhead keys" (Modify only): snapshot the current-frame keys BEFORE
       // the request — by part id (idProtected, for post-apply enforcement) and by
@@ -745,6 +826,7 @@ export function buildAiPanel(el: HTMLElement): void {
         ctxv.apiKey, ctxv.doc, clip, promptBox.value.trim(), state.selectedPartIds,
         {
           imageBase64: image,
+          frames: frames.length > 0 ? frames : undefined,
           allowRigChanges: rigToggle.checked,
           mode,
           protectedKeys: promptProtected,
@@ -763,7 +845,10 @@ export function buildAiPanel(el: HTMLElement): void {
       const clampNote = result.clampedCount > 0
         ? ` (clamped ${result.clampedCount} out-of-range key time${result.clampedCount === 1 ? '' : 's'})`
         : '';
-      ai.status = `Candidate ready — review it below.${clampNote}`;
+      const frameNote = framesFailed
+        ? image ? ' (frames unavailable — sent a single snapshot instead)' : ' (frames unavailable)'
+        : '';
+      ai.status = `Candidate ready — review it below.${clampNote}${frameNote}`;
       // promptText is intentionally left alone here — see AiPanelState's doc comment;
       // it now clears on a successful APPLY (applyPreviewNow), not on a successful
       // generate, since the candidate hasn't been committed to anything yet.
@@ -833,13 +918,24 @@ export function buildAiPanel(el: HTMLElement): void {
     retryBtn.textContent = 'Retry';
     retryBtn.dataset.aiAction = 'retry';
     retryBtn.title = 'Discard this candidate and ask Claude again with the same prompt.';
-    retryBtn.onclick = () => {
+    retryBtn.onclick = async () => {
       if (!preview) return;
       const mode = preview.mode;
+      // A3 synergy: capture the CANDIDATE's filmstrip BEFORE discarding the preview —
+      // once exitPreviewCommon() runs, preview.tracks/timeMs are gone, so this has to
+      // happen first. Lock the whole action row for the (short, local, no-network)
+      // render so a double-click can't race exitPreviewCommon against a still-running
+      // capture (renderCandidateFilmstrip guards `preview` defensively too, but this
+      // avoids the race outright rather than relying on that guard).
+      applyBtn.disabled = true;
+      retryBtn.disabled = true;
+      discardBtn.disabled = true;
+      const candidateFrames = shotToggle.checked ? await renderCandidateFilmstrip() : undefined;
+      if (!preview) return; // discarded from elsewhere while we were rendering — bail
       exitPreviewCommon();
       bar.remove();
       previewBarEl = null;
-      void runAnimate(mode); // same closure/DOM — keeps the busy UI visible mid-request
+      void runAnimate(mode, candidateFrames); // same closure/DOM — keeps the busy UI visible mid-request
     };
     actions.appendChild(retryBtn);
 
@@ -871,9 +967,21 @@ export function buildAiPanel(el: HTMLElement): void {
     critiqueOut.hidden = true;
     setBusy(true);
     try {
-      const image = shotToggle.checked ? await snapshotPose() : null;
+      // A3 filmstrip, offered on Critique too (same checkbox, same failure-soft
+      // fallback to a single snapshot as the animate path above).
+      let frames: FilmstripFrame[] = [];
+      let image: string | null = null;
+      if (shotToggle.checked) {
+        try {
+          frames = await renderClipFilmstrip(clip);
+        } catch {
+          frames = [];
+        }
+        if (frames.length === 0) image = await snapshotPose().catch(() => null);
+      }
       const text = await critiqueWithClaude(
-        ctxv.apiKey, ctxv.doc, clip, state.selectedPartIds, image, controller.signal,
+        ctxv.apiKey, ctxv.doc, clip, state.selectedPartIds,
+        { imageBase64: image, frames: frames.length > 0 ? frames : undefined, signal: controller.signal },
       );
       ai.critiqueText = text;
       ai.status = '';
