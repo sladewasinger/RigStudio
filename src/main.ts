@@ -6,7 +6,7 @@ import {
 } from './core/model';
 import { importSvg } from './io/importSvg';
 import {
-  buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, stepOutFocus,
+  buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, endBoneChain, stepOutFocus,
   hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, nudgeSelectedParts,
   zoomBy, selectAllNodes, enterGroupsFor, clearGroupEntry, resetInteractionState,
   resetSkinRenderWarnings,
@@ -441,6 +441,16 @@ document.addEventListener('keydown', (ev) => {
     notify();
     return;
   }
+  // Enter finishes an in-progress pen-tool bone chain (mirrors Escape / double-click):
+  // keep every committed bone and run the single chain auto-bind. Falls through when no
+  // chain is active so Enter keeps whatever default behavior it otherwise has.
+  if (ev.key === 'Enter' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
+    if (endBoneChain()) {
+      ev.preventDefault();
+      notify();
+      return;
+    }
+  }
   if (ev.key === 'Escape') {
     // Freeze mode exits first (its own early tier) — Escape drops out of origin editing
     // before anything else, so a stray Escape can't cancel a bone placement or step out
@@ -457,9 +467,10 @@ document.addEventListener('keydown', (ev) => {
       ev.preventDefault();
       return;
     }
-    // Cancel bone placement first, then step out one drill-down level at a time
-    // (entered path → deselect → pop the innermost entered group) — Inkscape parity.
-    if (cancelBonePlacement()) {
+    // Finish an in-progress bone chain first (keeps committed bones + auto-binds once),
+    // then step out one drill-down level at a time (entered path → deselect → pop the
+    // innermost entered group) — Inkscape parity.
+    if (endBoneChain()) {
       notify();
       return;
     }

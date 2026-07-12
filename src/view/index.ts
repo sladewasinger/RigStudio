@@ -32,7 +32,7 @@ export type { NodeOp } from './nodeEditing';
 export {
   flipSelected, nudgeSelectedParts, applyRootDeltas, bindSelectedToBones,
   bindPartsToBones, autoBindPlacedBone, unbindSelectedSkin,
-  startBonePlacement, cancelBonePlacement, rebindFrozenChain,
+  startBonePlacement, cancelBonePlacement, endBoneChain, rebindFrozenChain,
   primaryNodeBinding, setNodeBinding, clearNodeBinding, resetNodeBindings,
   recomputeAutoWeights, bindSelectedNodesToBone, quickNodeBindTarget,
 } from './rigOps';

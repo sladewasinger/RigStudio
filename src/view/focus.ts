@@ -33,6 +33,7 @@ export function resetInteractionState(): void {
   ctx.selectedNodes.clear();
   ctx.selectedNode = null;
   ctx.placingBone = false;
+  ctx.boneChain = null; // an in-progress pen-tool chain must not survive a doc swap/reset
   ctx.drag = null;
   ctx.handleMode = 'scale';
   ctx.handlePartId = null;

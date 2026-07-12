@@ -46,7 +46,13 @@ function warnSkinFailure(part: RigPart, err?: unknown): void {
  * (exception or non-finite output): never mutates `path.d`, DOM `d` attribute only.
  */
 function renderPartRigid(part: RigPart, g: SVGGElement, t: number | null): void {
-  g.setAttribute('transform', groupTransformOf(part, t));
+  // A SKINNED part's rest geometry is ROOT-space (bind baked its full chain into path.d),
+  // so it renders with an identity transform exactly like the deformed path — its live
+  // parent chain (a preserved group, since bind no longer hoists the art out) must NOT be
+  // re-applied here or the art double-transforms. For FLAT skinned art the chain is already
+  // identity, so this is byte-identical to the old groupTransformOf. Non-skinned parts keep
+  // their full composed transform.
+  g.setAttribute('transform', part.skin ? '' : groupTransformOf(part, t));
   for (const p of part.paths) {
     g.querySelector(`[data-path-id="${p.id}"]`)?.setAttribute('d', p.d);
   }

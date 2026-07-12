@@ -19,6 +19,9 @@ export const ROTATE_SNAP_DEGREES = 15;
 export const DRAG_THRESHOLD_PX = 3;
 export const MIN_SCALE = 0.05;
 export const MAX_SCALE = 50;
+/** A pen-tool chain click closer than this (SCREEN px, so zoom-consistent) to the pending
+ *  origin commits no bone — it's a mis-click or the second click of a finishing double-click. */
+export const MIN_BONE_LENGTH_PX = 6;
 
 export type DragState =
   | {
@@ -77,11 +80,6 @@ export type DragState =
       active: boolean;
     }
   | { kind: 'boneTip'; part: RigPart; startClient: { x: number; y: number }; active: boolean }
-  | {
-      kind: 'placeBone';
-      originRoot: { x: number; y: number };
-      current: { x: number; y: number } | null;
-    }
   | {
       kind: 'scale';
       part: RigPart;
@@ -172,6 +170,31 @@ export type DragState =
     }
   | { kind: 'pan'; startClient: { x: number; y: number }; startRect: { x: number; y: number; w: number; h: number } };
 
+/**
+ * PEN-TOOL BONE CHAIN in progress (Item: pen-tool bone chains). Non-null between the
+ * first click of a chain (which sets `origin`) and the chain ending (Escape/Enter/
+ * double-click). Each subsequent click commits a bone `origin`→click and advances `origin`
+ * to that new tip. ONE checkpoint (`checkpointed`, deferred to the first COMMIT — a bare
+ * origin click stays history-free) covers the whole chain; auto-bind runs ONCE at the end,
+ * so a chain of N bones is a single undo. `placingBone` stays true throughout (the tool is
+ * armed); `boneChain` distinguishes "awaiting first click" (null) from "chain running".
+ */
+export interface BoneChainState {
+  /** Pending origin (root/doc space) — where the NEXT committed bone starts. */
+  origin: { x: number; y: number };
+  /** Parent for the FIRST committed bone: the art/bone selected when the chain started
+   *  (hierarchy-as-assignment / continue-an-existing-chain), or null for a free-form root.
+   *  Later bones parent to the previously committed bone (see `committed`). */
+  parentId: string | null;
+  /** Ids of bones committed so far this chain, in order (auto-bind + one-undo bookkeeping). */
+  committed: string[];
+  /** True once checkpoint() has fired (before the first commit) — the drag-deferral pattern. */
+  checkpointed: boolean;
+  /** Live pointer (root space) for the preview segment; null before the first move / just
+   *  after a commit (so the ghost only draws once the cursor actually moves). */
+  cursor: { x: number; y: number } | null;
+}
+
 /** Mutable state shared across the view layers (formerly view.ts's module-level lets). */
 export interface ViewContext {
   svg: SVGSVGElement | null;
@@ -202,6 +225,8 @@ export interface ViewContext {
   viewRect: { x: number; y: number; w: number; h: number } | null;
 
   placingBone: boolean;
+  /** The in-progress pen-tool bone chain (see BoneChainState), or null. */
+  boneChain: BoneChainState | null;
 
   /**
    * State-machine PREVIEW override: when set (by smPanel), renderPose samples every channel
@@ -228,6 +253,7 @@ export const ctx: ViewContext = {
   selectedNode: null,
   viewRect: null,
   placingBone: false,
+  boneChain: null,
   poseSampler: null,
   drag: null,
 };

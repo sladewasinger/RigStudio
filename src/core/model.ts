@@ -912,7 +912,7 @@ export interface RigChanges {
     parent: string | null;
     /**
      * Bone tip (Bones 2.0), in the same frame as `pivot` — mirrors how interactive
-     * placement stores `RigPart.boneTip` (see `view/interactions.ts`'s placeBone end()):
+     * placement stores `RigPart.boneTip` (see `view/interactions.ts`'s commitBone):
      * both fields go through the identical parent-chain conversion, so passing `pivot`
      * and `tip` straight through here (as this function already did for `pivot`) keeps
      * them consistent with each other. Omitted/null = a partless joint with no visible

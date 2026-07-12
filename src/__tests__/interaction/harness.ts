@@ -22,8 +22,10 @@
 
 import '../../style.css';
 import { expect } from 'vitest';
-import { state, notify, selectPart as modelSelectPart } from '../../core/model';
-import { buildCanvas, renderPose, resetView, zoomBy } from '../../view';
+import { state, notify, selectPart as modelSelectPart, RigPart } from '../../core/model';
+import {
+  buildCanvas, renderPose, resetView, zoomBy, startBonePlacement, endBoneChain,
+} from '../../view';
 import { resetHistory } from '../../core/history';
 import { importSvg } from '../../io/importSvg';
 import { Mat, matrixOfTransform } from '../../geometry/transforms';
@@ -455,6 +457,11 @@ export function click(x: number, y: number, mods: Mods = {}): void {
   svgEl().dispatchEvent(pointer('pointerup', x, y, 0, 0, mods));
 }
 
+/** A bare pointermove (no button down) at a client point — drives hover/preview updates. */
+export function moveMouse(x: number, y: number): void {
+  svgEl().dispatchEvent(pointer('pointermove', x, y, 0, 0, {}));
+}
+
 /**
  * A realistic double-click: click, click (re-resolving the hit target between them —
  * overlays appear after the first selects), then a dblclick. The app's dblclick handler
@@ -466,6 +473,24 @@ export function fullDblClick(x: number, y: number): void {
   svgEl().dispatchEvent(new MouseEvent('dblclick', {
     bubbles: true, cancelable: true, clientX: x, clientY: y,
   }));
+}
+
+/**
+ * Place a PEN-TOOL bone chain by clicking each point in `clientPts` (CLIENT px), then
+ * finalizing. The FIRST click sets the chain origin (anchored at a selected bone's tip /
+ * parented to a selected art per the real logic); each later click commits a bone, so N
+ * points → N-1 bones. Selection is preserved across the clicks (chain mode suppresses it),
+ * so a caller that selected an art beforehand gets it bound. The finish here goes through
+ * the view facade's endBoneChain (auto-bind runs ONCE) so the shared helper is robust
+ * regardless of freeze/SM state; the DEDICATED chain-mode scenarios drive the real
+ * Enter/Escape/double-click finishers themselves. Returns the committed bones, in order.
+ */
+export function placeBoneChain(clientPts: { x: number; y: number }[]): RigPart[] {
+  const before = state.doc!.parts.length;
+  startBonePlacement();
+  for (const p of clientPts) click(p.x, p.y);
+  endBoneChain();
+  return state.doc!.parts.slice(before);
 }
 
 export function pressKey(key: string, mods: Mods = {}): void {

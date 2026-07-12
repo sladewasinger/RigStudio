@@ -310,6 +310,26 @@ export function renderOverlay(): void {
     }
   }
 
+  // PEN-TOOL BONE CHAIN preview: a marker at the pending origin plus a ghost bone to the
+  // cursor (once it moves). The girth is screen-constant (boneKitePath derives it from
+  // `size`), so the preview obeys the chrome GOTCHA. Committed bones are already real parts
+  // drawn by the glyph loop above; only the in-progress segment lives here.
+  if (ctx.boneChain) {
+    const o = ctx.boneChain.origin;
+    const dot = document.createElementNS(SVG_NS, 'circle');
+    dot.setAttribute('cx', String(o.x));
+    dot.setAttribute('cy', String(o.y));
+    dot.setAttribute('r', String(size * 0.6));
+    dot.setAttribute('class', 'chain-origin');
+    holder.appendChild(dot);
+    if (ctx.boneChain.cursor) {
+      const ghost = document.createElementNS(SVG_NS, 'g');
+      ghost.setAttribute('class', 'null-glyph bone placing');
+      ghost.innerHTML = boneKitePath(o, ctx.boneChain.cursor, size);
+      holder.appendChild(ghost);
+    }
+  }
+
   renderDragGizmo(holder, size);
   renderToolGizmo(size, t, rootTransform);
 
@@ -538,16 +558,7 @@ function renderToolGizmo(size: number, t: number | null, rootTransform: string):
 
 /** Rotation arc + angle readout, translation deltas, or scale % while a drag is live. */
 function renderDragGizmo(holder: SVGGElement, size: number): void {
-  if (!ctx.drag || ctx.drag.kind === 'pan' || ctx.drag.kind === 'placeBone' || ctx.drag.kind === 'nodeMarquee') {
-    // Bone placement previews the segment being drawn.
-    if (ctx.drag?.kind === 'placeBone' && ctx.drag.current) {
-      const ghost = document.createElementNS(SVG_NS, 'g');
-      ghost.setAttribute('class', 'null-glyph bone placing');
-      ghost.innerHTML = boneKitePath(ctx.drag.originRoot, ctx.drag.current, size);
-      holder.appendChild(ghost);
-    }
-    return;
-  }
+  if (!ctx.drag || ctx.drag.kind === 'pan' || ctx.drag.kind === 'nodeMarquee') return;
   if (!ctx.drag.active) return;
 
   if (ctx.drag.kind === 'rotate' && ctx.drag.current) {

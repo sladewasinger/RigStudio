@@ -178,7 +178,8 @@ export function buildCanvasTools(el: HTMLElement): void {
       !!part && part.paths.length === 0);
     sep();
     const boneBtn = add(iconButton('bone', 'bone',
-      'Press on the canvas to place the joint, drag to the bone tip, release. Escape cancels.',
+      'Draw a bone chain: click to set the first joint, click again for each bone tip — the ' +
+      'chain grows joint-to-joint. Enter / Escape / double-click finishes and auto-binds the limb.',
       () => {
         startBonePlacement();
         boneBtn.classList.add('armed');

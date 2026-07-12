@@ -77,6 +77,13 @@ export const SHORTCUTS: ShortcutEntry[] = [
   },
   { keys: 'Shift+H', description: 'Flip the selection horizontally, in place (Edit)', context: 'Tools' },
   { keys: 'Shift+V', description: 'Flip the selection vertically, in place (Edit)', context: 'Tools' },
+  {
+    keys: 'Bone tool (canvas-tools ⌂)',
+    description: 'Draw a bone chain: click to set the first joint, click again for each ' +
+      'bone tip (the chain grows joint-to-joint, following a selected bone). Enter / Escape ' +
+      '/ double-click finishes; the limb auto-binds once, and the whole chain is one undo',
+    context: 'Tools',
+  },
 
   // ---- View ----
   { keys: 'F', description: 'Fit the view to the document', context: 'View' },
@@ -88,8 +95,8 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: '? / F1', description: 'Toggle this shortcut overlay', context: 'View' },
   {
     keys: 'Escape',
-    description: 'Step back out: close this overlay → exit freeze mode → cancel bone ' +
-      'placement → exit path → exit group / deselect',
+    description: 'Step back out: close this overlay → exit freeze mode → finish the bone ' +
+      'chain → exit path → exit group / deselect',
     context: 'View',
   },
 

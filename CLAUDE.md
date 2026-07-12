@@ -166,9 +166,16 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   fallback; the AI schema only speaks presets.
 - **Skinned parts** (`part.skin`) render via per-frame linear-blend deformation of
   their REST path data (never mutate `path.d` at render time — only the DOM `d`
-  attribute). Binding bakes all static transforms into `path.d` and zeroes
-  pose/parent; weights are runtime-derived from `bindSeg` distances. Skinned parts
-  don't respond to pose drags and export rigidly.
+  attribute). Binding bakes all static transforms (incl. the parent chain) into
+  `path.d` so the rest geometry is ROOT-space, and zeroes the part's OWN pose
+  (`rest`/`transform`) — but KEEPS `parentId` so a nested art stays under its group
+  (render forces the skinned part's group `transform=''`, so the baked-in chain is
+  never double-applied; the joint is stored in the art's local frame). The art's bones
+  compose through the preserved chain, so the limb still follows a group move. Weights
+  are runtime-derived from `bindSeg` distances. Skinned parts don't respond to pose
+  drags and export rigidly. NEVER zero a skinned art's `parentId` (the "bones leave
+  their parent object on assign" hoisting regression — bind used to detach nested art
+  to root).
 - **Tool semantics** (`state.tool`): 'select' keeps the classic mode-dependent drags;
   'translate'/'rotate' force that manipulation in both editor modes (Setup → rest,
   Animate → keys); 'ik' rotates the two nearest ancestor joints (`src/geometry/ik.ts`). Gizmo
@@ -267,13 +274,24 @@ Bones 2.0 makes a limb bend from a hand-drawn shape with zero manual binding. Th
 design goal (verbatim): draw one arm, drop 3 bones (shoulder→elbow, elbow→wrist,
 wrist→hand), and the art bends at the joints — no node editing, no bind step.
 
-- **Placement.** Bones are `kind:'bone'` null parts placed press-drag-release
-  (origin→tip). The femur button (`icons.ts` `bone`) arms `startBonePlacement`; the
-  press sets the origin, the drag the tip. **Child bones spawn at the parent tip:**
-  when a bone is *selected* as placement starts, the new bone's origin is anchored at
-  that bone's `effectiveTip` (the press only arms it — see `interactions.ts` placeBone
-  branch) and it is parented to the selected bone, so a chain grows joint-to-joint.
-  With no bone selected, placement is free-form at the press point.
+- **Placement — PEN-TOOL CHAINS.** Bones are `kind:'bone'` null parts placed by a
+  click-click pen tool (press-drag-release is gone). The femur button (`icons.ts`
+  `bone`) arms `startBonePlacement` (CHAIN mode). The FIRST click sets the chain's
+  pending origin; each SUBSEQUENT click commits a bone origin→click and immediately
+  starts the next at that new tip, so a chain grows joint-to-joint indefinitely. A live
+  preview bone (`.null-glyph.bone.placing`) + an origin marker (`.chain-origin`) follow
+  the cursor between clicks (screen-constant girth). ESCAPE / ENTER / DOUBLE-CLICK end
+  the chain (`endBoneChain`): the in-progress preview is discarded, every committed bone
+  stays. **Child anchoring / continuing a chain:** with a bone *selected* when the chain
+  starts, the origin anchors at that bone's `effectiveTip` and the first bone parents to
+  it; with an ART selected the first bone parents to it (hierarchy-as-assignment); with
+  nothing selected it's a free-form root. Later bones parent to the previous committed
+  bone. A click closer than `MIN_BONE_LENGTH_PX` to the pending origin commits nothing
+  (mis-click / the second click of a finishing double-click). The whole chain is ONE
+  checkpoint (deferred to the first commit) and ONE auto-bind (at the end), so a chain of
+  N bones is a single undo. State lives in `ctx.boneChain` (context.ts); the click/preview
+  wiring is `interactions.ts`'s `boneChainClick`/`commitBone`; the lifecycle
+  (`startBonePlacement`/`endBoneChain`/`cancelBonePlacement`) is in `rigOps.ts`.
 - **Chain resolution.** `model.ts`'s pure `boneChain(parts, boneId)` walks up
   bone-only parent links to the ROOT bone, then collects the root plus every
   descendant bone — the unit the auto-binder treats as one skeleton. It is cycle-safe

@@ -23,11 +23,12 @@ import { snapPoint, snapDelta, SnapAxis } from '../geometry/snap';
 import { checkpoint } from '../core/history';
 import {
   ctx, DragState, ROTATE_SNAP_DEGREES, DRAG_THRESHOLD_PX, MIN_SCALE, MAX_SCALE,
-  round1, round2, round3, linearOnly, nodeKey, parseNodeKey, snappingActive, wrapToPi,
+  MIN_BONE_LENGTH_PX, round1, round2, round3, linearOnly, nodeKey, parseNodeKey,
+  snappingActive, wrapToPi,
 } from './context';
 import {
   svgPoint, pointerInRoot, snapThreshold, rootToUser,
-  pointerInPathSpace, handleSize,
+  pointerInPathSpace, handleSize, screenScaleOf,
 } from './coords';
 import {
   poseTime, innerLocalTransform, fullPoseTransform, groupTransformOf,
@@ -47,7 +48,7 @@ import {
   applyMirrorConstraint, editNodeStructure, moveNode,
 } from './nodeEditing';
 import {
-  cancelBonePlacement, autoBindPlacedBone, aimBoneAtTip,
+  endBoneChain, aimBoneAtTip,
   refreshBindForChain, refreshFrozenSkinWeights, captureFrozenBaseline,
   groupScaleMembers, applyGroupScale,
 } from './rigOps';
@@ -55,7 +56,7 @@ import { applyViewRect, zoomAround } from './camera';
 
 /** First real movement of a drag: fire the deferred checkpoint exactly once. */
 function activateDrag(
-  d: Exclude<DragState, { kind: 'pan' } | { kind: 'placeBone' } | { kind: 'nodeMarquee' }>,
+  d: Exclude<DragState, { kind: 'pan' } | { kind: 'nodeMarquee' }>,
   ev: PointerEvent,
 ): boolean {
   if (d.active) return true;
@@ -84,6 +85,15 @@ export function wireInteractions(): void {
   // Double-click steps INTO things, SVG-editor style: group → part → path. Escape or
   // a blank click steps back out.
   ctx.svg.addEventListener('dblclick', (ev) => {
+    // Pen-tool chains: a double-click FINISHES the chain (its two clicks already committed
+    // any bones via pointerdown; the second lands on the first, so the MIN_BONE_LENGTH guard
+    // drops it). Consume the dblclick so it can't also drill down.
+    if (ctx.boneChain || ctx.placingBone) {
+      ev.preventDefault();
+      endBoneChain();
+      notify();
+      return;
+    }
     // Resolve the ARTWORK under the cursor with elementsFromPoint, skipping overlay
     // widgets: the first click of a double-click selects a part and draws its pivot
     // grab circle — often right where the second click lands. The overlay must never
@@ -137,18 +147,14 @@ export function wireInteractions(): void {
     const doc = state.doc;
     if (!doc) return;
 
-    // Bone placement: press to set the origin (the joint), drag to aim, release to
-    // set the tip — like drawing a bone in Rive/Blender. CHILD BONES (Bones 2.0): when
-    // a bone is selected the new bone's origin is anchored at that bone's effective TIP
-    // (the press only arms it), so a chain grows joint-to-joint without hunting for the
-    // exact tip pixel. With no bone selected, placement stays free-form at the press.
-    if (ctx.placingBone && ev.button === 0) {
-      const sel = selectedPart();
-      const parentTip = sel && sel.kind === 'bone' ? effectiveTip(sel, poseTime()) : null;
+    // PEN-TOOL BONE CHAINS: the bone tool arms CHAIN mode. A left click either starts the
+    // chain (sets the pending origin — anchored at a selected bone's tip so a chain
+    // continues) or commits a bone origin→click and advances the origin to that new tip.
+    // A click is NOT a drag (no ctx.drag), so middle-drag pan + wheel zoom stay live during
+    // chaining and selection never changes. Escape/Enter/double-click finish (endBoneChain).
+    if ((ctx.placingBone || ctx.boneChain) && ev.button === 0) {
       const p = pointerInRoot(ev);
-      const origin = parentTip ?? { x: p.x, y: p.y };
-      ctx.drag = { kind: 'placeBone', originRoot: origin, current: null };
-      try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+      boneChainClick({ x: p.x, y: p.y });
       return;
     }
 
@@ -633,6 +639,15 @@ export function wireInteractions(): void {
   });
 
   ctx.svg.addEventListener('pointermove', (ev) => {
+    // Pen-tool chain: no drag is in flight (a click isn't a drag), so update the live
+    // preview segment from the pending origin to the cursor. A middle-drag pan sets
+    // ctx.drag, so this is skipped during a pan (panning stays available while chaining).
+    if (ctx.boneChain && !ctx.drag) {
+      const p = pointerInRoot(ev);
+      ctx.boneChain.cursor = { x: p.x, y: p.y };
+      renderOverlay();
+      return;
+    }
     if (!ctx.drag) return;
 
     if (ctx.drag.kind === 'pan') {
@@ -642,12 +657,6 @@ export function wireInteractions(): void {
       ctx.viewRect.x = ctx.drag.startRect.x - (ev.clientX - ctx.drag.startClient.x) / scale;
       ctx.viewRect.y = ctx.drag.startRect.y - (ev.clientY - ctx.drag.startClient.y) / scale;
       applyViewRect();
-      return;
-    }
-    if (ctx.drag.kind === 'placeBone') {
-      const p = pointerInRoot(ev);
-      ctx.drag.current = { x: p.x, y: p.y };
-      renderOverlay(); // live bone preview
       return;
     }
     if (ctx.drag.kind === 'nodeMarquee') {
@@ -1040,36 +1049,6 @@ export function wireInteractions(): void {
   const end = () => {
     if (ctx.drag) {
       if (ctx.drag.kind === 'pan') ctx.svg!.style.cursor = '';
-      if (ctx.drag.kind === 'placeBone') {
-        // Release finishes the bone: origin = press point, tip = release point.
-        const origin = ctx.drag.originRoot;
-        const tipRoot = ctx.drag.current ?? origin;
-        const parent = selectedPart();
-        const t = poseTime();
-        const inv = parent
-          ? invertMat(matrixOfTransform(fullPoseTransform(parent, t)))
-          : null;
-        const toLocal = (pt: { x: number; y: number }) =>
-          inv ? applyMat(inv, pt.x, pt.y) : pt;
-        const pivotL = toLocal(origin);
-        let tipL = toLocal(tipRoot);
-        if (Math.hypot(tipL.x - pivotL.x, tipL.y - pivotL.y) < 2) {
-          // A bare click still yields a usable bone: short and pointing right.
-          tipL = { x: pivotL.x + (state.doc?.viewBox.w ?? 200) * 0.06, y: pivotL.y };
-        }
-        checkpoint();
-        const bone = addNullPart(
-          'bone', { x: round1(pivotL.x), y: round1(pivotL.y) }, parent?.id ?? null,
-        );
-        bone.boneTip = { x: round1(tipL.x), y: round1(tipL.y) };
-        registerPart(bone);
-        // AUTO-BIND ON PLACEMENT (Bones 2.0): resolve the whole chain this bone belongs
-        // to and skin every overlapping art part — under the SAME checkpoint, so undo
-        // reverts placement + binding as one gesture.
-        autoBindPlacedBone(bone.id);
-        cancelBonePlacement();
-        selectPart(bone.id);
-      }
       if (ctx.drag.kind === 'nodeMarquee') {
         // Select every node handle whose center sits inside the rubber band.
         const r = ctx.drag.rect.getBoundingClientRect();
@@ -1138,6 +1117,65 @@ function startIkDrag(effector: RigPart, p: { x: number; y: number }, ev: Pointer
     active: false,
   };
   try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+}
+
+/**
+ * Handle one pen-tool chain click at `clickRoot` (root/doc space). The FIRST click of a
+ * chain seeds ctx.boneChain: with a bone selected the origin anchors at that bone's
+ * effective tip (so a chain continues joint-to-joint) and the first bone parents to it;
+ * with an art selected the first bone parents to it (hierarchy-as-assignment); otherwise a
+ * free-form root. Each SUBSEQUENT click commits a bone origin→click (deferring the ONE chain
+ * checkpoint to this first commit) and advances the origin to the new tip. A click closer
+ * than MIN_BONE_LENGTH to the pending origin commits nothing (mis-click / the second click
+ * of a finishing double-click).
+ */
+function boneChainClick(clickRoot: { x: number; y: number }): void {
+  if (!ctx.boneChain) {
+    const sel = selectedPart();
+    const anchor = sel && (sel.kind === 'art' || sel.kind === 'bone') ? sel : null;
+    const origin = anchor && anchor.kind === 'bone'
+      ? effectiveTip(anchor, poseTime()) ?? clickRoot
+      : clickRoot;
+    ctx.boneChain = {
+      origin: { x: origin.x, y: origin.y },
+      parentId: anchor ? anchor.id : null,
+      committed: [],
+      checkpointed: false,
+      cursor: null,
+    };
+    renderOverlay(); // show the chain-origin marker immediately
+    return;
+  }
+  const ch = ctx.boneChain;
+  const minLen = MIN_BONE_LENGTH_PX / screenScaleOf();
+  if (Math.hypot(clickRoot.x - ch.origin.x, clickRoot.y - ch.origin.y) < minLen) return;
+  if (!ch.checkpointed) { checkpoint(); ch.checkpointed = true; } // ONE checkpoint per chain
+  const parentId = ch.committed.length > 0 ? ch.committed[ch.committed.length - 1] : ch.parentId;
+  const bone = commitBone(ch.origin, clickRoot, parentId);
+  ch.committed.push(bone.id);
+  ch.origin = { x: clickRoot.x, y: clickRoot.y };
+  ch.cursor = null;
+  renderPose(); // the committed bone is now a real part → draw its glyph + refresh chrome
+}
+
+/**
+ * Create one chain bone origin→tip (root/doc space) under `parentId`, converting both into
+ * the parent's local frame — which equals the fresh bone's OWN frame, since a just-created
+ * bone's own pose is identity (rotate 0). Mirrors the old press-drag-release finalizer.
+ */
+function commitBone(
+  originRoot: { x: number; y: number }, tipRoot: { x: number; y: number }, parentId: string | null,
+): RigPart {
+  const t = poseTime();
+  const parent = parentId ? state.doc?.parts.find((p) => p.id === parentId) ?? null : null;
+  const inv = parent ? invertMat(matrixOfTransform(fullPoseTransform(parent, t))) : null;
+  const toLocal = (pt: { x: number; y: number }) => (inv ? applyMat(inv, pt.x, pt.y) : pt);
+  const oL = toLocal(originRoot);
+  const tL = toLocal(tipRoot);
+  const bone = addNullPart('bone', { x: round1(oL.x), y: round1(oL.y) }, parentId);
+  bone.boneTip = { x: round1(tL.x), y: round1(tL.y) };
+  registerPart(bone);
+  return bone;
 }
 
 /** The bone whose chain a freeze bone drag edits (any chain member — the helpers resolve

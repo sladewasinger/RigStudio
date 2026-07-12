@@ -18,19 +18,18 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import {
   addNullPart, selectPart as modelSelectPart, notify, isUsableBoneTip, MIN_BONE_LENGTH,
 } from '../../core/model';
-import { startBonePlacement, renderPose, autoBindPlacedBone } from '../../view';
+import { startBonePlacement, endBoneChain, renderPose, autoBindPlacedBone } from '../../view';
 import {
-  bootRig, resetRig, state, partByLabel, partGroupEl, gestureDrag, click, medialPoints,
-  clientPointOnPart,
+  bootRig, resetRig, state, partByLabel, partGroupEl, click, medialPoints,
+  placeBoneChain,
 } from './harness';
 
 beforeAll(bootRig);
 beforeEach(resetRig);
 
+/** Place a single bone by the pen-tool chain (origin click → tip click); returns the bone. */
 function placeBoneGesture(from: { x: number; y: number }, to: { x: number; y: number }) {
-  startBonePlacement();
-  gestureDrag(from, to);
-  return state.doc!.parts[state.doc!.parts.length - 1];
+  return placeBoneChain([from, to])[0];
 }
 
 /** Bind a real single-bone chain to `label` (the same auto-bind path bones.test.ts uses). */
@@ -133,16 +132,25 @@ describe('render resilience — a poisoned skin binding never aborts the whole c
 });
 
 describe('zero-length bone guards (hardening wave, class 2)', () => {
-  it('a placement gesture with no meaningful drag (a bare click) still yields a usable bone length', () => {
+  it('the pen-tool MIN_BONE_LENGTH guard drops a too-short chain segment; a real one yields a usable bone', () => {
+    // RE-SPEC (pen-tool chains): press-drag-release is gone. A bare click now only SETS the
+    // chain origin; a second click too close to it commits NO degenerate bone (the
+    // MIN_BONE_LENGTH guard, the click-model equivalent of the old zero-length substitution),
+    // and a real segment yields a usable-length bone.
     modelSelectPart(null);
     notify();
     renderPose();
-    const p = clientPointOnPart('right_arm');
+    const pts = medialPoints('right_arm', 1); // [origin, tip] down the arm
+    const before = state.doc!.parts.length;
     startBonePlacement();
-    click(p.x, p.y); // press+release at the SAME point — no drag at all
+    click(pts[0].x, pts[0].y); // sets the origin — commits nothing
+    click(pts[0].x + 1, pts[0].y + 1); // ~1.4 px from the origin → below MIN_BONE_LENGTH → dropped
+    expect(state.doc!.parts.length, 'a too-short click commits no degenerate bone').toBe(before);
+    click(pts[1].x, pts[1].y); // a real medial-length segment → a usable bone
+    endBoneChain();
     const bone = state.doc!.parts[state.doc!.parts.length - 1];
     expect(bone.kind).toBe('bone');
-    expect(bone.boneTip, 'placement always yields a tip').toBeTruthy();
+    expect(bone.boneTip, 'a committed bone always has a tip').toBeTruthy();
     expect(isUsableBoneTip(bone.pivot, bone.boneTip!)).toBe(true);
   });
 

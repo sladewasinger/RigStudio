@@ -6,8 +6,8 @@
  */
 
 import {
-  state, selectedParts, selectedPart, setKeyframe, channelValue, boneChain, chainBonesOfPart,
-  ancestorChain, RigPart, SkinBone, SkinOverride, healDegenerateBoneTip,
+  state, selectedParts, selectedPart, selectPart, setKeyframe, channelValue, boneChain,
+  chainBonesOfPart, ancestorChain, RigPart, SkinBone, SkinOverride, healDegenerateBoneTip,
 } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from '../geometry/transforms';
@@ -227,12 +227,21 @@ export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
       const el = ctx.svg?.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
       if (el) applyPathAttrs(el, path);
     }
-    part.pivot = effectivePivot(part, null);
-    part.transform = '';
     // Bind bakes/zeroes the GEOMETRIC rest fields (they're now baked into path.d); opacity
     // is a paint property, not a transform, so it survives the reset untouched.
+    const rootPivot = effectivePivot(part, null); // capture with the ORIGINAL rest still live
+    part.transform = '';
     part.rest = { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: part.rest.opacity };
-    part.parentId = null;
+    // KEEP the art parented — never hoist it out of its group (the reported "bones leave
+    // their parent object on assign" regression: zeroing parentId detached a nested art,
+    // and its whole bone sub-chain, from its group). The geometry is baked to ROOT space and
+    // render forces transform='' for a skinned part (render.ts renderPartRigid also), so the
+    // baked-in chain is never double-applied; and the bones compose THROUGH the preserved
+    // chain, so the limb still follows a group move. Store the joint in the art's LOCAL
+    // (post-chain) frame so effectivePivot — which still composes the chain — lands the
+    // overlay crosshair on the true joint; for FLAT art (chain == identity) invert(chain) is
+    // identity, so this is byte-identical to the old root-space pivot + parentId stays null.
+    part.pivot = applyMat(invertMat(chainMatOf(part, null)), rootPivot.x, rootPivot.y);
     part.skin = { bones: freshBones() };
     invalidateSkinCache(part.id);
     bakedArtIds.add(part.id);
@@ -699,18 +708,56 @@ export function rebindFrozenChain(boneId: string): void {
   captureFrozenBaseline(boneId, poseTime());
 }
 
-// ---- Bone placement ----
+// ---- Bone placement (pen-tool chains) ----
 
-/** Arm click-to-place: the next canvas click drops a bone (parented to the selection). */
+/**
+ * Arm the bone tool for CHAIN placement. The first canvas click sets the chain's origin
+ * (anchored at a selected bone's tip so a chain continues; parented to a selected art per
+ * hierarchy-as-assignment), each subsequent click commits a bone and starts the next at
+ * that new tip, and Escape/Enter/double-click finishes (endBoneChain). `placingBone` stays
+ * armed until the chain ends; `boneChain` is seeded on the first click (interactions.ts).
+ */
 export function startBonePlacement(): void {
   ctx.placingBone = true;
+  ctx.boneChain = null;
   if (ctx.svg) ctx.svg.style.cursor = 'crosshair';
 }
 
-/** Returns whether placement was active (Escape handling). */
+/**
+ * DISCARD an armed/in-progress chain WITHOUT finalizing (no auto-bind) — for a document
+ * swap/reset where any committed bones belong to the doc being replaced. Returns whether
+ * the tool was armed or a chain was running. (User-driven ends go through endBoneChain,
+ * which keeps the committed bones and auto-binds.)
+ */
 export function cancelBonePlacement(): boolean {
-  const was = ctx.placingBone;
+  const was = ctx.placingBone || !!ctx.boneChain;
   ctx.placingBone = false;
+  ctx.boneChain = null;
   if (ctx.svg) ctx.svg.style.cursor = '';
   return was;
+}
+
+/**
+ * FINISH the pen-tool chain (Escape / Enter / double-click, wired in main.ts +
+ * interactions.ts). The in-progress preview segment is discarded; every committed bone
+ * stays. AUTO-BIND runs exactly ONCE here for the whole chain (under the single checkpoint
+ * the first commit already took — so undo removes the chain AND its binding together),
+ * using the selection preserved across the chain (art selected → bind it; nothing → the
+ * geometric limb-coverage fallback). Then the last bone is selected. A chain that committed
+ * NO bones (a lone origin click) just disarms — no checkpoint was taken, nothing to bind.
+ * Returns whether the tool was armed or a chain was running (for the Escape tier).
+ */
+export function endBoneChain(): boolean {
+  const ch = ctx.boneChain;
+  if (!ctx.placingBone && !ch) return false; // nothing armed — let the key fall through
+  ctx.placingBone = false;
+  ctx.boneChain = null;
+  if (ctx.svg) ctx.svg.style.cursor = '';
+  if (ch && ch.committed.length > 0) {
+    const lastId = ch.committed[ch.committed.length - 1];
+    autoBindPlacedBone(lastId); // ONCE, with the chain-start selection still intact
+    selectPart(lastId);
+  }
+  renderPose();
+  return true;
 }

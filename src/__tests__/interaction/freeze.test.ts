@@ -13,30 +13,23 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { selectPart as modelSelectPart } from '../../core/model';
-import { startBonePlacement, renderPose } from '../../view';
+import { renderPose } from '../../view';
 import {
   bootRig, resetRig, state, notify, partByLabel, partGroupEl, gestureDrag, docToClient,
   clientCenterOf, overlayEl, expectClose, selectByLabel, repaint, pressKey,
-  medialPoints,
+  medialPoints, placeBoneChain,
 } from './harness';
 
 beforeAll(bootRig);
 beforeEach(resetRig);
 
-/** Place an n-bone chain down a limb's medial axis (mirrors bones.test.ts's helper). */
+/** Place an n-bone chain down a limb's medial axis with the pen tool, nothing selected
+ *  (mirrors bones.test.ts's helper — N+1 medial points → N connected bones). */
 function placeChain(label: string, n: number): ReturnType<typeof partByLabel>[] {
-  const pts = medialPoints(label, n);
   modelSelectPart(null);
   notify();
   renderPose();
-  const bones: ReturnType<typeof partByLabel>[] = [];
-  for (let k = 1; k <= n; k++) {
-    const press = k === 1 ? pts[0] : { x: pts[k - 1].x + 28, y: pts[k - 1].y + 18 };
-    startBonePlacement();
-    gestureDrag(press, pts[k]);
-    bones.push(state.doc!.parts[state.doc!.parts.length - 1]);
-  }
-  return bones;
+  return placeBoneChain(medialPoints(label, n));
 }
 
 /** Concatenated rendered `d` of a skinned part's paths (the serialized LBS geometry). */

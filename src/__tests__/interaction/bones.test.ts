@@ -23,10 +23,11 @@ import {
   startBonePlacement, renderPose, setNodeBinding, recomputeAutoWeights, resetView,
 } from '../../view';
 import {
-  bootRig, resetRig, state, partByLabel, partGroupEl, gestureDrag, click,
+  bootRig, resetRig, state, partByLabel, partGroupEl, gestureDrag, click, moveMouse,
   clientCenterOf, overlayEl, overlayCount, expectClose, setEditorMode, repaint,
   enterNodeMode, medialPoints, clientPointOnPart, svgEl, selectByLabel, pressKey, hitAt,
-  rootGEl, pathElById, assertScreenConstant, waitFor, clipTrack,
+  rootGEl, pathElById, assertScreenConstant, waitFor, clipTrack, placeBoneChain, fullDblClick,
+  loadFixtureSvg,
 } from './harness';
 
 beforeAll(bootRig);
@@ -50,30 +51,22 @@ function assertNoGap(): void {
 }
 afterEach(assertNoGap);
 
-/** Place a bone by a real press-drag-release gesture; returns the created bone part. */
+/** Place a single bone by the pen-tool chain (origin click → tip click); returns the bone. */
 function placeBoneGesture(from: { x: number; y: number }, to: { x: number; y: number }) {
-  startBonePlacement();
-  gestureDrag(from, to);
-  return state.doc!.parts[state.doc!.parts.length - 1];
+  return placeBoneChain([from, to])[0];
 }
 
 /**
- * Place an n-bone chain down a limb's MEDIAL axis: bone 1 free-form (nothing selected
- * → geometric auto-bind), the rest as child bones pressed at an OFFSET from the parent
- * tip (so "child origin anchored at the parent tip" is distinguishable from "origin at
- * the press point" — only the drag END should matter for a child).
+ * Place an n-bone chain down a limb's MEDIAL axis with the pen tool, nothing selected (so
+ * bone 1 is a free-form root → geometric auto-bind). N+1 medial click points → N bones,
+ * each committed at its click and connected to the previous joint (the click-click model
+ * makes the shared joint automatic — no per-bone offset press needed any more).
  */
 function placeChain(label: string, n: number): ReturnType<typeof partByLabel>[] {
-  const pts = medialPoints(label, n);
   modelSelectPart(null);
   notify();
   renderPose();
-  const bones: ReturnType<typeof partByLabel>[] = [];
-  for (let k = 1; k <= n; k++) {
-    const press = k === 1 ? pts[0] : { x: pts[k - 1].x + 28, y: pts[k - 1].y + 18 };
-    bones.push(placeBoneGesture(press, pts[k]));
-  }
-  return bones;
+  return placeBoneChain(medialPoints(label, n));
 }
 
 /** Concatenated rendered `d` of a part's path elements (the LBS-deformed geometry). */
@@ -477,20 +470,12 @@ function boneLen(b: ReturnType<typeof partByLabel>): number {
 /**
  * Place an n-bone chain with the ART part SELECTED first, so bone 1 PARENTS to the art
  * (the locked hierarchy-as-assignment chain art→bone1→…→bone n) and every bone binds it.
- * Child bones are pressed at an offset from the parent tip (only the drag END matters for a
- * child), mirroring the free-form helper.
+ * Selection is preserved across the chain's clicks, so the single auto-bind at the end
+ * targets the selected art (targeting rule #2).
  */
 function placeParentedChain(label: string, n: number): ReturnType<typeof partByLabel>[] {
-  const pts = medialPoints(label, n);
   selectByLabel(label); // art selected → bone 1 parents to it and auto-bind targets it
-  const bones: ReturnType<typeof partByLabel>[] = [];
-  for (let k = 1; k <= n; k++) {
-    const press = k === 1 ? pts[0] : { x: pts[k - 1].x + 28, y: pts[k - 1].y + 18 };
-    startBonePlacement();
-    gestureDrag(press, pts[k]);
-    bones.push(state.doc!.parts[state.doc!.parts.length - 1]);
-  }
-  return bones;
+  return placeBoneChain(medialPoints(label, n));
 }
 
 describe('scenario B13 — chain stays PARENTED under the art (hierarchy-as-assignment)', () => {
@@ -905,5 +890,192 @@ describe('scenario B25 — full-chain IK keys every bone at the playhead (Animat
       expect(Math.abs(key!.value - b.rest.rotate), 'keyed rotation differs from rest')
         .toBeGreaterThan(0.5);
     }
+  });
+});
+
+// ---- Pen-tool bone chains (click-click placement replaces press-drag-release) ----
+
+describe('scenario B26 — pen-tool chain: N clicks → N-1 connected bones, ONE undo, ONE auto-bind', () => {
+  it('3 clicks + Escape makes 2 connected bones bound as one chain, and NOT bound until the chain ends', () => {
+    const before = state.doc!.parts.length;
+    modelSelectPart(null); // free-form chain (nothing selected)
+    notify();
+    renderPose();
+
+    const pts = medialPoints(LIMB, 2); // 3 medial click points down the limb
+    startBonePlacement();
+
+    click(pts[0].x, pts[0].y); // click 1 — sets the chain origin, commits nothing
+    expect(state.doc!.parts.length, 'origin click commits no bone').toBe(before);
+
+    click(pts[1].x, pts[1].y); // click 2 — commits bone 1
+    expect(state.doc!.parts.length, 'bone 1 committed').toBe(before + 1);
+    // MUTATION CHECK (single auto-bind): binding must NOT have happened yet — it's
+    // deferred to the chain end. If autoBind ran per-commit, the limb would be skinned here.
+    expect(partByLabel(LIMB).skin ?? null, 'limb NOT bound mid-chain').toBeNull();
+
+    click(pts[2].x, pts[2].y); // click 3 — commits bone 2
+    expect(state.doc!.parts.length, 'bone 2 committed').toBe(before + 2);
+    expect(partByLabel(LIMB).skin ?? null, 'still NOT bound mid-chain').toBeNull();
+
+    pressKey('Escape'); // finish → real main.ts Escape tier → endBoneChain (auto-bind once)
+
+    const bones = state.doc!.parts.slice(before);
+    expect(bones.length, 'exactly 2 bones committed (3 clicks → 2 bones)').toBe(2);
+    const [b1, b2] = bones;
+    expect(b2.parentId, 'chain connected: bone 2 parents to bone 1').toBe(b1.id);
+    expectClose(b2.pivot.x, b1.boneTip!.x, 0.3, 'shared joint x (child origin == parent tip)');
+    expectClose(b2.pivot.y, b1.boneTip!.y, 0.3, 'shared joint y');
+
+    // Auto-bind fired ONCE for the whole chain: the limb is skinned to BOTH bones, nothing else.
+    const skin = partByLabel(LIMB).skin;
+    expect(skin, 'limb auto-bound at chain end').toBeTruthy();
+    expect(skin!.bones.map((b) => b.id), 'bound to the whole chain').toEqual([b1.id, b2.id]);
+    expect(state.doc!.parts.filter((p) => p.skin).map((p) => p.label), 'only the limb bound')
+      .toEqual([LIMB]);
+
+    // MUTATION CHECK (one checkpoint): a SINGLE undo reverts BOTH bones AND the binding. Were
+    // the checkpoint taken per-commit, one undo would leave bone 1 behind.
+    expect(canUndo()).toBe(true);
+    undo();
+    expect(state.doc!.parts.length, 'both bones removed by one undo').toBe(before);
+    expect(partByLabel(LIMB).skin ?? null, 'binding reverted in the same step').toBeNull();
+  });
+});
+
+describe('scenario B27 — a lone origin click then Escape commits nothing (no checkpoint)', () => {
+  it('one click + Escape leaves zero bones and takes no history step', () => {
+    const before = state.doc!.parts.length;
+    const couldUndoBefore = canUndo();
+    modelSelectPart(null);
+    notify();
+    renderPose();
+
+    startBonePlacement();
+    const pts = medialPoints(LIMB, 1);
+    click(pts[0].x, pts[0].y); // just the origin — no commit
+    pressKey('Escape');
+
+    expect(state.doc!.parts.length, 'no bone created from a single click').toBe(before);
+    // MUTATION CHECK (deferred checkpoint): the origin click must not checkpoint — history
+    // is untouched, so canUndo is exactly what it was before arming.
+    expect(canUndo(), 'no history step for a bare origin click').toBe(couldUndoBefore);
+  });
+});
+
+describe('scenario B28 — a live preview bone follows the cursor between clicks, gone after the end', () => {
+  it('the .placing ghost + chain-origin marker appear while chaining and clear when the chain ends', () => {
+    modelSelectPart(null);
+    notify();
+    renderPose();
+    const pts = medialPoints(LIMB, 2);
+
+    startBonePlacement();
+    click(pts[0].x, pts[0].y); // origin set
+    expect(overlayCount('.chain-origin'), 'origin marker after the first click').toBe(1);
+
+    moveMouse(pts[1].x, pts[1].y); // move → preview segment from origin to cursor
+    expect(overlayCount('.null-glyph.bone.placing'), 'preview ghost present between clicks').toBe(1);
+
+    click(pts[1].x, pts[1].y); // commit bone 1 (cursor resets → ghost gone until next move)
+    moveMouse(pts[2].x, pts[2].y);
+    expect(overlayCount('.null-glyph.bone.placing'), 'preview follows onto the next segment').toBe(1);
+
+    click(pts[2].x, pts[2].y);
+    pressKey('Escape');
+    expect(overlayCount('.null-glyph.bone.placing'), 'preview ghost gone after the chain ends').toBe(0);
+    expect(overlayCount('.chain-origin'), 'origin marker gone after the chain ends').toBe(0);
+  });
+});
+
+describe('scenario B29 — a double-click finishes the chain', () => {
+  it('double-clicking the final joint commits its bone and ends chain mode', () => {
+    modelSelectPart(null);
+    notify();
+    renderPose();
+    const pts = medialPoints(LIMB, 2);
+
+    startBonePlacement();
+    click(pts[0].x, pts[0].y); // origin
+    click(pts[1].x, pts[1].y); // bone 1
+    const afterOne = state.doc!.parts.length;
+
+    fullDblClick(pts[2].x, pts[2].y); // commits bone 2 (its 1st click), then ends (dblclick)
+
+    expect(state.doc!.parts.length, 'the double-click placed one final bone').toBe(afterOne + 1);
+    expect(overlayCount('.chain-origin'), 'chain ended — no origin marker').toBe(0);
+    expect(partByLabel(LIMB).skin, 'the limb auto-bound at the double-click end').toBeTruthy();
+
+    // A subsequent plain click adds no bone (chain truly ended, not still armed).
+    const settled = state.doc!.parts.length;
+    click(pts[0].x, pts[0].y);
+    expect(state.doc!.parts.length, 'a click after the end commits nothing').toBe(settled);
+  });
+});
+
+describe('scenario B30 — binding NESTED art keeps it under its group (hoisting regression)', () => {
+  it("the user's repro: a chain on art inside a group leaves the art parented to the group, render-neutral", async () => {
+    // girl_example.svg imports a real group "RightArm" wrapping an art part "Arm". The
+    // regression: bind zeroed the art's parentId, hoisting the art (and its bones) out of
+    // the group to root — "bones leave their parent object on assign". The fix keeps the
+    // art parented (render forces transform='' for skinned parts, so the baked-in chain
+    // isn't double-applied) and folds only the bone's own lost pose.
+    await loadFixtureSvg('girl_example.svg', 'girl');
+    const rightArm = state.doc!.parts.find((p) => p.label === 'RightArm' && p.kind === 'group')!;
+    const arm = state.doc!.parts.find(
+      (p) => p.label === 'Arm' && p.parentId === rightArm.id && p.kind === 'art',
+    )!;
+    expect(arm, 'nested Arm art present under the RightArm group').toBeTruthy();
+
+    // Render-neutral baseline: screen-space samples of the Arm's rendered paths before bind.
+    const armSamples = (): number[] => {
+      const g = svgEl().querySelector(`[data-part-id="${arm.id}"]`)!;
+      const out: number[] = [];
+      for (const pe of Array.from(g.querySelectorAll('path')) as SVGPathElement[]) {
+        const len = pe.getTotalLength();
+        if (!(len > 0)) continue;
+        const m = pe.getScreenCTM()!;
+        for (let f = 0; f <= 1.0001; f += 0.2) {
+          const q = pe.getPointAtLength(len * f);
+          const sp = svgEl().createSVGPoint();
+          sp.x = q.x; sp.y = q.y;
+          const s = sp.matrixTransform(m);
+          out.push(s.x, s.y);
+        }
+      }
+      return out;
+    };
+    const before = armSamples();
+
+    // Select the nested Arm, then draw a 2-bone chain (its clicks are down the arm's box —
+    // with the art selected, auto-bind targets exactly it). Selection is preserved across
+    // the chain, so the single end-of-chain bind skins the Arm.
+    modelSelectPart(arm.id);
+    notify();
+    renderPose();
+    // Well-separated CLIENT points near the arm (30 px gaps clear the MIN_BONE_LENGTH guard);
+    // the chain geometry is irrelevant to the bind (targeting rule #2 binds the SELECTED art).
+    const g = svgEl().querySelector(`[data-part-id="${arm.id}"]`) as SVGGElement;
+    const r = g.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const bones = placeBoneChain([
+      { x: cx, y: cy - 30 }, { x: cx, y: cy }, { x: cx, y: cy + 30 },
+    ]); // selection (the Arm) preserved → bind targets it
+    expect(bones.length, 'a 2-bone chain was placed').toBe(2);
+
+    const armAfter = state.doc!.parts.find((p) => p.id === arm.id)!;
+    expect(armAfter.skin, 'Arm bound by the chain').toBeTruthy();
+    expect(armAfter.parentId, 'Arm STILL under the RightArm group (not hoisted to root)')
+      .toBe(rightArm.id);
+    expect(bones[0].parentId, 'bone 1 parented to the Arm (hierarchy-as-assignment)').toBe(arm.id);
+    expect(bones[1].parentId, 'bone 2 parented to bone 1').toBe(bones[0].id);
+
+    // Render-neutral: the nested art did not move a pixel across placement + bind.
+    const after = armSamples();
+    let drift = 0;
+    for (let i = 0; i < Math.min(before.length, after.length); i++) {
+      drift = Math.max(drift, Math.abs(before[i] - after[i]));
+    }
+    expectClose(drift, 0, 0.05, 'nested art render-neutral across bind (≤0.05px)');
   });
 });

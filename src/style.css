@@ -744,6 +744,17 @@ button.icon-btn { display: inline-flex; align-items: center; gap: 4px; }
 #canvas:not(.freeze-mode) .bone-tip-handle.joint { cursor: default; }
 .null-glyph.placing { opacity: 0.6; pointer-events: none; }
 
+/* Pen-tool bone chain: the pending-origin marker where the next bone will start. Radius is
+   screen-constant (handleSize() in overlay.ts); the stroke stays 1 device px via
+   non-scaling-stroke, per the screen-constant-chrome GOTCHA. */
+.chain-origin {
+  fill: var(--accent-2);
+  stroke: #101018;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
 /* Skinned-part icon in layers */
 .layer-kind.skin { color: #4fbf67; }
 
