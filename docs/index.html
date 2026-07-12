@@ -4,13 +4,14 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Rig Studio</title>
-    <script type="module" crossorigin src="/RigStudio/assets/index-BxSBo_s9.js"></script>
-    <link rel="stylesheet" crossorigin href="/RigStudio/assets/index-BFx8qjAc.css">
+    <script type="module" crossorigin src="/RigStudio/assets/index-Vmg10g7t.js"></script>
+    <link rel="stylesheet" crossorigin href="/RigStudio/assets/index-CxKiE6h4.css">
   </head>
   <body>
     <header id="toolbar">
       <strong class="brand">Rig Studio</strong>
       <div class="tb-group" role="group" aria-label="File">
+        <button id="btn-new" title="Start a new blank project">New</button>
         <button id="btn-open" title="SVG artwork or a saved .rig.json project">Open…</button>
         <button id="btn-sample" title="Load the bundled sample character">Load sample</button>
         <button id="btn-save" title="Download the project as JSON">Save project</button>
@@ -23,6 +24,8 @@
       <div class="tb-group" role="group" aria-label="Export">
         <button id="btn-export-lottie" title="Export the rig + clips as Lottie JSON">Export Lottie</button>
         <button id="btn-export-riv" title="Export the rig + all clips as a Rive .riv binary">Export Rive (.riv)</button>
+        <button id="btn-export-png" title="Export the current frame as a PNG image">PNG</button>
+        <button id="btn-export-svg" title="Export the current pose as an SVG image">SVG</button>
       </div>
       <div id="mode-toggle" title="Tab toggles. Edit mode edits the character; Animate records keyframes.">
         <button id="btn-mode-setup">Edit</button>
