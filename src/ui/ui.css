@@ -206,3 +206,44 @@
   cursor: help;
   font-size: 11px;
 }
+
+/* ============================================================================
+   AI preview bar (src/panels/ai.ts, AI Animate System v2 A2 "preview-before-apply")
+   — a successful Create/Modify request no longer applies straight to the doc; it
+   loops a candidate on the canvas (view's setPoseSampler hook, exactly like the
+   state-machine editor's own preview) while the timeline keeps showing the real
+   clip. This card is the review UI: a one-line summary plus Apply / Retry / Discard.
+   Nested inside `.ai-panel` (style.css) so it reads as a distinct decision point
+   rather than another field row — an accent border sets it apart from the plain
+   toggle rows above it.
+   ============================================================================ */
+.ai-preview-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  margin: var(--sp-2) 0;
+  background: var(--surface-hover);
+  border: 1px solid var(--accent-2);
+  border-radius: var(--r);
+}
+.ai-preview-summary {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ai-preview-note {
+  margin: 0;
+}
+.ai-preview-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+.ai-preview-apply {
+  background: var(--accent-2);
+  color: #101018;
+  border-color: var(--accent-2);
+  font-weight: 600;
+}
+.ai-preview-apply:hover:not(:disabled) { background: var(--accent-2); filter: brightness(1.1); }

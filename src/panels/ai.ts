@@ -8,19 +8,34 @@
  * two explicit actions (Create new animation / Modify current animation), and a
  * "protect playhead keys" option for Modify. See `AiPanelState`'s doc comment for the
  * prompt-persistence decision and `applyAiResult`'s doc comment for how the two modes
- * apply — that function is written so A2 (preview-before-apply) can call it from an
- * Apply button once results render as a preview instead of applying immediately.
+ * apply.
+ *
+ * AI Animate System v2 A2 ("preview-before-apply") also lives here: a successful
+ * animate call no longer applies straight to the doc — it enters a canvas-only PREVIEW
+ * (see the big comment block above `enterPreview` below) that the user reviews via an
+ * Apply / Retry / Discard bar before anything touches the document.
  */
 
 import {
   state, notify, activeClip, applyRigChanges, boneChain, sanitizeClipName,
-  snapshotProtectedKeys, enforceProtectedKeys, Track, Channel, RigPart, RigDoc, Clip,
-  ProtectedKey,
+  snapshotProtectedKeys, enforceProtectedKeys, setCleanPreview, CHANNEL_DEFAULTS,
+  sampleKeyList, Track, Channel, RigPart, RigDoc, Clip, ProtectedKey,
 } from '../core/model';
-import { renderPose, registerPart, bindPartsToBones } from '../view';
+import { renderPose, registerPart, bindPartsToBones, setPoseSampler } from '../view';
 import { animateWithClaude, critiqueWithClaude, AnimateResult } from '../ai/claude';
-import { checkpoint } from '../core/history';
+import { checkpoint, canUndo, canRedo } from '../core/history';
 import { cloneArtworkSvg, rasterizeSvg } from '../ui/snapshot';
+
+/**
+ * Test-only seam (mirrors core/history.ts's `setRestoreHandler` pattern): production
+ * code always calls the real `animateWithClaude`. Interaction tests swap this to
+ * fabricate an `AnimateResult` without a real network call — see `__setAnimateCallForTest`.
+ * Never touched outside `src/__tests__/**`.
+ */
+let animateCallImpl: typeof animateWithClaude = animateWithClaude;
+export function __setAnimateCallForTest(fn: typeof animateWithClaude): void {
+  animateCallImpl = fn;
+}
 
 /**
  * Rasterize the canvas at the CURRENT PLAYHEAD TIME (sans overlay/onion) to a PNG for
@@ -99,6 +114,25 @@ function applyStructuralRigChanges(
   return { labelToId, notes };
 }
 
+/**
+ * Resolve an AnimateResult's label-targeted tracks into id-targeted `Track`s against a
+ * label→id map. Shared by `applyAiResult` (called with the POST-structural map, so
+ * newly added bones resolve) and A2's `enterPreview` (called with the doc's CURRENT,
+ * pre-structural map — a track targeting a not-yet-created bone simply has no match
+ * and is silently dropped, which is exactly right: structural changes cannot
+ * pose-preview, see `enterPreview`'s doc comment). Unresolvable targets are dropped
+ * rather than throwing, matching the pre-A2 inline behavior this replaces.
+ */
+function resolveTracks(result: AnimateResult, labelToId: Map<string, string>): Track[] {
+  const tracks: Track[] = [];
+  for (const t of result.clip.tracks) {
+    const target = t.target === 'root' ? 'root' : labelToId.get(t.target);
+    if (!target) continue;
+    tracks.push({ target, channel: t.channel as Channel, keyframes: t.keyframes });
+  }
+  return tracks;
+}
+
 export interface ApplyAiOptions {
   /** mode 'modify' target clip; defaults to `activeClip()` when omitted. Ignored for
    *  'new' (a fresh clip is appended instead). */
@@ -138,9 +172,8 @@ export interface ApplyAiOutcome {
  * null only when there's no document (or, for 'modify' with no explicit `opts.clip`, no
  * active clip) to apply to — callers here always guard those cases before calling.
  *
- * Structured for AI Animate System v2's next phase (A2 preview-before-apply): once
- * results render as a preview instead of applying immediately, A2's Apply button calls
- * this SAME function — nothing about the apply path itself needs to change.
+ * AI Animate System v2 A2's Apply button calls this SAME function, unchanged, from
+ * `applyPreviewNow` below — nothing about the apply path itself needed to change.
  */
 export function applyAiResult(
   result: AnimateResult,
@@ -153,13 +186,7 @@ export function applyAiResult(
 
   checkpoint(); // one undo step reverts the whole AI edit — rig changes included
   const { labelToId, notes } = applyStructuralRigChanges(doc, result);
-
-  const tracks: Track[] = [];
-  for (const t of result.clip.tracks) {
-    const target = t.target === 'root' ? 'root' : labelToId.get(t.target);
-    if (!target) continue;
-    tracks.push({ target, channel: t.channel as Channel, keyframes: t.keyframes });
-  }
+  const tracks = resolveTracks(result, labelToId);
 
   let clip: Clip;
   let restoredCount = 0;
@@ -200,6 +227,280 @@ export function applyAnimateResult(clip: Clip | null, result: AnimateResult): st
   return applyAiResult(result, 'modify', { clip })?.structural ?? '';
 }
 
+/**
+ * Preview-only summary of an AnimateResult's structural rig edits (bones/binds/
+ * reparents/pivot moves), for the preview bar's one-line readout. Pure — reads
+ * `result.rig` by LABEL only and never applies anything (structural edits only ever
+ * apply via `applyStructuralRigChanges`, on Apply). Deliberately a separate, simpler
+ * pass from `applyStructuralRigChanges`'s post-apply notes: this runs BEFORE anything
+ * exists in the doc, so it can't dedupe by real chain ids the way the applied version
+ * does — a plain per-bone tally is good enough for a review summary.
+ */
+function describeStructuralChanges(rig: AnimateResult['rig']): string {
+  if (!rig) return '';
+  const notes: string[] = [];
+  const added = rig.addBones?.length ?? 0;
+  if (added > 0) notes.push(`+${added} bone${added === 1 ? '' : 's'}`);
+  const boundLabels = new Set<string>();
+  for (const b of rig.addBones ?? []) for (const l of b.bindParts ?? []) boundLabels.add(l);
+  if (boundLabels.size > 0) notes.push(`binds ${[...boundLabels].join(', ')}`);
+  if (rig.reparent?.length) notes.push(`reparents ${rig.reparent.length}`);
+  if (rig.movePivots?.length) {
+    notes.push(`moves ${rig.movePivots.length} pivot${rig.movePivots.length === 1 ? '' : 's'}`);
+  }
+  return notes.join(', ');
+}
+
+// =====================================================================================
+// AI Animate System v2 A2: preview-before-apply
+//
+// A successful animate call (Create or Modify) no longer applies straight to the doc —
+// it enters a PREVIEW: the candidate clip's tracks (resolved to part ids against the
+// doc's CURRENT label→id map — see `resolveTracks`) loop on the canvas via view's
+// `setPoseSampler` hook, exactly the mechanism smPanel.ts's state-machine preview uses
+// (it is the ONLY hook the view facade offers for overriding rendered pose — see
+// CLAUDE.md's "SM preview is app-state" convention). `previewSampler`/`restFallbackFor`
+// below replicate model.channelValue's "keyed values are absolute, rest fills unkeyed
+// channels" rule (mirroring core/stateMachine.ts's private `sampleClock`/
+// `restFallback`) because the candidate is NOT `activeClip()` — it may not even exist
+// in `doc.clips` yet (mode 'new'), or may be a wholesale replacement of the active
+// clip's tracks (mode 'modify' — applyAiResult REPLACES `clip.tracks` outright, so
+// previewing against the candidate's tracks with a rest fallback, never the doc clip's
+// OLD tracks, is exactly what Apply will actually produce).
+//
+// The doc is NEVER mutated while previewing. The timeline keeps showing the REAL clip
+// (state.currentTime/activeClipIndex/playing are untouched) — this is a canvas-only
+// preview with its own internal looping clock (`preview.timeMs`), ticked either by a
+// real rAF loop or the deterministic `__aiPreview.tick(dtMs)` debug hook for headless
+// tests (mirrors `__smPanel.tick`).
+//
+// STRUCTURAL edits (addBones/bindParts/reparent/movePivots) cannot pose-preview: they
+// don't exist in the doc yet, so any track targeting a new bone simply has no id to
+// resolve to and is silently dropped by `resolveTracks` (same "unresolvable target is
+// dropped" rule `applyAiResult` always used, just visible earlier now). They surface
+// ONLY in the preview bar's summary line (`describeStructuralChanges`) and take effect
+// on Apply, same as before A2.
+//
+// LIFECYCLE:
+//  - Entering preview auto-enables clean-preview (state.cleanPreview, A0) so the
+//    candidate loops with editor chrome hidden; exiting (Apply/Discard/Retry, all of
+//    which funnel through `exitPreviewCommon`) restores whatever it was before.
+//  - Starting a NEW request (Create/Modify) while already previewing discards the old
+//    preview first (`runAnimate` below).
+//  - Two triggers have no dedicated main.ts hook to call into — ai.ts's brief is
+//    explicitly not to touch main.ts/view/**, unlike smPanel.ts's `stopPreview` call
+//    from main.ts's `afterDocReplaced`. They are self-detected instead, polled from two
+//    places (`shouldAutoDiscardPreview`): buildAiPanel's own rebuild (notify() already
+//    fires synchronously at the end of both afterDocReplaced and setEditorMode, so the
+//    very next render catches it — a SILENT discard, no extra notify()) and the
+//    rAF/tick loop itself (a tick-guard, belt-and-suspenders for the deterministic test
+//    hook, which never goes through a render):
+//      1. A genuine doc REPLACE — mirrors render.ts's OWN cleanPreview reset exactly:
+//         doc reference changed AND both history stacks are freshly empty
+//         (resetHistory() is the unique signature of afterDocReplaced; an undo/redo
+//         also swaps state.doc but always leaves a stack non-empty).
+//      2. A switch away from Animate mode (buildAiPanel is Animate-only to begin with,
+//         so a stale preview left ticking in the background while its own UI is
+//         unmounted would silently keep overriding renderPose() forever otherwise).
+//  - Escape-to-discard is NOT wired here (Escape is main.ts's keydown handler — see
+//    smHandleEscape's precedent for how the SM preview does it). A future change that
+//    touches main.ts could add an `aiHandleEscape()` alongside it; out of scope here.
+// =====================================================================================
+
+interface AiPreviewState {
+  result: AnimateResult;
+  mode: 'new' | 'modify';
+  /** Threaded straight through to `applyAiResult` unchanged on Apply. */
+  applyOpts: ApplyAiOptions;
+  /** Candidate tracks, id-resolved against the doc as it stood when the request was
+   *  made (pre-structural — see the module comment above). */
+  tracks: Track[];
+  duration: number;
+  /** "wave" (mode 'new', sanitized/deduped exactly as Apply will name it) or
+   *  "modified Idle" (mode 'modify'). */
+  clipLabel: string;
+  keyCount: number;
+  /** '' when the response had no structural edits at all. */
+  structuralSummary: string;
+  /** state.cleanPreview's value before entering — restored on exit. */
+  priorCleanPreview: boolean;
+  /** Looping preview clock, 0..duration. */
+  timeMs: number;
+  rafId: number;
+  last: number;
+}
+let preview: AiPreviewState | null = null;
+/** The doc `enterPreview` was called against — see `shouldAutoDiscardPreview`. */
+let previewDocRef: RigDoc | null = null;
+
+/** Mirrors model.channelValue's rest half for a target that isn't `part`-typed at the
+ *  call site (a candidate track's target is just a resolved part id or 'root'). */
+function restFallbackFor(doc: RigDoc, target: string, channel: Channel): number {
+  const part = doc.parts.find((p) => p.id === target);
+  if (!part) return CHANNEL_DEFAULTS[channel]; // e.g. 'root', or a dangling id
+  switch (channel) {
+    case 'rotate': return part.rest.rotate;
+    case 'tx': return part.rest.tx;
+    case 'ty': return part.rest.ty;
+    case 'sx': return part.rest.sx;
+    case 'sy': return part.rest.sy;
+    case 'z': return CHANNEL_DEFAULTS.z; // stacking offset has no RestPose field
+    case 'opacity': return part.rest.opacity;
+  }
+}
+
+/** The `setPoseSampler` callback while previewing: samples the CANDIDATE's tracks at
+ *  the preview clock, rest-filling unkeyed channels — see the module comment above. */
+function previewSampler(target: string, channel: Channel): number {
+  const doc = state.doc;
+  if (!preview || !doc) return CHANNEL_DEFAULTS[channel];
+  const rest = restFallbackFor(doc, target, channel);
+  const track = preview.tracks.find((t) => t.target === target && t.channel === channel);
+  if (!track || track.keyframes.length === 0) return rest;
+  return sampleKeyList(track.keyframes, preview.timeMs, rest, channel === 'z');
+}
+
+/** True once a running preview should be silently dropped — see the module comment's
+ *  LIFECYCLE section for the two triggers this polls for. */
+function shouldAutoDiscardPreview(): boolean {
+  if (!preview) return false;
+  if (state.editorMode !== 'animate') return true;
+  if (state.doc !== previewDocRef && !canUndo() && !canRedo()) return true;
+  return false;
+}
+
+/** Shared teardown for every exit path (Apply/Discard/Retry/auto-discard): stops the
+ *  clock, restores normal canvas sampling (and repaints — `setPoseSampler(null)`
+ *  always does), restores the prior clean-preview flag. Does NOT call notify() — most
+ *  callers below need to do more doc work first, and the silent auto-discard paths
+ *  are already inside a render pass. */
+function exitPreviewCommon(): void {
+  if (!preview) return;
+  cancelAnimationFrame(preview.rafId);
+  setCleanPreview(preview.priorCleanPreview);
+  preview = null;
+  previewDocRef = null;
+  setPoseSampler(null);
+}
+
+function tickPreview(dtMs: number): void {
+  if (!preview) return;
+  preview.timeMs = preview.duration > 0 ? (preview.timeMs + dtMs) % preview.duration : 0;
+  renderPose();
+}
+
+function rafTick(now: number): void {
+  if (!preview) return;
+  if (shouldAutoDiscardPreview()) { exitPreviewCommon(); notify(); return; }
+  const dt = now - preview.last;
+  preview.last = now;
+  tickPreview(dt);
+  preview.rafId = requestAnimationFrame(rafTick);
+}
+
+/** Enter a preview for a just-received AnimateResult. Discards any preview already
+ *  running first (a new request always wins). No-ops if the doc vanished between the
+ *  request starting and returning (defensive — callers already guard this). */
+function enterPreview(
+  result: AnimateResult, mode: 'new' | 'modify', applyOpts: ApplyAiOptions,
+): void {
+  const doc = state.doc;
+  if (!doc) return;
+  if (preview) exitPreviewCommon();
+
+  const labelToId = new Map(doc.parts.map((p) => [p.label, p.id]));
+  const tracks = resolveTracks(result, labelToId);
+  const clipLabel = mode === 'new'
+    ? sanitizeClipName(applyOpts.clipName ?? result.clip.clipName ?? null, doc.clips.map((c) => c.name))
+    : `modified ${(applyOpts.clip ?? activeClip())?.name ?? 'clip'}`;
+
+  preview = {
+    result, mode, applyOpts, tracks,
+    duration: result.clip.duration,
+    clipLabel,
+    keyCount: tracks.reduce((n, t) => n + t.keyframes.length, 0),
+    structuralSummary: describeStructuralChanges(result.rig),
+    priorCleanPreview: state.cleanPreview,
+    timeMs: 0,
+    rafId: 0,
+    last: performance.now(),
+  };
+  previewDocRef = doc;
+  setCleanPreview(true);
+  setPoseSampler(previewSampler); // installs the override AND repaints the first frame
+  preview.rafId = requestAnimationFrame(rafTick);
+}
+
+/** Apply button: exits preview, then applies EXACTLY like pre-A2 did (one checkpoint,
+ *  protection enforcement included) — reproduces runAnimate's old post-apply tail. */
+function applyPreviewNow(): void {
+  if (!preview) return;
+  const { result, mode, applyOpts } = preview;
+  exitPreviewCommon();
+  const outcome = applyAiResult(result, mode, applyOpts);
+  if (!outcome) {
+    ai.status = 'Failed to apply — no document loaded.';
+    notify();
+    return;
+  }
+  state.editorMode = 'animate';
+  state.currentTime = 0;
+  state.playing = true;
+  const clampNote = result.clampedCount > 0
+    ? ` (clamped ${result.clampedCount} out-of-range key time${result.clampedCount === 1 ? '' : 's'})`
+    : '';
+  ai.status = mode === 'new'
+    ? `Done — created "${outcome.clip.name}" and switched to it${outcome.structural}${clampNote}.`
+    : `Done — playing the result${outcome.structural}${clampNote}.`;
+  // Clear the prompt only on a SUCCESSFUL apply — see AiPanelState's doc comment for
+  // why errors/cancels/discards leave it alone.
+  ai.promptText = '';
+  renderPose();
+  document.dispatchEvent(new CustomEvent('rig-play'));
+  notify();
+}
+
+/** Discard button: exits preview, applies nothing — the doc never saw the candidate. */
+function discardPreviewNow(): void {
+  if (!preview) return;
+  exitPreviewCommon();
+  ai.status = '';
+  notify();
+}
+
+// ---- Debug hook for headless verification (mirrors __smPanel's tick pattern) ----
+if (typeof window !== 'undefined') {
+  (window as unknown as { __aiPreview: unknown }).__aiPreview = {
+    isActive: (): boolean => !!preview,
+    status: () => (preview ? {
+      mode: preview.mode,
+      clipLabel: preview.clipLabel,
+      keyCount: preview.keyCount,
+      structuralSummary: preview.structuralSummary,
+      timeMs: preview.timeMs,
+      duration: preview.duration,
+    } : null),
+    /** Deterministic tick for headless verification (requestAnimationFrame is
+     *  throttled/paused in an unfocused automation tab) — mirrors the rAF loop's
+     *  per-frame work, tick-guard included. */
+    tick: (dtMs: number) => {
+      if (!preview) return null;
+      if (shouldAutoDiscardPreview()) { exitPreviewCommon(); notify(); return null; }
+      tickPreview(dtMs);
+      return { timeMs: preview.timeMs };
+    },
+    apply: (): void => applyPreviewNow(),
+    discard: (): void => discardPreviewNow(),
+    busy: (): boolean => ai.busy,
+    /** Console/live-verification convenience wrapping `__setAnimateCallForTest`: the
+     *  NEXT Create/Modify click resolves with `result` instead of calling the network
+     *  — lets a real browser session exercise the preview flow without an API key. */
+    fabricateNext: (result: AnimateResult): void => {
+      __setAnimateCallForTest(async () => result);
+    },
+  };
+}
+
 /** Toggle the whole-editor inert overlay (pointer-events + dim) while a request runs.
  * `.ai-panel` opts back into pointer events (see ui.css) so Cancel stays clickable. */
 function setEditorInert(active: boolean): void {
@@ -232,6 +533,15 @@ const ai: AiPanelState = {
 };
 
 export function buildAiPanel(el: HTMLElement): void {
+  // A2: reconcile the two preview-lifecycle triggers that have no dedicated main.ts
+  // hook to call into — a genuine doc replace, or a mode switch away from Animate (see
+  // shouldAutoDiscardPreview's doc comment). SILENT: notify() already fired to get us
+  // into this render pass, so calling it again here would recurse.
+  if (preview && shouldAutoDiscardPreview()) {
+    exitPreviewCommon();
+    ai.status = '';
+  }
+
   // Locked decision (v2.12 P5b): the assistant panel is Animate-only — choreographing
   // or critiquing a clip makes no sense while editing the character itself.
   if (state.editorMode !== 'animate') return;
@@ -372,6 +682,11 @@ export function buildAiPanel(el: HTMLElement): void {
 
   cancelBtn.onclick = () => ai.abort?.abort();
 
+  // A2: the preview bar's DOM element, if one is showing this render — a still-
+  // in-flight Retry needs to yank it off-screen immediately (see below) without
+  // waiting for the next notify()-driven rebuild.
+  let previewBarEl: HTMLElement | null = null;
+
   const runAnimate = async (mode: 'new' | 'modify'): Promise<void> => {
     const ctxv = requireCtx();
     const clip = activeClip();
@@ -379,6 +694,14 @@ export function buildAiPanel(el: HTMLElement): void {
     if (!promptBox.value.trim()) {
       status.textContent = 'Describe the motion you want.';
       return;
+    }
+    // Starting a new request always discards whatever preview is currently showing
+    // (A2 rule) — remove its DOM immediately rather than waiting for a rebuild, since
+    // the busy state we're about to enter reuses THIS SAME render pass's elements.
+    if (preview) {
+      exitPreviewCommon();
+      previewBarEl?.remove();
+      previewBarEl = null;
     }
     const controller = new AbortController();
     ai.abort = controller;
@@ -406,7 +729,7 @@ export function buildAiPanel(el: HTMLElement): void {
         value: pk.value,
       }));
 
-      const result = await animateWithClaude(
+      const result = await animateCallImpl(
         ctxv.apiKey, ctxv.doc, clip, promptBox.value.trim(), state.selectedPartIds,
         {
           imageBase64: image,
@@ -417,27 +740,21 @@ export function buildAiPanel(el: HTMLElement): void {
         },
       );
       // The doc is untouched up to this point — an abort before this line leaves no
-      // trace (checkpoint() only happens once applyAiResult starts applying).
-      const outcome = applyAiResult(result, mode, {
+      // trace. A2: a SUCCESSFUL response no longer applies here either — it enters a
+      // canvas-only PREVIEW (enterPreview) that the user reviews via Apply / Retry /
+      // Discard, so the doc stays untouched until an explicit Apply click.
+      enterPreview(result, mode, {
         clip: mode === 'modify' ? clip : undefined,
         clipName: result.clip.clipName,
         protectedKeys: idProtected,
       });
-      if (!outcome) throw new Error('No document loaded.');
-      state.editorMode = 'animate';
-      state.currentTime = 0;
-      state.playing = true;
       const clampNote = result.clampedCount > 0
         ? ` (clamped ${result.clampedCount} out-of-range key time${result.clampedCount === 1 ? '' : 's'})`
         : '';
-      ai.status = mode === 'new'
-        ? `Done — created "${outcome.clip.name}" and switched to it${outcome.structural}${clampNote}.`
-        : `Done — playing the result${outcome.structural}${clampNote}.`;
-      // Clear the prompt only on a SUCCESSFUL apply — see AiPanelState's doc comment
-      // for why errors/cancels leave it alone.
-      ai.promptText = '';
-      renderPose();
-      document.dispatchEvent(new CustomEvent('rig-play'));
+      ai.status = `Candidate ready — review it below.${clampNote}`;
+      // promptText is intentionally left alone here — see AiPanelState's doc comment;
+      // it now clears on a successful APPLY (applyPreviewNow), not on a successful
+      // generate, since the candidate hasn't been committed to anything yet.
     } catch (err) {
       ai.status = controller.signal.aborted
         ? 'Cancelled.'
@@ -450,17 +767,82 @@ export function buildAiPanel(el: HTMLElement): void {
       // inert, so the user could switch to Edit mode mid-request — buildAiPanel then
       // returns early (Animate-only) and never re-runs setBusy(false) to undo it.
       setEditorInert(false);
-      // notify() rebuilds every panel (picks up ai.status + the idle control state);
-      // it does not itself call renderPose(), matching the rest of this codebase's
-      // "mutate + notify(), repaint separately when needed" convention. The success
-      // path already repainted above; the failure/cancel paths change no doc state,
-      // so no repaint is needed there.
+      // notify() rebuilds every panel (picks up ai.status + the idle control state,
+      // and — A2 — the preview bar if enterPreview just ran). It does not itself call
+      // renderPose(): the success path already repainted above (enterPreview's
+      // setPoseSampler call does), and the failure/cancel/discard paths change no doc
+      // state, so no repaint is needed there either.
       notify();
     }
   };
 
   createBtn.onclick = () => runAnimate('new');
   modifyBtn.onclick = () => runAnimate('modify');
+
+  // A2: the preview bar — shown in place of an immediate apply once a Create/Modify
+  // request succeeds. Sits between the busy readout and the action buttons so it reads
+  // as the natural next step. Structural edits (bones/binds) never move the canvas
+  // pose (see the module comment above `enterPreview`), so a second line calls that
+  // out explicitly rather than leaving the user to wonder why nothing moved.
+  if (preview) {
+    const bar = document.createElement('div');
+    bar.className = 'ai-preview-bar';
+
+    const summaryParts = [
+      `Previewing: ${preview.clipLabel}`,
+      `${preview.keyCount} key${preview.keyCount === 1 ? '' : 's'}`,
+    ];
+    if (preview.structuralSummary) summaryParts.push(preview.structuralSummary);
+    const summary = document.createElement('p');
+    summary.className = 'ai-preview-summary';
+    summary.textContent = summaryParts.join(' · ');
+    bar.appendChild(summary);
+
+    if (preview.structuralSummary) {
+      const note = document.createElement('p');
+      note.className = 'hint ai-preview-note';
+      note.textContent =
+        'Structural changes (bones/binds) apply on Apply — they cannot be shown in this canvas preview.';
+      bar.appendChild(note);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'ai-preview-actions';
+
+    const applyBtn = document.createElement('button');
+    applyBtn.textContent = 'Apply';
+    applyBtn.className = 'ai-preview-apply';
+    applyBtn.dataset.aiAction = 'apply';
+    applyBtn.title = 'Commit this candidate to the document (one undo reverts it).';
+    applyBtn.onclick = () => applyPreviewNow();
+    actions.appendChild(applyBtn);
+
+    const retryBtn = document.createElement('button');
+    retryBtn.textContent = 'Retry';
+    retryBtn.dataset.aiAction = 'retry';
+    retryBtn.title = 'Discard this candidate and ask Claude again with the same prompt.';
+    retryBtn.onclick = () => {
+      if (!preview) return;
+      const mode = preview.mode;
+      exitPreviewCommon();
+      bar.remove();
+      previewBarEl = null;
+      void runAnimate(mode); // same closure/DOM — keeps the busy UI visible mid-request
+    };
+    actions.appendChild(retryBtn);
+
+    const discardBtn = document.createElement('button');
+    discardBtn.textContent = 'Discard';
+    discardBtn.dataset.aiAction = 'discard';
+    discardBtn.title = 'Throw this candidate away. (Future: Escape will do this too — not wired yet.)';
+    discardBtn.onclick = () => discardPreviewNow();
+    actions.appendChild(discardBtn);
+
+    bar.appendChild(actions);
+    previewBarEl = bar;
+    box.appendChild(bar);
+  }
+
   box.appendChild(createBtn);
   box.appendChild(modifyBtn);
 
