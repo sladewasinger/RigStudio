@@ -326,35 +326,35 @@ Category A — done (a66884c):
   selection crop, chrome stripped, transparent background.
 
 Follow-ups from live bones testing (queued behind the freeze-semantics wave):
-- [ ] **MAJOR: node editing on a bone-deformed part is incoherent** — node handles
+- [x] **MAJOR: node editing on a bone-deformed part is incoherent** (f89d6dc) — node handles
   sit on the REST shape while the art draws deformed; dragging momentarily aligns
   them, release diverges again. Fix: entering node editing on a bound part renders
   THAT PART at rest (bind pose) for the duration — node editing edits rest data,
   so the visuals must show rest; deformation resumes on exit (+ a hint).
-- [ ] **Bones visible in node-editing mode** (currently dimmed/hidden with the
+- [x] **Bones visible in node-editing mode** (f89d6dc) (currently dimmed/hidden with the
   other parts — they're the binding context and must stay visible/selectable).
-- [ ] **Bind button moves off the top bar** → node-editing-only, appears when
+- [x] **Bind button moves off the top bar** (f89d6dc) → node-editing-only, appears when
   node(s) are selected; if no bone tip/origin is co-selected, opens a dialog
   (which child bone of this part + tip-or-origin) — replaces the old whole-part
   bind (auto-bind covers that path now).
-- [ ] **Canvas-tools bar overflow** — long hint text (e.g. the IK tool's) pushes
+- [x] **Canvas-tools bar overflow** (f89d6dc) — long hint text (e.g. the IK tool's) pushes
   buttons out of view. Buttons must never hide: hint moves to its own slim second
   line (ellipsis + full text on hover).
-- [ ] **Bone glyphs not zoom-stable** (kite geometry in doc units) — fix per the
+- [x] **Bone glyphs not zoom-stable** (f89d6dc) (kite geometry in doc units) — fix per the
   new CLAUDE.md screen-constant-chrome gotcha, plus a generic zoom-sweep harness
   assertion so the whole class of bug gets caught.
-- [ ] **IK drag feedback** — highlight the solving chain + target line during an
+- [x] **IK drag feedback** (f89d6dc) — highlight the solving chain + target line during an
   IK drag so the tool explains itself.
-- [ ] **Nested-group SVG import** — the importer flattens below the top level;
+- [x] **Nested-group SVG import** (f89d6dc) — the importer flattens below the top level;
   rework to recursive: EVERY group becomes a part at any depth (exact SVG
   structure preserved — user decision; label = inkscape:label, else the SVG id,
   rename in-editor), parented per the nesting, geometry stays doc-space per the
   app convention. Acceptance fixture: public/girl_example.svg.
-- [ ] **Tip drags never change a child bone's length** — dragging a parent's tip
+- [x] **Tip drags never change a child bone's length** (f89d6dc) — dragging a parent's tip
   moves the shared joint; every descendant's local geometry (length + relative
   direction) is invariant, riding the joint. (Reported with screenshots; child
   currently shortens.)
-- [ ] **Group handle sets** — groups currently draw only the passive dashed union
+- [x] **Group handle sets** (next commit) — groups currently draw only the passive dashed union
   box: no scale/rotate corners, and the second-click mode toggle is invisible.
   Fix: first click = scale handles implemented as DISTRIBUTED rest edits (scale
   every descendant's rest size+position about the group pivot, one undo — the

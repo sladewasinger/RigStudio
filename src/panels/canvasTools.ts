@@ -64,6 +64,11 @@ export function groupAction(): void {
   reorderCanvas();
   selectPart(group.id);
   notify();
+  // BUG FIX: reorderCanvas() above repaints with the OLD (pre-group) selection —
+  // selectPart() only changes state, so without this the canvas overlay stayed stale
+  // (still showing the previous selection's handles) until the next unrelated canvas
+  // interaction. ungroupAction already does this; groupAction was missing it.
+  renderPose();
 }
 
 /** Dissolve the selected group/bone (Ctrl+Shift+G). */

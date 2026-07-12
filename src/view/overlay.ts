@@ -12,13 +12,13 @@
 
 import { ctx, SVG_NS, round1, nodeKey, parseNodeKey } from './context';
 import {
-  state, RigPart, selectedPart, selectedParts, ancestorChain, chainBonesOfPart,
+  state, RigPart, selectedPart, selectedParts, chainBonesOfPart,
 } from '../core/model';
 import { parsePath } from '../geometry/paths';
 import { applyMat, matrixOfTransform } from '../geometry/transforms';
 import { handleSize } from './coords';
 import {
-  poseTime, effectivePivot, effectiveTip, partRootBoxes, fullPoseTransform,
+  poseTime, effectivePivot, effectiveTip, partRootBoxes, fullPoseTransform, groupUnionBox,
 } from './pose';
 import { nodeEditSkinSuspendId } from './focus';
 
@@ -152,46 +152,40 @@ export function renderOverlay(): void {
   }
   if (selectedBoneTip) ctx.overlay.appendChild(selectedBoneTip);
 
-  // Selected GROUPS get a dashed box around everything they contain (root-space
-  // AABB of the descendants' rendered boxes — groups have no artwork of their own).
-  for (const part of selectedParts()) {
-    if (part.kind !== 'group') continue;
-    const descendantIds = doc.parts
-      .filter((p) => p.paths.length > 0 && ancestorChain(p).some((a) => a.id === part.id))
-      .map((p) => p.id);
-    const boxes = [...partRootBoxes(descendantIds).values()];
-    if (boxes.length === 0) continue;
-    const x0 = Math.min(...boxes.map((b) => b.x));
-    const y0 = Math.min(...boxes.map((b) => b.y));
-    const x1 = Math.max(...boxes.map((b) => b.x + b.w));
-    const y1 = Math.max(...boxes.map((b) => b.y + b.h));
-    const pad = size * 0.8;
-    const rect = document.createElementNS(SVG_NS, 'rect');
-    rect.setAttribute('x', String(x0 - pad));
-    rect.setAttribute('y', String(y0 - pad));
-    rect.setAttribute('width', String(x1 - x0 + pad * 2));
-    rect.setAttribute('height', String(y1 - y0 + pad * 2));
-    rect.setAttribute(
-      'class',
-      part.id === state.selectedPartId ? 'select-box' : 'select-box secondary',
-    );
-    rect.setAttribute('stroke-dasharray', `${size * 0.9} ${size * 0.7}`);
-    holder.appendChild(rect); // root-coordinate passive holder
-  }
-
   // Unified select-tool gizmo (rotate circle + move cross). Drawn BEFORE the per-part
   // boxes/handles so Edit's interactive scale/rotate handles stay on top and clickable.
   renderSelectGizmo(size, t, rootTransform);
 
-  // Dashed transform boxes around every selected part, rotating live with the pose.
+  // Dashed transform boxes + Inkscape-style handles for every selected part. ART parts
+  // use their own rendered bbox (part-local boxTransform); GROUPS are partless (no
+  // artwork of their own — CLAUDE.md), so they use the root-space union AABB of their
+  // descendants' rendered boxes instead (groupUnionBox — the same box the dashed group
+  // outline always drew) and, for the PRIMARY selection, the identical scale/rotate
+  // handle sets an art part gets (minus skew — groups have no shear field): first click
+  // = 8 scale handles (a DISTRIBUTED rest edit across every descendant, rigOps.ts's
+  // applyGroupScale, the flipSelected family generalized to scale), second click = 4
+  // rotate corners (the group's OWN rest.rotate, which genuinely propagates through the
+  // pose chain). Per the visible-counterpart GOTCHA, the handle-set toggle must render
+  // something different for every selectable KIND — groups used to draw only the
+  // passive dashed box with no way to tell scale mode from rotate mode.
   for (const part of selectedParts()) {
+    const isGroup = part.kind === 'group';
     const g = ctx.partGroups.get(part.id);
-    if (!g || part.paths.length === 0) continue;
+    let box: { x: number; y: number; width: number; height: number };
+    let boxTransform: string;
+    if (isGroup) {
+      const ub = groupUnionBox(part);
+      if (!ub) continue; // nothing inside yet — nothing to box or handle
+      box = { x: ub.x0, y: ub.y0, width: ub.x1 - ub.x0, height: ub.y1 - ub.y0 };
+      boxTransform = rootTransform; // union bbox is already root-space
+    } else {
+      if (!g || part.paths.length === 0) continue;
+      const partTransform = g.getAttribute('transform') ?? '';
+      boxTransform = [rootTransform, partTransform].filter(Boolean).join(' ');
+      box = g.getBBox();
+    }
     const primary = part.id === state.selectedPartId;
-    const partTransform = g.getAttribute('transform') ?? '';
-    const boxTransform = [rootTransform, partTransform].filter(Boolean).join(' ');
-    const box = g.getBBox();
-    const pad = size * 0.6;
+    const pad = size * (isGroup ? 0.8 : 0.6);
     const x0 = box.x - pad, y0 = box.y - pad;
     const x1 = box.x + box.width + pad, y1 = box.y + box.height + pad;
 
@@ -215,6 +209,7 @@ export function renderOverlay(): void {
       // the geometry follows its bones, not a group transform. A small label says so, so
       // the click never dead-ends silently ("why can't I grab a handle?"). A skinned part
       // renders with an empty group transform, so boxTransform is axis-aligned root space.
+      // (Groups are never skinned — bindPartsToBones only ever targets art parts.)
       const hint = document.createElementNS(SVG_NS, 'text');
       hint.setAttribute('x', String(x0));
       hint.setAttribute('y', String(y0 - size * 0.6));
@@ -250,20 +245,24 @@ export function renderOverlay(): void {
           handles.appendChild(h);
         }
       } else {
-        // Inkscape's second handle set: corners rotate, sides SKEW.
+        // Inkscape's second handle set: corners rotate, sides SKEW — groups skip the
+        // skew sides entirely (no shear field), so their set is rotate-corners-only;
+        // still visibly distinct from the 8-square scale set (the GOTCHA's bar).
         appendRotateCorners(handles, x0, y0, x1, y1, size);
-        for (const [name, hx, hy] of [
-          ['n', cx, y0], ['e', x1, cy], ['s', cx, y1], ['w', x0, cy],
-        ] as [string, number, number][]) {
-          const s = size * 1.0;
-          const h = document.createElementNS(SVG_NS, 'rect');
-          h.setAttribute('x', String(hx - s / 2));
-          h.setAttribute('y', String(hy - s / 2));
-          h.setAttribute('width', String(s));
-          h.setAttribute('height', String(s));
-          h.setAttribute('class', `skew-handle handle-${name}`);
-          h.dataset.skewSide = name;
-          handles.appendChild(h);
+        if (!isGroup) {
+          for (const [name, hx, hy] of [
+            ['n', cx, y0], ['e', x1, cy], ['s', cx, y1], ['w', x0, cy],
+          ] as [string, number, number][]) {
+            const s = size * 1.0;
+            const h = document.createElementNS(SVG_NS, 'rect');
+            h.setAttribute('x', String(hx - s / 2));
+            h.setAttribute('y', String(hy - s / 2));
+            h.setAttribute('width', String(s));
+            h.setAttribute('height', String(s));
+            h.setAttribute('class', `skew-handle handle-${name}`);
+            h.dataset.skewSide = name;
+            handles.appendChild(h);
+          }
         }
       }
       ctx.overlay.appendChild(handles);
@@ -273,16 +272,16 @@ export function renderOverlay(): void {
       // drag now rotates instead of moves. Render the same 4 rotate-handle corners as
       // Edit's rotate set (interactions.ts routes their drag through the same
       // setup-aware rotate pipeline, keying instead of writing rest) but WITHOUT the
-      // skew sides — skew has no keyable channel in Animate.
+      // skew sides — skew has no keyable channel in Animate (groups match art parts
+      // here exactly: same corners, keying the group's OWN rotate channel).
       const handles = document.createElementNS(SVG_NS, 'g');
       handles.setAttribute('transform', boxTransform);
       appendRotateCorners(handles, x0, y0, x1, y1, size);
       ctx.overlay.appendChild(handles);
     } else {
-      // Animate's first click (translate/scale set) — scale isn't keyable for parts,
-      // so this stays the plain dashed box with passive corner markers (drag the body
-      // to translate); also the fallback for skinned parts in either mode, which don't
-      // respond to pose drags at all.
+      // Animate's first click (translate/scale set) — scale isn't keyable, so this
+      // stays the plain dashed box with passive corner markers (drag the body to
+      // translate/key); also the fallback for skinned parts in either mode.
       const boxCorners = document.createElementNS(SVG_NS, 'g');
       boxCorners.setAttribute('class', 'overlay-passive');
       boxCorners.setAttribute('transform', boxTransform);
@@ -601,6 +600,22 @@ function renderDragGizmo(holder: SVGGElement, size: number): void {
       ctx.drag.current.x + size * 1.5,
       ctx.drag.current.y - size * 1.5,
       `${Math.round(ctx.drag.part.rest.sx * 100)}% × ${Math.round(ctx.drag.part.rest.sy * 100)}%`,
+      size,
+    );
+  } else if (ctx.drag.kind === 'groupScale' && ctx.drag.current) {
+    // Same readout as a single part's scale drag, recomputed from the live pointer
+    // (no single `part.rest.sx` to read back — the factor is distributed).
+    const current = ctx.drag.current;
+    const d = ctx.drag;
+    const denX = d.grabRoot.x - d.pivotRoot.x;
+    const denY = d.grabRoot.y - d.pivotRoot.y;
+    const fx = Math.abs(denX) > 1e-6 ? (current.x - d.pivotRoot.x) / denX : 1;
+    const fy = Math.abs(denY) > 1e-6 ? (current.y - d.pivotRoot.y) / denY : 1;
+    addGizmoText(
+      holder,
+      current.x + size * 1.5,
+      current.y - size * 1.5,
+      `${Math.round(fx * 100)}% × ${Math.round(fy * 100)}%`,
       size,
     );
   } else if (ctx.drag.kind === 'ik' && ctx.drag.current) {

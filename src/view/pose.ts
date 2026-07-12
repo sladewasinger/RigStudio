@@ -97,6 +97,37 @@ export function effectiveTip(part: RigPart, t: number | null): { x: number; y: n
   );
 }
 
+/** Every part inside `group` at any depth (excludes the group itself) — any kind (art,
+ *  bone, nested group), for distributed group-wide rest edits (scale/rotate handles). */
+export function groupDescendants(group: RigPart): RigPart[] {
+  const doc = state.doc;
+  if (!doc) return [];
+  return doc.parts.filter(
+    (p) => p.id !== group.id && ancestorChain(p).some((a) => a.id === group.id),
+  );
+}
+
+/**
+ * Root-space union AABB of a group's descendant ARTWORK (partRootBoxes, which only
+ * measures parts with their own paths) — the same box the dashed group outline draws,
+ * now also the anchor rect for the group's scale/rotate handle sets (overlay.ts,
+ * interactions.ts). Null when the group contains no rendered geometry yet (nothing to
+ * box or handle).
+ */
+export function groupUnionBox(
+  group: RigPart,
+): { x0: number; y0: number; x1: number; y1: number } | null {
+  const ids = groupDescendants(group).filter((p) => p.paths.length > 0).map((p) => p.id);
+  const boxes = [...partRootBoxes(ids).values()];
+  if (boxes.length === 0) return null;
+  return {
+    x0: Math.min(...boxes.map((b) => b.x)),
+    y0: Math.min(...boxes.map((b) => b.y)),
+    x1: Math.max(...boxes.map((b) => b.x + b.w)),
+    y1: Math.max(...boxes.map((b) => b.y + b.h)),
+  };
+}
+
 /** Rendered root-space AABBs of the given parts (for align/distribute). */
 export function partRootBoxes(ids: string[]): Map<string, { x: number; y: number; w: number; h: number }> {
   const out = new Map<string, { x: number; y: number; w: number; h: number }>();

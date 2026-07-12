@@ -23,7 +23,9 @@
 import '../../style.css';
 import { expect } from 'vitest';
 import { state, notify, selectPart as modelSelectPart } from '../../core/model';
-import { renderPose, zoomBy } from '../../view';
+import { buildCanvas, renderPose, resetView, zoomBy } from '../../view';
+import { resetHistory } from '../../core/history';
+import { importSvg } from '../../io/importSvg';
 import { Mat, matrixOfTransform } from '../../geometry/transforms';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -128,6 +130,29 @@ export function bootRig(): Promise<void> {
     pristine = hook().serializeDoc(state.doc!);
   })();
   return bootPromise;
+}
+
+/**
+ * Swap in a DIFFERENT public/ SVG fixture (e.g. girl_example.svg's genuinely nested,
+ * partless 'group' parts — Pip's own body-in-body import stays kind 'art' since the
+ * outer group has a direct sibling path, so it doesn't exercise the group-handle code
+ * path). Mirrors main.ts's loadSvgText/afterDocReplaced by hand (no button to click —
+ * the toolbar only wires the bundled Pip sample). Local to the test that calls it;
+ * later tests' beforeEach(resetRig) restores Pip as usual.
+ */
+export async function loadFixtureSvg(fileName: string, docName = 'fixture'): Promise<void> {
+  const res = await fetch(`${import.meta.env.BASE_URL}${fileName}`);
+  if (!res.ok) throw new Error(`fixture "${fileName}" not found under public/`);
+  state.doc = importSvg(await res.text(), docName);
+  state.editorMode = 'setup';
+  state.selectedPartId = null;
+  state.selectedPartIds = [];
+  state.activeClipIndex = 0;
+  state.currentTime = 0;
+  resetHistory();
+  buildCanvas(document.getElementById('canvas')!);
+  resetView();
+  notify();
 }
 
 /** Restore the pristine sample + reset editor state. Call in beforeEach. */

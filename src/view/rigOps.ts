@@ -7,14 +7,14 @@
 
 import {
   state, selectedParts, selectedPart, setKeyframe, channelValue, boneChain, chainBonesOfPart,
-  RigPart, SkinBone, SkinOverride,
+  ancestorChain, RigPart, SkinBone, SkinOverride,
 } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from '../geometry/transforms';
-import { ctx, linearOnly, parseNodeKey, round1, round3, wrapToPi } from './context';
+import { ctx, linearOnly, parseNodeKey, round1, round2, round3, wrapToPi } from './context';
 import {
   poseTime, groupTransformOf, chainMatOf, effectivePivot, effectiveTip, fullPoseTransform,
-  ownTranslateOf,
+  ownTranslateOf, groupDescendants,
 } from './pose';
 import { applyPathAttrs } from './partDom';
 import { invalidateSkinCache } from './skinRender';
@@ -48,6 +48,74 @@ export function flipSelected(axis: 'h' | 'v'): boolean {
   }
   renderPose();
   return true;
+}
+
+/** One descendant's frozen drag-start snapshot for a group scale (see applyGroupScale). */
+export interface GroupScaleMember {
+  part: RigPart;
+  startSx: number; startSy: number;
+  /** Root-space effective pivot at drag start — the position that scales about the
+   *  group's own pivot. */
+  startPivotRoot: { x: number; y: number };
+}
+
+/**
+ * Snapshot every descendant of `group` for a distributed group-scale drag, ANCESTOR-
+ * FIRST (shallower ancestorChain first). Order matters: applyGroupScale re-solves each
+ * member's chain matrix LIVE (not frozen) against the CURRENT doc, so a member must be
+ * processed only after every member that is one of its own ancestors — otherwise a
+ * grandchild (e.g. an art part nested inside another member) would read a stale,
+ * pre-correction chain for that ancestor.
+ */
+export function groupScaleMembers(group: RigPart, t: number | null): GroupScaleMember[] {
+  const members = groupDescendants(group).map((part) => ({
+    part,
+    startSx: part.rest.sx, startSy: part.rest.sy,
+    startPivotRoot: effectivePivot(part, t),
+  }));
+  members.sort((a, b) => ancestorChain(a.part).length - ancestorChain(b.part).length);
+  return members;
+}
+
+/**
+ * Group scale handle drag (the flipSelected family, generalized from reflection to
+ * non-uniform scale): apply a (fx,fy) scale about `pivotRoot` to every snapshotted
+ * descendant. Each part's OWN rest scale multiplies — its artwork grows/shrinks about
+ * its own local pivot, per the rest-scale convention (innerLocalTransform) — and its
+ * rendered PIVOT position scales about the GROUP's pivot: a true root-space point-scale
+ * (target = pivotRoot + f*(startPivot - pivotRoot)). The local rest.tx/ty needed to land
+ * there is solved by inverting the part's CURRENT (not frozen) chain matrix — members
+ * are processed ancestor-first (groupScaleMembers), so by the time a nested member is
+ * solved, any of ITS OWN ancestors that are also members already carry their corrected
+ * rest.tx/ty, and chainMatOf reads that live value. Solving against a frozen ancestor
+ * chain instead double-applies the ancestor's own shift on top of the nested member's —
+ * the bug this replaced (caught live on an imported nested group, girl_example.svg's
+ * RightArm ⊃ Arm ⊃ g291-2). A part whose own axes are rotated relative to root only
+ * gets this exactly right when fx==fy (uniform) — a non-uniform scale of a rotated
+ * child would need a local shear this model has no field for; same pragmatic
+ * limitation as flipSelected's local-axis negation, accepted by design. Idempotent per
+ * pointermove: solved fresh from the FROZEN start pivots every call, so per-frame
+ * rounding never compounds.
+ */
+export function applyGroupScale(
+  members: GroupScaleMember[], t: number | null,
+  pivotRoot: { x: number; y: number }, fx: number, fy: number,
+): void {
+  for (const m of members) {
+    m.part.rest.sx = round2(m.startSx * fx);
+    m.part.rest.sy = round2(m.startSy * fy);
+    const target = {
+      x: pivotRoot.x + fx * (m.startPivotRoot.x - pivotRoot.x),
+      y: pivotRoot.y + fy * (m.startPivotRoot.y - pivotRoot.y),
+    };
+    // chainMatOf recomputes FRESH from live doc state on every call (not cached) — for
+    // an ancestor-member processed earlier in this same loop, that live read already
+    // reflects its just-written rest.tx/ty.
+    const chain = chainMatOf(m.part, t);
+    const local = applyMat(invertMat(chain), target.x, target.y);
+    m.part.rest.tx = round1(local.x - m.part.pivot.x);
+    m.part.rest.ty = round1(local.y - m.part.pivot.y);
+  }
 }
 
 /**

@@ -7,7 +7,8 @@ that way: no app-specific code, naming, or export assumptions).
 
 ## What it does
 
-Import a labeled SVG (Inkscape layer groups) → each named group becomes a rig **part**
+Import an SVG (Inkscape/Illustrator) → every group at ANY depth becomes a rig **part**
+(exact structure preserved; label = inkscape:label else the SVG id)
 with a **pivot** (joint) and can be **parented** to another part (bone hierarchy) →
 switch between **Setup mode** (edit the character itself: rest pose, pivots, parenting,
 path nodes — never keyframed) and **Animate mode** (pose parts on a canvas and record
@@ -68,7 +69,7 @@ from the console; `window.__smPanel` drives the state-machine editor determinist
 | File | Responsibility |
 |---|---|
 | `core/model.ts` | Document model (`RigDoc`/`RigPart`/`Clip`/`Track`/`Keyframe`), part hierarchy helpers (`ancestorChain`, `setParent`, cycle-safe), rest pose, app state singleton (`editorMode`: `setup`\|`animate`, multi-selection, playback speed/ping-pong/onion flags), pub/sub (`subscribe`/`notify`), pose sampling (`sampleChannel`, 4 easings), keyframe clipboard (`copyKeys`/`pasteKeysAt`/`copyPoseAt`), project (de)serialization (`serializeDoc`/`deserializeDoc`/`normalizeDoc`) |
-| `io/importSvg.ts` | SVG file → `RigDoc`. Unwraps Inkscape layers; named groups → parts; ellipse/circle/rect → path data; pivots seeded from the *composed matrix's fixed point* (works whether the group is authored as `rotate(a,cx,cy)` or the `matrix(...)` Inkscape rewrites it into) or from `inkscape:transform-center-x/y` as a `pivotHint` resolved once geometry is measurable |
+| `io/importSvg.ts` | SVG file → `RigDoc`. Unwraps Inkscape layers, then RECURSIVE: every `<g>` at any depth becomes a part (exact SVG structure; label = inkscape:label else id; kind 'art' iff it has direct paths), parented per the nesting; each part's baked `transform` is the FULL composed ancestor chain (doc-space invariant — render-time parenting composes pose only); ellipse/circle/rect → path data; pivots per part from the *composed matrix's fixed point* or `inkscape:transform-center-x/y` as a `pivotHint` |
 | `view/index.ts` | **Pure re-export facade (33 lines)** over the `src/view/` modules — consumers import ONLY `./view`, never deep paths. The canvas responsibilities live in 13 layered modules: `view/context.ts` (shared mutable state `ctx`, DragState type, constants, micro-utils), `view/coords.ts` (screen↔doc conversion from live CTM/transform strings), `view/pose.ts` (pose composition, effective pivots, `partRootBoxes`), `view/focus.ts` (drill-down/dimming, `artworkUnderPointer`), `view/skinRender.ts` (LBS deformation + private cache), `view/overlay.ts` (selection boxes, handle sets, pivots, gizmos, node handles — render-time side effects live here on purpose), `view/snapping.ts` (candidate collection wiring), `view/render.ts` (`renderPose`, onion skins, `setPoseSampler`), `view/partDom.ts` (part-group/path DOM registry), `view/nodeEditing.ts` (node ops, drag math, structural join/delete), `view/rigOps.ts` (flip/nudge/bind/bone placement), `view/camera.ts` (viewBox zoom/pan/fit), `view/interactions.ts` (pointer routing, every drag pipeline, checkpoint deferral), `view/canvas.ts` (`buildCanvas`, render-then-measure pivot seeding) |
 | `timeline/timeline.ts` | Clip transport (play/pause/duplicate/rename/delete/duration, speed selector, ping-pong, onion toggle, fps readout), scrubber, keyframe lanes with click/shift-click/marquee selection, retime drag, a key-property row (time/value/easing) for the selection, copy/paste/nudge/column-select |
 | `panels/index.ts` | **Pure re-export facade** over `src/panels/`'s submodules — consumers import ONLY `./panels`, never deep paths. `panels/icons.ts` (the inline SVG icon set + `icon`/`iconButton` helpers), `panels/layers.ts` (Layers **tree** — parts nest under their parent, fold open to show child paths, drag-to-parent / drop-to-unparent), `panels/inspector.ts` (Setup: rest/pivot/parent fields; Animate: keyed channel fields; plus the skinning, align & distribute, node-operations, and object/style sections), `panels/ai.ts` (the Claude assistant panel, mounted at the bottom of the inspector), `panels/canvasTools.ts` (the tool switcher, snap toggle, and flip/group/ungroup/bind actions shown above the canvas). `panels/smPanel.ts` (state-machine editor) lives alongside these but is imported directly by its consumers (`main.ts`, `timeline/timeline.ts`), not re-exported by the facade |
@@ -385,6 +386,36 @@ harness (`src/__tests__/interaction/harness.ts` — use its helpers rather than
 hand-rolling gestures) and enforced by `npm run test:interaction`.
 
 ## Status
+
+### Fifteenth wave (v2.13: bones-as-hierarchy program) — implemented and verified
+
+Built 2026-07-11 across seven audited waves driven by the user's live testing
+(each commit gated on build + unit + interaction suites): d1c26b5 (six
+reproduce-then-fix bone bugs incl. point-in-fill auto-bind targeting and
+render-neutral binding), 06320f8 (loop moved to clips — Rive parity — + SM
+three-column layout), a374dbd (the freeze/non-freeze semantics matrix: freeze
+edits the rig over static art via bind-refresh holding the CURRENT appearance;
+non-freeze poses — tip drags aim+stretch with a per-bone LBS stretch term;
+chains parented under their art part; the |child origin − parent tip| == 0
+invariant asserted after every scenario), b7ae446 (freeze mode UI with banner +
+tint, root-only bone positions — children are rotation+length, File→New,
+skinned→deform language), a66884c (dirty-flag unsaved guard + PNG/SVG export),
+f89d6dc (RECURSIVE nested-group import preserving exact SVG structure — the
+girl fixture imports as 21 nested parts, and PIP_MASTER itself surfaced
+authored body-in-body nesting the flat importer had been destroying — plus the
+8-item batch: node-editing suspends deformation for the edited bound part,
+bones visible in node mode, bind-to-bone dialog in node ops, canvas-tools
+two-row layout, screen-constant bone glyphs + the generic assertScreenConstant
+zoom-sweep helper, IK chain highlight + target line, tip drags preserve every
+descendant's length/direction), and group handle sets (distributed rest-scale
+on descendants about the group pivot — ancestor-first ordering with live chain
+re-derivation to avoid double-shifting nested members — rotate corners on
+second click, Animate parity; found+fixed a stale-overlay bug in Ctrl+G).
+Two new GOTCHA conventions came out of this wave's recurring-bug analysis
+(screen-constant chrome; visible mode-change counterparts). Final gates:
+build clean, **332 unit / 11 files**, **72 interaction / 10 files**.
+Deferred by user decision: swap the default sample to girl_example + pull the
+commercial PIP_MASTER art from public distribution (the marked FINAL item).
 
 ### Fourteenth wave (v2.12: UX overhaul program) — implemented and verified
 

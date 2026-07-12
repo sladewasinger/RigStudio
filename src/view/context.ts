@@ -96,6 +96,31 @@ export type DragState =
       active: boolean;
     }
   | {
+      kind: 'groupScale';
+      group: RigPart;
+      handle: string; // nw|ne|se|sw|n|e|s|w
+      /** Group's effective pivot at drag start — the frozen anchor every descendant
+       * scales about (root space). Never changes during the drag: a scale never
+       * touches the group's OWN rest, so its effective pivot is genuinely constant. */
+      pivotRoot: { x: number; y: number };
+      /** The dragged handle's root position at drag start — the scale factor's 1.0
+       * reference distance from pivotRoot. */
+      grabRoot: { x: number; y: number };
+      /** Every descendant's frozen drag-start snapshot (rigOps.ts's GroupScaleMember
+       * shape, matched structurally so this layer never imports from rigOps). */
+      members: {
+        part: RigPart;
+        startSx: number; startSy: number;
+        startPivotRoot: { x: number; y: number };
+      }[];
+      /** poseTime() at drag start — Setup's null, threaded through so applyGroupScale's
+       *  live chainMatOf re-reads use the same sampling mode as the seed snapshot. */
+      poseT: number | null;
+      current: { x: number; y: number } | null;
+      startClient: { x: number; y: number };
+      active: boolean;
+    }
+  | {
       kind: 'skew';
       part: RigPart;
       side: 'n' | 'e' | 's' | 'w';

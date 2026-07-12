@@ -31,7 +31,7 @@ import {
 } from './coords';
 import {
   poseTime, innerLocalTransform, fullPoseTransform, groupTransformOf,
-  chainMatOf, ownTranslateOf, effectivePivot, effectiveTip,
+  chainMatOf, ownTranslateOf, effectivePivot, effectiveTip, groupUnionBox,
 } from './pose';
 import {
   clearGroupEntry, artworkUnderPointer, stepOutFocus,
@@ -49,6 +49,7 @@ import {
 import {
   cancelBonePlacement, autoBindPlacedBone, aimBoneAtTip,
   refreshBindForChain, refreshFrozenSkinWeights, captureFrozenBaseline,
+  groupScaleMembers, applyGroupScale,
 } from './rigOps';
 import { applyViewRect, zoomAround } from './camera';
 
@@ -227,11 +228,43 @@ export function wireInteractions(): void {
     }
     if (ev.button !== 0) return;
 
-    // Scale handle (Setup mode)
+    // Scale handle (Setup mode). A GROUP has no artwork/local frame of its own — its
+    // handle grabs the root-space union bbox (groupUnionBox, same box the dashed outline
+    // draws) and starts a DISTRIBUTED rest edit across every descendant instead of the
+    // single-part pipeline below (rigOps.ts's groupScaleMembers/applyGroupScale).
     if (target instanceof SVGElement && target.dataset.handle) {
       const part = selectedPart();
-      const g = part ? ctx.partGroups.get(part.id) : null;
-      if (!part || !g) return;
+      if (!part) return;
+      if (part.kind === 'group') {
+        const ub = groupUnionBox(part);
+        if (!ub) return; // nothing inside yet — nothing to scale
+        const t = poseTime();
+        const pad = handleSize() * 0.8; // matches overlay.ts's group-box padding
+        const x0 = ub.x0 - pad, y0 = ub.y0 - pad, x1 = ub.x1 + pad, y1 = ub.y1 + pad;
+        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+        const spots: Record<string, { x: number; y: number }> = {
+          nw: { x: x0, y: y0 }, ne: { x: x1, y: y0 }, se: { x: x1, y: y1 }, sw: { x: x0, y: y1 },
+          n: { x: cx, y: y0 }, s: { x: cx, y: y1 }, e: { x: x1, y: cy }, w: { x: x0, y: cy },
+        };
+        const grab = spots[target.dataset.handle];
+        if (!grab) return;
+        ctx.drag = {
+          kind: 'groupScale',
+          group: part,
+          handle: target.dataset.handle,
+          pivotRoot: effectivePivot(part, t),
+          grabRoot: grab,
+          members: groupScaleMembers(part, t),
+          poseT: t,
+          current: null,
+          startClient: { x: ev.clientX, y: ev.clientY },
+          active: false,
+        };
+        try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+        return;
+      }
+      const g = ctx.partGroups.get(part.id);
+      if (!g) return;
       const box = g.getBBox();
       const pad = handleSize() * 0.6;
       const x0 = box.x - pad, y0 = box.y - pad;
@@ -745,6 +778,25 @@ export function wireInteractions(): void {
       }
       renderPose();
       notifyTimelineOnly();
+    } else if (ctx.drag.kind === 'groupScale') {
+      const d = ctx.drag;
+      const p = pointerInRoot(ev);
+      d.current = { x: p.x, y: p.y };
+      const clampF = (f: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, f));
+      let fx = 1, fy = 1;
+      const denX = d.grabRoot.x - d.pivotRoot.x;
+      const denY = d.grabRoot.y - d.pivotRoot.y;
+      if (Math.abs(denX) > 1e-6) fx = clampF((p.x - d.pivotRoot.x) / denX);
+      if (Math.abs(denY) > 1e-6) fy = clampF((p.y - d.pivotRoot.y) / denY);
+      if (['n', 's'].includes(d.handle)) fx = 1;
+      if (['e', 'w'].includes(d.handle)) fy = 1;
+      if (ev.ctrlKey && !['n', 's', 'e', 'w'].includes(d.handle)) {
+        // Uniform: follow whichever axis moved more (mirrors the per-part scale drag).
+        const f = Math.abs(fx - 1) > Math.abs(fy - 1) ? fx : fy;
+        fx = f; fy = f;
+      }
+      applyGroupScale(d.members, d.poseT, d.pivotRoot, fx, fy);
+      renderPose();
     } else if (ctx.drag.kind === 'scale') {
       const d = ctx.drag;
       const p = pointerInRoot(ev);
