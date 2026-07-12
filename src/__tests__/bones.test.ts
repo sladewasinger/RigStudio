@@ -12,7 +12,10 @@
 
 import { describe, expect, it } from 'vitest';
 import { boneChain, normalizeDoc, RigDoc, SkinOverride } from '../core/model';
-import { distToSegment, overrideWeightRow, segIntersectsBox, skinWeights } from '../geometry/skin';
+import {
+  artDescendantsOf, chainAnchorPart, distToSegment, expandBindTarget, overrideWeightRow,
+  segIntersectsBox, skinWeights,
+} from '../geometry/skin';
 import { makeDoc, makePart, makePath } from './helpers';
 
 describe('boneChain', () => {
@@ -53,6 +56,107 @@ describe('boneChain', () => {
     // Self-parent cycle must not hang.
     const b = makePart('b', { kind: 'bone', parentId: 'b' });
     expect(boneChain(makeDoc([b]).parts, 'b').map((p) => p.id)).toEqual(['b']);
+  });
+});
+
+describe('Group-level auto-bind targeting (pure)', () => {
+  describe('artDescendantsOf', () => {
+    it('collects every ART descendant at any depth, excluding the part itself', () => {
+      // group ⊃ outerArt(1 path) ⊃ innerArt(3 paths) ⊃ bone ⊃ deepArt(1 path)
+      const group = makePart('group', { kind: 'group' });
+      const outerArt = makePart('outerArt', { kind: 'art', parentId: 'group', paths: [makePath('p0')] });
+      const innerArt = makePart('innerArt', {
+        kind: 'art', parentId: 'outerArt', paths: [makePath('p1'), makePath('p2'), makePath('p3')],
+      });
+      const bone = makePart('bone', { kind: 'bone', parentId: 'innerArt' });
+      const deepArt = makePart('deepArt', { kind: 'art', parentId: 'bone', paths: [makePath('p4')] });
+      const parts = [group, outerArt, innerArt, bone, deepArt];
+      expect(artDescendantsOf(parts, group).map((p) => p.id).sort())
+        .toEqual(['deepArt', 'innerArt', 'outerArt']);
+      expect(artDescendantsOf(parts, outerArt).map((p) => p.id).sort())
+        .toEqual(['deepArt', 'innerArt']);
+    });
+    it('excludes art parts with zero paths and the bone itself', () => {
+      const arm = makePart('arm', { kind: 'art', paths: [] }); // art kind, but no geometry
+      const bone = makePart('bone', { kind: 'bone', parentId: 'arm' });
+      const group = makePart('group', { kind: 'group' });
+      const child = makePart('child', { kind: 'art', parentId: 'group', paths: [makePath('p')] });
+      const parts = [group, child, arm, bone];
+      expect(artDescendantsOf(parts, group).map((p) => p.id)).toEqual(['child']);
+      expect(artDescendantsOf(parts, arm)).toEqual([]); // arm itself has no eligible descendant
+    });
+    it('is cycle-safe (a corrupt parentId ring never hangs or false-positives)', () => {
+      const a = makePart('a', { kind: 'art', parentId: 'b', paths: [makePath('pa')] });
+      const b = makePart('b', { kind: 'art', parentId: 'a', paths: [makePath('pb')] });
+      const target = makePart('target', { kind: 'group' });
+      expect(() => artDescendantsOf([target, a, b], target)).not.toThrow();
+      expect(artDescendantsOf([target, a, b], target)).toEqual([]); // neither is under target
+    });
+  });
+
+  describe('expandBindTarget', () => {
+    it('a GROUP expands to every art descendant (itself contributes nothing — no paths)', () => {
+      const group = makePart('group', { kind: 'group' });
+      const a = makePart('a', { kind: 'art', parentId: 'group', paths: [makePath('pa')] });
+      const b = makePart('b', { kind: 'art', parentId: 'group', paths: [makePath('pb')] });
+      const parts = [group, a, b];
+      expect(expandBindTarget(parts, group).map((p) => p.id).sort()).toEqual(['a', 'b']);
+    });
+    it('an empty GROUP expands to nothing (not itself — a group never has paths)', () => {
+      const group = makePart('group', { kind: 'group' });
+      expect(expandBindTarget([group], group)).toEqual([]);
+    });
+    it('nested art-in-art (Pip\'s body) expands to itself PLUS its art descendants', () => {
+      // outer "body" (1 path: shadow) ⊃ inner "body" (3 paths: pill/red/outline)
+      const outer = makePart('outerBody', { kind: 'art', paths: [makePath('shadow')] });
+      const inner = makePart('innerBody', {
+        kind: 'art', parentId: 'outerBody',
+        paths: [makePath('pill'), makePath('red'), makePath('outline')],
+      });
+      const parts = [outer, inner];
+      expect(expandBindTarget(parts, outer).map((p) => p.id).sort()).toEqual(['innerBody', 'outerBody']);
+      // Selecting the NESTED part only binds itself — it has no descendant of its own,
+      // and its ancestor (outer) is not a descendant of it.
+      expect(expandBindTarget(parts, inner).map((p) => p.id)).toEqual(['innerBody']);
+    });
+    it('a plain leaf art part (no descendant art) resolves to just itself', () => {
+      const leaf = makePart('leaf', { kind: 'art', paths: [makePath('p')] });
+      expect(expandBindTarget([leaf], leaf)).toEqual([leaf]);
+    });
+    it('a bone, or an art part with zero paths and no descendants, resolves to nothing', () => {
+      const bone = makePart('bone', { kind: 'bone' });
+      expect(expandBindTarget([bone], bone)).toEqual([]);
+      const emptyArt = makePart('emptyArt', { kind: 'art', paths: [] });
+      expect(expandBindTarget([emptyArt], emptyArt)).toEqual([]);
+    });
+    // MUTATION CHECK: reverting `expandBindTarget` to the old single-part targeting —
+    // `return self;` unconditionally, dropping the `...descendants` union — turns the
+    // GROUP test above into a failure (`[]` instead of `['a','b']`, since a group's own
+    // `self` is always empty) and the nested-art-in-art test into a failure (`['outerBody']`
+    // instead of `['innerBody','outerBody']`), pinning that the expansion is load-bearing.
+  });
+
+  describe('chainAnchorPart', () => {
+    it("resolves the chain ROOT bone's parent, from any bone in the chain", () => {
+      const group = makePart('group', { kind: 'group' });
+      const b1 = makePart('b1', { kind: 'bone', parentId: 'group' });
+      const b2 = makePart('b2', { kind: 'bone', parentId: 'b1' });
+      const parts = [group, b1, b2];
+      const chain = boneChain(parts, 'b2');
+      expect(chainAnchorPart(parts, chain)?.id).toBe('group');
+      expect(chainAnchorPart(parts, boneChain(parts, 'b1'))?.id).toBe('group');
+    });
+    it('returns null for a free-standing chain (no parent)', () => {
+      const b1 = makePart('b1', { kind: 'bone' });
+      const b2 = makePart('b2', { kind: 'bone', parentId: 'b1' });
+      const parts = [b1, b2];
+      expect(chainAnchorPart(parts, boneChain(parts, 'b2'))).toBeNull();
+    });
+    it('returns null for a dangling parent reference', () => {
+      const b1 = makePart('b1', { kind: 'bone', parentId: 'ghost' });
+      const parts = [b1];
+      expect(chainAnchorPart(parts, boneChain(parts, 'b1'))).toBeNull();
+    });
   });
 });
 

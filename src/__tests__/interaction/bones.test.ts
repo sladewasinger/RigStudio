@@ -21,7 +21,9 @@ import {
 } from '../../core/model';
 import {
   startBonePlacement, renderPose, setNodeBinding, recomputeAutoWeights, resetView,
+  unbindSelectedSkin,
 } from '../../view';
+import { groupAction } from '../../panels';
 import {
   bootRig, resetRig, state, partByLabel, partGroupEl, gestureDrag, click, moveMouse,
   clientCenterOf, overlayEl, overlayCount, expectClose, setEditorMode, repaint,
@@ -1077,5 +1079,177 @@ describe('scenario B30 — binding NESTED art keeps it under its group (hoisting
       drift = Math.max(drift, Math.abs(before[i] - after[i]));
     }
     expectClose(drift, 0, 0.05, 'nested art render-neutral across bind (≤0.05px)');
+  });
+});
+
+describe('scenario GB — Group-level auto-bind (the reported bug: a chain on Pip\'s body only bound ONE piece)', () => {
+  /**
+   * Screen-space bounding-rect corners of every path in ONE part (by id, not label —
+   * Pip's body imports as nested art-in-art and BOTH parts share the label "body", so a
+   * label-keyed lookup can't distinguish them). Deliberately NOT arc-length-fraction
+   * point sampling (`renderScreenSamples`/`armSamples` above, `getTotalLength`/
+   * `getPointAtLength`): those reparametrize "percent along the curve" using the CURRENT
+   * `d` geometry's own arc length, which is NOT invariant across a bake that folds a
+   * NON-UNIFORM scale into the coordinates — Pip's outer body carries a real x≠y baked
+   * squash (`matrix(1,0,0,0.92699903,…)`), so pre-bake (local, pre-squash arc length) vs
+   * post-bake (baked, squash-shaped arc length) samples land at genuinely different
+   * points along the SAME rendered curve, showing several px of false "drift" even though
+   * the actual painted pixels are unchanged (verified by hand: the baked matrix applied
+   * to the path's own explicit M/C vertices reproduces the post-bind `d` exactly).
+   * `getBoundingClientRect` is a true screen measurement with no such artifact.
+   */
+  function pathScreenCorners(id: string): number[] {
+    const g = svgEl().querySelector(`[data-part-id="${id}"]`) as SVGGElement;
+    const out: number[] = [];
+    for (const pe of Array.from(g.querySelectorAll('path')) as SVGPathElement[]) {
+      const r = pe.getBoundingClientRect();
+      out.push(r.x, r.y, r.x + r.width, r.y + r.height);
+    }
+    return out;
+  }
+  function maxDrift(a: number[], b: number[]): number {
+    let d = 0;
+    for (let i = 0; i < Math.min(a.length, b.length); i++) d = Math.max(d, Math.abs(a[i] - b[i]));
+    return d;
+  }
+
+  /** Pip's "body" is nested art-in-art: an outer "body" part (1 own path — its drop
+   *  shadow) parenting an inner "body" part (3 own paths — white_pill_body,
+   *  bottom_half_red, outline). Both share the label "body"; distinguish by parentId. */
+  function pipBodyParts() {
+    const outer = state.doc!.parts.find((p) => p.label === 'body' && p.parentId === null)!;
+    const inner = state.doc!.parts.find((p) => p.label === 'body' && p.parentId === outer.id)!;
+    expect(outer, 'outer body part present').toBeTruthy();
+    expect(inner, 'inner body part present').toBeTruthy();
+    return { outer, inner };
+  }
+
+  /** Select the outer body and place a 2-bone chain down its rendered box. */
+  function placeChainOnBody(outerId: string) {
+    modelSelectPart(outerId);
+    notify();
+    renderPose();
+    const g = svgEl().querySelector(`[data-part-id="${outerId}"]`) as SVGGElement;
+    const r = g.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    return placeBoneChain([{ x: cx, y: cy - 30 }, { x: cx, y: cy }, { x: cx, y: cy + 30 }]);
+  }
+
+  it('binds EVERY body piece (outer shadow + inner pill/red/outline), each render-neutral', () => {
+    const { outer, inner } = pipBodyParts();
+    expect(outer.paths.length, 'outer body carries its own drop-shadow path').toBe(1);
+    expect(inner.paths.length, 'inner body carries white_pill_body/bottom_half_red/outline').toBe(3);
+    const outerBefore = pathScreenCorners(outer.id);
+    const innerBefore = pathScreenCorners(inner.id);
+
+    const bones = placeChainOnBody(outer.id);
+    expect(bones.length, 'a 2-bone chain was placed').toBe(2);
+
+    const outerAfter = state.doc!.parts.find((p) => p.id === outer.id)!;
+    const innerAfter = state.doc!.parts.find((p) => p.id === inner.id)!;
+    expect(outerAfter.skin, 'outer body (shadow) bound').toBeTruthy();
+    expect(innerAfter.skin, 'inner body (pill/red/outline) bound').toBeTruthy();
+    const boneIds = bones.map((b) => b.id).sort();
+    expect(outerAfter.skin!.bones.map((b) => b.id).sort(), 'outer bound to the whole chain').toEqual(boneIds);
+    expect(innerAfter.skin!.bones.map((b) => b.id).sort(), 'inner bound to the whole chain').toEqual(boneIds);
+    // Parenting is untouched by binding (hierarchy-as-assignment): inner still under outer.
+    expect(innerAfter.parentId).toBe(outer.id);
+
+    expectClose(maxDrift(outerBefore, pathScreenCorners(outer.id)), 0, 0.05, 'outer body render-neutral across bind');
+    expectClose(maxDrift(innerBefore, pathScreenCorners(inner.id)), 0, 0.05, 'inner body render-neutral across bind');
+  });
+
+  it('rotating a bone deforms EVERY bound body piece coherently', () => {
+    const { outer, inner } = pipBodyParts();
+    const bones = placeChainOnBody(outer.id);
+    const innerBeforeD = state.doc!.parts.find((p) => p.id === inner.id)!.paths.map((p) => p.d).join('|');
+
+    // Grab the root bone's tip and drag it — reshapes the whole chain, LBS-deforming
+    // every part bound to it.
+    modelSelectPart(bones[0].id);
+    notify();
+    renderPose();
+    const tipEl = overlayEl().querySelector('[data-role="bone-tip"]') as SVGElement;
+    expect(tipEl, 'root bone tip handle present').toBeTruthy();
+    const from = clientCenterOf(tipEl);
+    gestureDrag(from, { x: from.x + 40, y: from.y - 25 });
+
+    const renderedD = (id: string) => Array.from(
+      svgEl().querySelector(`[data-part-id="${id}"]`)!.querySelectorAll('path'),
+    ).map((p) => p.getAttribute('d') ?? '').join('|');
+    const outerRenderedD = renderedD(outer.id);
+    const innerRenderedD = renderedD(inner.id);
+    const outerBindD = state.doc!.parts.find((p) => p.id === outer.id)!.paths.map((p) => p.d).join('|');
+    const innerBindD = state.doc!.parts.find((p) => p.id === inner.id)!.paths.map((p) => p.d).join('|');
+
+    expect(outerRenderedD, 'outer rendered geometry deformed by the bone drag').not.toBe(outerBindD);
+    expect(innerRenderedD, 'inner rendered geometry deformed by the bone drag').not.toBe(innerBindD);
+    // The model's own (bind-pose) `d` never mutates at render time — only the DOM attr.
+    expect(innerBindD, "inner's stored bind-pose d unchanged by rendering").toBe(innerBeforeD);
+  });
+
+  it('one undo clears the chain AND every binding it created', () => {
+    const before = state.doc!.parts.length;
+    const { outer, inner } = pipBodyParts();
+    const bones = placeChainOnBody(outer.id);
+    expect(state.doc!.parts.length).toBe(before + bones.length);
+    expect(canUndo()).toBe(true);
+
+    undo();
+
+    expect(state.doc!.parts.length, 'the whole chain removed by one undo').toBe(before);
+    const outerAfter = state.doc!.parts.find((p) => p.id === outer.id)!;
+    const innerAfter = state.doc!.parts.find((p) => p.id === inner.id)!;
+    expect(outerAfter.skin, 'outer binding undone').toBeFalsy();
+    expect(innerAfter.skin, 'inner binding undone').toBeFalsy();
+  });
+
+  it('unbinding ONE part leaves the others bound (no cross-part coupling)', () => {
+    const { outer, inner } = pipBodyParts();
+    placeChainOnBody(outer.id);
+    expect(state.doc!.parts.find((p) => p.id === outer.id)!.skin).toBeTruthy();
+    expect(state.doc!.parts.find((p) => p.id === inner.id)!.skin).toBeTruthy();
+
+    modelSelectPart(outer.id);
+    notify();
+    unbindSelectedSkin();
+
+    const outerAfter = state.doc!.parts.find((p) => p.id === outer.id)!;
+    const innerAfter = state.doc!.parts.find((p) => p.id === inner.id)!;
+    expect(outerAfter.skin, 'outer unbound').toBeFalsy();
+    expect(innerAfter.skin, 'inner STILL bound — unbinding one part is independent').toBeTruthy();
+  });
+
+  it('a genuine kind:"group" part (Ctrl+G) also expands to every member, not just one', () => {
+    // Construct a REAL group via the actual grouping gesture (click, Shift+click,
+    // groupAction — same as groupHandles.test.ts's makeGroup), independent of Pip's
+    // nested-art-in-art body: this exercises expandBindTarget's `kind === 'group'`
+    // branch specifically, not the nested-art-in-art one.
+    const laId = partByLabel('left_arm').id;
+    const raId = partByLabel('right_arm').id;
+    let p = clientPointOnPart('left_arm');
+    click(p.x, p.y);
+    p = clientPointOnPart('right_arm');
+    click(p.x, p.y, { shiftKey: true });
+    groupAction();
+    const group = state.doc!.parts.find((pt) => pt.kind === 'group')!;
+    expect(group, 'a real group part was created').toBeTruthy();
+    expect(state.selectedPartId).toBe(group.id);
+
+    // The group has no rendered geometry of its own (partless), so its bbox comes from
+    // its descendants — place the chain anywhere reasonable on the canvas; group-kind
+    // targeting binds every member regardless of where the bones land (no coverage test).
+    const svg = svgEl().getBoundingClientRect();
+    const cx = svg.left + svg.width / 2, cy = svg.top + svg.height / 2;
+    const bones = placeBoneChain([{ x: cx, y: cy - 30 }, { x: cx, y: cy }, { x: cx, y: cy + 30 }]);
+    expect(bones.length, 'a 2-bone chain was placed').toBe(2);
+    expect(bones[0].parentId, 'chain root parented to the group').toBe(group.id);
+
+    const leftAfter = state.doc!.parts.find((p) => p.id === laId)!;
+    const rightAfter = state.doc!.parts.find((p) => p.id === raId)!;
+    expect(leftAfter.skin, 'left_arm bound via the group').toBeTruthy();
+    expect(rightAfter.skin, 'right_arm bound via the group').toBeTruthy();
+    expect(leftAfter.parentId, 'left_arm stays under the group (hierarchy-as-assignment)').toBe(group.id);
+    expect(rightAfter.parentId, 'right_arm stays under the group').toBe(group.id);
   });
 });

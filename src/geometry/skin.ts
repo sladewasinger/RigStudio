@@ -7,6 +7,8 @@
  * two bones blend smoothly — the classic cheap auto-weighting.
  */
 
+import type { RigPart } from '../core/model';
+
 export interface Pt {
   x: number;
   y: number;
@@ -107,4 +109,67 @@ export function overrideWeightRow(
     row[ib] = t;
   }
   return row;
+}
+
+// ---- Group-level auto-bind targeting (pure, unit-testable) ----
+//
+// The functions below decide WHICH art parts a placed bone chain should skin, given the
+// object the chain "lives under". They are pure over a `parts` array (mirroring
+// `boneChain` above them in spirit) rather than reading the live `state.doc`, so the
+// targeting logic itself is unit-testable without a DOM/canvas — `view/rigOps.ts`'s
+// `autoBindPlacedBone` calls them against the live doc.
+
+/**
+ * Every ART descendant of `part` at any depth (excludes `part` itself), with paths of its
+ * own — mirrors `view/pose.ts`'s `groupDescendants` (the same any-kind subtree walk
+ * against the live doc), filtered down to bindable art. Cycle-safe.
+ */
+export function artDescendantsOf(parts: RigPart[], part: RigPart): RigPart[] {
+  const byId = new Map(parts.map((p) => [p.id, p]));
+  const isUnder = (p: RigPart): boolean => {
+    const seen = new Set<string>();
+    let cur: RigPart | undefined = p;
+    while (cur?.parentId && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      if (cur.parentId === part.id) return true;
+      cur = byId.get(cur.parentId);
+    }
+    return false;
+  };
+  return parts.filter((p) => p.kind === 'art' && p.paths.length > 0 && isUnder(p));
+}
+
+/**
+ * Expand one auto-bind TARGET — a selected part, or the object a bone chain's root hangs
+ * under — into the full set of art parts a chain placed under it should skin (Group-level
+ * auto-bind, completing the strict-hierarchy design "multi-object cases group first"): a
+ * part with CHILD ART — kind 'group', or an art part whose own descendants include
+ * further art (Pip's nested body-in-body: an outer "body" carrying its own "shadow" path,
+ * with a nested "body" carrying the pill/red/outline paths) — expands to every art
+ * descendant PLUS itself if it has paths of its own. A plain leaf art part (no descendant
+ * art) resolves to just itself; anything else (a bone, an empty group) resolves to
+ * nothing.
+ */
+export function expandBindTarget(parts: RigPart[], part: RigPart): RigPart[] {
+  const self = part.kind === 'art' && part.paths.length > 0 ? [part] : [];
+  const descendants = artDescendantsOf(parts, part);
+  if (part.kind !== 'group' && descendants.length === 0) return self;
+  const seen = new Map<string, RigPart>();
+  for (const p of [...self, ...descendants]) seen.set(p.id, p);
+  return [...seen.values()];
+}
+
+/**
+ * The part a bone chain's ROOT bone is parented to (the object the chain "lives under",
+ * hierarchy-as-assignment) — resolved from the CHAIN itself rather than current
+ * selection, so a later pen-tool session extending the chain (with one of the chain's own
+ * BONES selected as the continuation anchor, not the original group/art) still
+ * re-resolves the same target. Null for a free-standing chain (no parent) or a dangling
+ * parent reference.
+ */
+export function chainAnchorPart(parts: RigPart[], chain: RigPart[]): RigPart | null {
+  const chainIds = new Set(chain.map((b) => b.id));
+  const root = chain.find((b) => !b.parentId || !chainIds.has(b.parentId));
+  if (!root?.parentId) return null;
+  return parts.find((p) => p.id === root.parentId) ?? null;
 }

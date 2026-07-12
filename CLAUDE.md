@@ -296,21 +296,33 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   bone-only parent links to the ROOT bone, then collects the root plus every
   descendant bone — the unit the auto-binder treats as one skeleton. It is cycle-safe
   and independent of what non-bone part a chain root happens to hang under.
-- **Auto-bind on placement — GEOMETRIC targeting.** After a placement completes,
-  `rigOps.autoBindPlacedBone` resolves the chain and picks its art targets in this
-  order (most predictable first): (1) any art already skinned by a bone in this chain —
-  keep it bound as the chain grows (later child bones extend the same limb, they never
-  grab new parts); (2) else, if an ART part is SELECTED, bind exactly that (the user's
-  "I'm rigging THIS part"); (3) else the geometric fallback — bind every art part whose
-  actual FILLED geometry a meaningful fraction (`AUTO_BIND_COVERAGE`) of the chain runs
-  through, sampled via the live DOM `isPointInFill` (`chainFillCoverage`). This
-  REPLACES the old segment↔bounding-box test (`segIntersectsBox`), which bound anything
-  a joint's box grazed — a shoulder pivot sits inside the body's box, so an arm bone
-  dragged the whole body in. `segIntersectsBox` stays a pure helper but is no longer
-  wired into binding. Binding runs under the SAME history checkpoint as the placement,
-  so one undo reverts placement + binding. Placing over empty/unmatched canvas binds
-  nothing (silent). Re-binding an already-skinned part does NOT re-bake geometry (it is
-  already in its bind pose); it refreshes the bone set in place and keeps overrides.
+- **Auto-bind on placement — GEOMETRIC + GROUP-LEVEL targeting.** After a placement
+  completes, `rigOps.autoBindPlacedBone` resolves the chain and unions its art targets
+  from every stage below (most predictable first; nothing already resolved is dropped):
+  (1) any art already skinned by a bone in this chain — kept bound as the chain grows
+  (later child bones extend the same limb, they never grab new parts); (2) the object
+  the chain lives under (`chainAnchorPart` — the chain ROOT bone's parent, resolved from
+  the chain itself, not current selection) plus whatever's selected when the chain
+  finishes, each expanded via `expandBindTarget` (`geometry/skin.ts`, unit-tested): a
+  GROUP, or an art part whose own descendants include further art (Pip's nested
+  body-in-body — an outer "body" carrying its own path, with a nested "body" carrying
+  several more), expands to its WHOLE art subtree (the user's "select the body, drop a
+  chain, everything binds" case — a chain anchored on ANY object binds every piece of
+  that object, not just one); a plain leaf art resolves to just itself; (3) else the
+  geometric fallback — bind every art part whose actual FILLED geometry a meaningful
+  fraction (`AUTO_BIND_COVERAGE`) of the chain runs through, sampled via the live DOM
+  `isPointInFill` (`chainFillCoverage`), pool-restricted to a GROUP anchor's own
+  descendants when one exists. This REPLACES the old segment↔bounding-box test
+  (`segIntersectsBox`), which bound anything a joint's box grazed — a shoulder pivot
+  sits inside the body's box, so an arm bone dragged the whole body in. `segIntersectsBox`
+  stays a pure helper but is no longer wired into binding. `bindPartsToBones` bakes
+  ANCESTOR-FIRST with every part's pre-bake transform snapshotted before any mutation
+  (mirrors `groupScaleMembers`) so binding an art part together with its own descendant
+  art in one call — a group-level bind's Pip's-body case — stays render-neutral for both.
+  Binding runs under the SAME history checkpoint as the placement, so one undo reverts
+  placement + every binding it made. Placing over empty/unmatched canvas binds nothing
+  (silent). Re-binding an already-skinned part does NOT re-bake geometry (it is already
+  in its bind pose); it refreshes the bone set in place and keeps overrides.
 - **Bones stay PARENTED under the art (hierarchy-as-assignment).** A chain placed on a
   selected art part is parented to it (`art → bone1 → bone2 → …`), and that parenting is
   the assignment: the layers tree shows the chain under the limb, and code must keep it

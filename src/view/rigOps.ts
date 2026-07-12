@@ -11,6 +11,7 @@ import {
 } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from '../geometry/transforms';
+import { expandBindTarget, chainAnchorPart } from '../geometry/skin';
 import { ctx, linearOnly, parseNodeKey, round1, round2, round3, wrapToPi } from './context';
 import {
   poseTime, groupTransformOf, chainMatOf, effectivePivot, effectiveTip, fullPoseTransform,
@@ -185,11 +186,22 @@ function skinBoneOf(bone: RigPart): SkinBone {
  * already in its bind pose, so re-baking would be a float-drifting no-op: instead the
  * bone set is refreshed in place and any surviving per-node overrides are kept.
  * Mutates the DOM `d` attributes; does NOT checkpoint or renderPose — the caller does.
+ *
+ * MULTI-PART SAFE (Group-level auto-bind): `arts` may contain an art part AND one of its
+ * own descendant art parts in the SAME call (Pip's nested body-in-body — an outer "body"
+ * with its own path plus a nested "body" carrying the pill/red/outline paths, both bound
+ * together by one chain). Baking the ancestor zeroes its rest pose; a descendant's chain
+ * matrix composes THROUGH that ancestor, so bakes are ANCESTOR-FIRST (shallower
+ * `ancestorChain` first, mirroring `groupScaleMembers`) and every part's pre-bake
+ * transform + root pivot is snapshotted BEFORE any mutation runs — otherwise a
+ * later-processed descendant would read its ancestor's already-zeroed (wrong) pose and
+ * bake its own geometry into the wrong root position.
  */
-export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
-  if (arts.length === 0 || bones.length === 0) return;
+export function bindPartsToBones(artsIn: RigPart[], bones: RigPart[]): void {
+  if (artsIn.length === 0 || bones.length === 0) return;
   const doc = state.doc;
   if (!doc) return;
+  const arts = [...artsIn].sort((a, b) => ancestorChain(a).length - ancestorChain(b).length);
   const skinBones = bones.map(skinBoneOf);
   const freshBones = (): SkinBone[] =>
     skinBones.map((b) => ({ ...b, bindSeg: { p: { ...b.bindSeg.p }, q: { ...b.bindSeg.q } } }));
@@ -200,6 +212,18 @@ export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
   );
   const bakedArtIds = new Set<string>();
 
+  // Snapshot every UNSKINNED art's pre-bake full transform + root pivot BEFORE any part
+  // is mutated (see the function doc): all bakes below read from this frozen snapshot
+  // instead of recomputing mid-loop.
+  const preBake = new Map<string, { full: Mat; rootPivot: { x: number; y: number } }>();
+  for (const part of arts) {
+    if (part.skin) continue;
+    preBake.set(part.id, {
+      full: matrixOfTransform(groupTransformOf(part, null)),
+      rootPivot: effectivePivot(part, null), // capture with the ORIGINAL rest still live
+    });
+  }
+
   for (const part of arts) {
     if (part.skin) {
       const overrides = part.skin.overrides;
@@ -207,7 +231,7 @@ export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
       invalidateSkinCache(part.id);
       continue;
     }
-    const full = matrixOfTransform(groupTransformOf(part, null));
+    const { full, rootPivot } = preBake.get(part.id)!;
     for (const path of part.paths) {
       const m = multiply(full, matrixOfTransform(path.transform));
       const cmds = pathToCubics(parsePath(path.d)).map((c) => {
@@ -229,7 +253,6 @@ export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
     }
     // Bind bakes/zeroes the GEOMETRIC rest fields (they're now baked into path.d); opacity
     // is a paint property, not a transform, so it survives the reset untouched.
-    const rootPivot = effectivePivot(part, null); // capture with the ORIGINAL rest still live
     part.transform = '';
     part.rest = { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: part.rest.opacity };
     // KEEP the art parented — never hoist it out of its group (the reported "bones leave
@@ -241,6 +264,10 @@ export function bindPartsToBones(arts: RigPart[], bones: RigPart[]): void {
     // (post-chain) frame so effectivePivot — which still composes the chain — lands the
     // overlay crosshair on the true joint; for FLAT art (chain == identity) invert(chain) is
     // identity, so this is byte-identical to the old root-space pivot + parentId stays null.
+    // chainMatOf is read LIVE here, at this part's natural turn in the ancestor-first loop:
+    // any of ITS OWN ancestors that are also in `arts` have ALREADY been baked/zeroed by
+    // now, so this matches the FINAL post-bind chain matrix the render pipeline will
+    // actually use — not a stale pre-bake one (see the function doc).
     part.pivot = applyMat(invertMat(chainMatOf(part, null)), rootPivot.x, rootPivot.y);
     part.skin = { bones: freshBones() };
     invalidateSkinCache(part.id);
@@ -350,17 +377,30 @@ function chainFillCoverage(part: RigPart, segs: { p: { x: number; y: number }; q
 const AUTO_BIND_COVERAGE = 0.34;
 
 /**
- * Bones 2.0 AUTO-BIND (redesigned): after a bone is placed, resolve its full chain
- * (root bone + every descendant bone) and skin the RIGHT art with zero manual steps —
- * the arm bends, the body does NOT. Targeting order (most predictable first):
- *   1. Art already skinned by any bone in this chain — keep it bound as the chain grows
+ * Bones 2.0 AUTO-BIND (Group-level auto-bind): after a bone is placed, resolve its full
+ * chain (root bone + every descendant bone) and skin the RIGHT art with zero manual
+ * steps — the arm bends, the body does NOT. A chain dropped on a GROUP, or on an art part
+ * whose own descendants include further art (Pip's nested body-in-body: an outer "body"
+ * with its own path plus a nested "body" carrying several more), binds every piece of
+ * that object together — completing the locked strict-hierarchy design ("multi-object
+ * cases group first"). Targeting order (most predictable first), each stage's result
+ * UNIONED into the bind set so nothing already resolved gets dropped:
+ *   1. Art already skinned by any bone in this chain — kept bound as the chain grows
  *      (later child bones extend the same limb; they never grab new parts).
- *   2. Otherwise, if the user has art SELECTED when placement finishes, bind exactly
- *      that (limit to selection — predictable "I'm rigging THIS part").
+ *   2. The object the chain lives under (`chainAnchorPart` — the chain ROOT bone's
+ *      parent, resolved from the chain itself so it survives a LATER pen-tool session
+ *      where the current selection is one of the chain's own bones, not the original
+ *      anchor) plus whatever the user has selected when the chain finishes — each
+ *      expanded via `expandBindTarget` (a group or nested-art-in-art part → its whole art
+ *      subtree; a plain leaf art → itself). Stages 1+2 running every time (not just on
+ *      first bind) means a later child bone re-catches any of the anchor's art
+ *      descendants an earlier bind missed.
  *   3. Otherwise, the geometric fallback: bind every art part whose FILLED geometry a
  *      meaningful fraction of the chain runs through (`chainFillCoverage`), replacing
- *      the old far-too-eager segment↔bbox test that bound anything the joint grazed.
- * Binds nothing when no art qualifies (silent). Does NOT checkpoint/render — the
+ *      the old far-too-eager segment↔bbox test that bound anything the joint grazed. A
+ *      GROUP anchor that expanded to nothing (an empty container) keeps the candidate
+ *      pool scoped to its own descendants rather than reaching into unrelated artwork.
+ * Binds nothing when no art qualifies anywhere (silent). Does NOT checkpoint/render — the
  * placement gesture owns the single checkpoint and final repaint.
  *
  * ZERO-LENGTH GUARD: also heals the just-placed bone's own tip if it's degenerate
@@ -380,20 +420,24 @@ export function autoBindPlacedBone(boneId: string): void {
   if (chain.length === 0) return;
   const chainIds = new Set(chain.map((b) => b.id));
 
-  // 1. Art already bound to this chain — always refresh it (keeps the limb set stable).
+  // 1. Art already bound to this chain — always refreshed.
   const alreadyBound = doc.parts.filter(
     (p) => p.kind === 'art' && p.paths.length > 0 && p.skin
       && p.skin.bones.some((b) => chainIds.has(b.id)),
   );
-  if (alreadyBound.length > 0) {
-    bindPartsToBones(alreadyBound, chain);
-    return;
-  }
 
-  // 2. A selected art part limits the bind to itself (predictable).
-  const selectedArt = selectedParts().filter((p) => p.kind === 'art' && p.paths.length > 0);
-  if (selectedArt.length > 0) {
-    bindPartsToBones(selectedArt, chain);
+  // 2. The chain's anchor (hierarchy-as-assignment target) and the current selection,
+  // each expanded to a full art subtree when they're a group or a nested-art-in-art part.
+  const anchor = chainAnchorPart(doc.parts, chain);
+  const anchorTargets = anchor ? expandBindTarget(doc.parts, anchor) : [];
+  const selectedTargets = selectedParts()
+    .filter((p) => (p.kind === 'art' && p.paths.length > 0) || p.kind === 'group')
+    .flatMap((p) => expandBindTarget(doc.parts, p));
+
+  const targeted = new Map<string, RigPart>();
+  for (const p of [...alreadyBound, ...anchorTargets, ...selectedTargets]) targeted.set(p.id, p);
+  if (targeted.size > 0) {
+    bindPartsToBones([...targeted.values()], chain);
     return;
   }
 
@@ -404,9 +448,13 @@ export function autoBindPlacedBone(boneId: string): void {
     const q = effectiveTip(b, t) ?? { x: p.x + 5, y: p.y };
     return { p, q };
   });
-  const targets = doc.parts.filter(
-    (p) => p.kind === 'art' && p.paths.length > 0 && chainFillCoverage(p, segs) >= AUTO_BIND_COVERAGE,
-  );
+  // anchorTargets is guaranteed empty here (targeted.size === 0 above), so for a group
+  // anchor this is exactly its own (empty) descendant set — narrows the search instead
+  // of falling back to the whole doc.
+  const pool = anchor?.kind === 'group'
+    ? anchorTargets
+    : doc.parts.filter((p) => p.kind === 'art' && p.paths.length > 0);
+  const targets = pool.filter((p) => chainFillCoverage(p, segs) >= AUTO_BIND_COVERAGE);
   if (targets.length === 0) return; // no art under the chain — bind nothing
   bindPartsToBones(targets, chain);
 }
@@ -712,8 +760,9 @@ export function rebindFrozenChain(boneId: string): void {
 
 /**
  * Arm the bone tool for CHAIN placement. The first canvas click sets the chain's origin
- * (anchored at a selected bone's tip so a chain continues; parented to a selected art per
- * hierarchy-as-assignment), each subsequent click commits a bone and starts the next at
+ * (anchored at a selected bone's tip so a chain continues; parented to a selected art OR
+ * GROUP per hierarchy-as-assignment — Group-level auto-bind then skins every art
+ * descendant of a group anchor), each subsequent click commits a bone and starts the next at
  * that new tip, and Escape/Enter/double-click finishes (endBoneChain). `placingBone` stays
  * armed until the chain ends; `boneChain` is seeded on the first click (interactions.ts).
  */

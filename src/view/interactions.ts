@@ -1123,16 +1123,19 @@ function startIkDrag(effector: RigPart, p: { x: number; y: number }, ev: Pointer
  * Handle one pen-tool chain click at `clickRoot` (root/doc space). The FIRST click of a
  * chain seeds ctx.boneChain: with a bone selected the origin anchors at that bone's
  * effective tip (so a chain continues joint-to-joint) and the first bone parents to it;
- * with an art selected the first bone parents to it (hierarchy-as-assignment); otherwise a
- * free-form root. Each SUBSEQUENT click commits a bone origin→click (deferring the ONE chain
- * checkpoint to this first commit) and advances the origin to the new tip. A click closer
- * than MIN_BONE_LENGTH to the pending origin commits nothing (mis-click / the second click
- * of a finishing double-click).
+ * with an art OR GROUP selected the first bone parents to it (hierarchy-as-assignment —
+ * Group-level auto-bind then expands the eventual bind set to every art descendant of a
+ * group anchor, `rigOps.ts`'s `autoBindPlacedBone`); otherwise a free-form root. Each
+ * SUBSEQUENT click commits a bone origin→click (deferring the ONE chain checkpoint to this
+ * first commit) and advances the origin to the new tip. A click closer than
+ * MIN_BONE_LENGTH to the pending origin commits nothing (mis-click / the second click of a
+ * finishing double-click).
  */
 function boneChainClick(clickRoot: { x: number; y: number }): void {
   if (!ctx.boneChain) {
     const sel = selectedPart();
-    const anchor = sel && (sel.kind === 'art' || sel.kind === 'bone') ? sel : null;
+    const anchor = sel && (sel.kind === 'art' || sel.kind === 'bone' || sel.kind === 'group')
+      ? sel : null;
     const origin = anchor && anchor.kind === 'bone'
       ? effectiveTip(anchor, poseTime()) ?? clickRoot
       : clickRoot;
