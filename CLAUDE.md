@@ -403,6 +403,24 @@ hand-rolling gestures) and enforced by `npm run test:interaction`.
 
 ## Status
 
+### Headless export pipeline + first Android-runtime playback verification (2026-07-12)
+
+`scripts/exportPipTakePill.ts` (commit 3e799d8) authors a complete animation with no
+GUI: importSvg → programmatic part/clip assembly → exportRiv, run via
+`npm run export:take-pill`. Two verification firsts for the .riv encoder:
+
+- **Official web runtime**: the exported file renders pixel-verified in
+  `@rive-app/canvas` (scrubbed frame-by-frame; `out/preview.html` is the harness,
+  including a rAF shim for throttled embedded panes).
+- **rive-android 11.1.2 on a real device**: the same file plays correctly inside the
+  Dosey app (user-confirmed on-device, 2026-07-12) — the first rig-studio export ever
+  run on the Android runtime; all previously shipped .rivs there came from the Rive
+  editor (different header fileId).
+
+The wave also fixed a real exporter gap: per-part sx/sy keyed channels were silently
+dropped (only root could key scale); output is byte-identical for docs that never key
+part scale.
+
 ### Fifteenth wave (v2.13: bones-as-hierarchy program) — implemented and verified
 
 Built 2026-07-11 across seven audited waves driven by the user's live testing
