@@ -479,12 +479,25 @@ principles pass integrates last as a preset refinement turn.
   (`ai/profileBlock.ts` leaf — claude.ts stays at its ratchet ceiling).
   Rig-agnosticism is test-enforced: a source grep bans sample part names and
   the girl fixture drives the same buttons naming HER structure.
-- [ ] **A6. Principles polish pass** (idea 3, LAST — integrates with everything) —
-  a one-click "Polish" preset refinement turn (A4) on the current clip: adds
-  anticipation before large moves, cascades follow-through down bone chains
-  (children lag 40–80ms), settle-with-overshoot easings on arrivals, optional
-  squash-stretch via part scale keys — choreography preserved, quality raised.
-  Uses A3 filmstrips for before/after and A2 preview for acceptance.
+- [x] **A6. Principles polish pass** (593e3d8) (idea 3, LAST — integrates with
+  everything) — the one-click "Polish" button (`panels/ai/polish.ts`, mounted
+  beside Modify; disabled with an explanatory title when the clip has no keys):
+  `buildPolishInstruction` analyzes the clip's own tracks (biggest per-track
+  moves → anticipation candidates when there's ≥80ms lead-in, the same
+  arrivals → settle-with-overshoot, a scale-relative fast-vertical test →
+  optional subtle squash-and-stretch, a loop-clean check → "keep first/last
+  matching") plus the A5 profile (follow-through cascades named per bone
+  chain), opens with an explicit choreography-preservation contract, and
+  sends IMMEDIATELY through the normal Modify flow via `runAnimate`'s
+  `instructionOverride` — safe because A2's preview still gates the apply,
+  and protect-playhead / duration pinning / RIG PROFILE block / A3
+  filmstrips / A4 thread recording all apply for free. The user's own prompt
+  draft is never touched (`ai.polishInstruction` carries the turn). Bonus fix
+  found live: Polish now disables the instant ANY request starts (it lives
+  outside `AiFields`, so `setBusy` had missed it) — regression-tested.
+
+**A program COMPLETE (2026-07-12):** A0–A6 all landed and verified; final
+gates 492 unit / 19 files, 159 interaction / 24 files, build clean.
 
 (The former "swap default sample to girl_example" FINAL item was CANCELLED
 2026-07-11 — user decision: Pip stays as the permanent public demo sample.

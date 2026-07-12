@@ -455,6 +455,55 @@ hand-rolling gestures) and enforced by `npm run test:interaction`.
 
 ## Status
 
+### Sixteenth wave (AI Animate System v2: A0–A6) — implemented and verified
+
+Built 2026-07-11/12 as seven audited waves (one subagent each, folder-scoped
+ownership, per-wave commits); final gates: build clean, **492 unit / 19 files**,
+**159 interaction / 24 files**. The program rebuilt the AI assistant around five
+user-approved ideas plus groundwork:
+
+- **A0 groundwork**: root demoted to "whatever group is selected" targeting
+  (TARGETING_RULES — the model may never key `root`; the shadow no longer rides
+  a jump), `buildScenePayload` (part tree + selection), the Animate-mode
+  clean-preview toggle (`C`) hiding ALL editor chrome.
+- **A1 session/intent UX**: prompt text persists until sent; TWO actions —
+  [Create new animation] (returns a named clip, added + selected) and [Modify
+  current] with a protect-playhead-keys checkbox (prompt instruction AND
+  post-apply enforcement via `snapshotProtectedKeys`/`enforceProtectedKeys`);
+  duration pinned by schema echo + clamp.
+- **A2 preview-before-apply**: AI results NEVER mutate the doc — they enter a
+  looping canvas preview (`setPoseSampler`, the SM-preview infrastructure) with
+  an Apply / Retry / Discard bar; Apply is the existing atomic one-undo path.
+- **A3 filmstrip vision**: keyframe-cluster frame selection (≤6 frames ≤320px,
+  captioned image blocks) on animate AND critique calls; Retry re-renders the
+  CANDIDATE clip so refinement reacts to what the model actually produced.
+- **A4 clip-scoped refinement threads** (+ the `panels/ai/` folder split, first
+  ratchet burn-down): per-clip conversation threads (localStorage,
+  docName:clipName, 6-turn cap, record-on-APPLY-only), prompt box = thread
+  composer, thread strip under the prompt.
+- **A5 rig profile + motion templates** (rig-AGNOSTIC): `ai/rigProfile.ts` —
+  pure heuristic analysis (bone chains + deformed art, left/right symmetry
+  pairs with matrix-mirror detection, torso/head/limb/face/shadow/prop role
+  guesses, figure group), memoized on a hierarchy signature; five archetype
+  buttons (walk/breathe/jump/wave/gesture) FILL the prompt with beat-mapped,
+  profile-resolved instructions (never auto-send); every request leads with a
+  compact RIG PROFILE block (`ai/profileBlock.ts` leaf — `claude.ts` frozen at
+  its ratchet ceiling). Rig-agnosticism is test-enforced: a source grep bans
+  sample part names; the girl fixture drives the same buttons naming HER parts.
+- **A6 one-click Polish**: `panels/ai/polish.ts` analyzes the active clip
+  (biggest per-track moves → anticipation where there's lead-in room, the same
+  arrivals → settle-with-overshoot, scale-relative fast-vertical test →
+  optional squash-and-stretch, loop-clean check) + profile chain
+  follow-through, wrapped in an explicit choreography-preservation contract,
+  sent immediately through the Modify flow (`instructionOverride`) — safe
+  because the A2 preview gates the apply; the user's own prompt draft is never
+  touched (`ai.polishInstruction`). Found+fixed: buttons outside `AiFields`
+  missed `setBusy`'s disable path.
+
+Next per user sequencing: the two bone-feel fixes (freeze origin-drag on
+unselected bones; grab-point-relative IK), then the architecture refactor pass
+(burn the ratchet grandfather list), then H1/H2 headless, then Category B, D1/D2.
+
 ### Headless export pipeline + first Android-runtime playback verification (2026-07-12)
 
 `scripts/exportPipTakePill.ts` (commit 3e799d8) authors a complete animation with no
