@@ -1,8 +1,15 @@
 /**
  * The canvas-tools bar: tool switcher (select/translate/rotate/IK), the snapping
- * toggle, and (Setup mode) flip/group/ungroup/bone/bind actions. Also home to the
- * flip/group/ungroup/bind action handlers themselves, since main.ts binds them to
+ * toggle, and (Setup mode) flip/group/ungroup/bone actions. Also home to the
+ * flip/group/ungroup action handlers themselves, since main.ts binds them to
  * keyboard shortcuts (H/V, Ctrl+G, Ctrl+Shift+G) as well as these buttons.
+ *
+ * Binding art to bones moved out of this bar in v2.13 — auto-bind (on bone placement)
+ * covers the whole-part case, and manual per-node refinement now lives in the
+ * node-editing inspector's "bind to bone…" action (`panels/inspector.ts`).
+ *
+ * Layout: a fixed CONTROLS row (buttons never shrink/hide — see the GOTCHA this fixes
+ * in the header of `buildCanvasTools`) plus a slim single-line HINT row below it.
  */
 
 import {
@@ -11,7 +18,7 @@ import {
 } from '../core/model';
 import {
   renderPose, partRootBoxes, registerPart, unregisterPart, startBonePlacement,
-  flipSelected, bindSelectedToBones, reorderCanvas,
+  flipSelected, reorderCanvas,
 } from '../view';
 import { checkpoint } from '../core/history';
 import { icon, iconButton, ICON_PATHS } from './icons';
@@ -73,26 +80,26 @@ export function ungroupAction(): void {
   renderPose();
 }
 
-/** Bind the selected art parts to the selected bones (skinning). */
-export function bindAction(): void {
-  checkpoint();
-  const err = bindSelectedToBones();
-  if (err) {
-    void dialog.alert(err);
-    return;
-  }
-  notify();
-}
-
+/**
+ * The controls row + hint row are BOTH fixed height (`style.css`); the hint's own text
+ * gets ellipsis overflow (+ a `title` tooltip for the full line) instead of the button
+ * row being pushed out — a long hint (the IK tool's, especially) used to shrink the
+ * `<p>` down to its unwrapped intrinsic width, which is WIDER than the container, and a
+ * flex child can't shrink below that without `overflow`/`text-overflow` handling, so it
+ * shoved the tool buttons after it out of the visible bar (queued v2.13 follow-up).
+ */
 export function buildCanvasTools(el: HTMLElement): void {
   el.innerHTML = '';
   const doc = state.doc;
   if (!doc) return;
   const setup = state.editorMode === 'setup';
+
+  const controls = document.createElement('div');
+  controls.className = 'ct-controls';
   const sep = () => {
     const s = document.createElement('span');
     s.className = 'tool-sep';
-    el.appendChild(s);
+    controls.appendChild(s);
   };
 
   // Tool switcher (both modes): select / translate / rotate / IK, keys V T R I.
@@ -116,7 +123,7 @@ export function buildCanvasTools(el: HTMLElement): void {
     };
     tools.appendChild(b);
   }
-  el.appendChild(tools);
+  controls.appendChild(tools);
   sep();
 
   // Snapping toggle (Setup-mode editing aid; also the % key). Persisted preference,
@@ -127,7 +134,7 @@ export function buildCanvasTools(el: HTMLElement): void {
     renderPose();
   });
   if (state.snapEnabled) snapBtn.classList.add('active');
-  el.appendChild(snapBtn);
+  controls.appendChild(snapBtn);
 
   // Freeze (origin-editing) toggle (Y). While OFF (default) pivot/origin/joint handles
   // are inert; while ON they're draggable and the canvas shows a banner + tint. A
@@ -143,15 +150,15 @@ export function buildCanvasTools(el: HTMLElement): void {
     notify();
     renderPose();
   };
-  el.appendChild(freezeBtn);
+  controls.appendChild(freezeBtn);
   sep();
 
+  const part = selectedPart();
   if (setup) {
     const anyArt = selectedParts().some((p) => p.paths.length > 0);
-    const part = selectedPart();
     const add = (b: HTMLButtonElement, enabled: boolean) => {
       b.disabled = !enabled;
-      el.appendChild(b);
+      controls.appendChild(b);
       return b;
     };
 
@@ -171,32 +178,20 @@ export function buildCanvasTools(el: HTMLElement): void {
         startBonePlacement();
         boneBtn.classList.add('armed');
       }), true);
-    const arts = selectedParts().filter((p) => p.paths.length > 0);
-    const bones = selectedParts().filter((p) => p.kind === 'bone');
-    add(iconButton('bind', 'bind', 'Bind the selected art to the selected bones (auto weights)',
-      bindAction), arts.length > 0 && bones.length > 0);
-
-    const hint = document.createElement('p');
-    hint.className = 'hint';
-    hint.textContent = part
-      ? 'Drag moves · click again for scale/rotate handles · double-click enters'
-      : 'Click selects · Shift adds · scroll zooms · middle-drag pans';
-    el.appendChild(hint);
-  } else {
-    const hint = document.createElement('p');
-    hint.className = 'hint';
-    hint.textContent =
-      'Animate — drags key at the playhead. IK tool bends parent chains.';
-    el.appendChild(hint);
   }
+  el.appendChild(controls);
 
-  // IK tool: spell out the flagship gesture in both modes.
-  if (state.tool === 'ik') {
-    const ikHint = document.createElement('p');
-    ikHint.className = 'hint';
-    ikHint.textContent =
-      'IK — drag the END of a bone chain (its tip bone, or the skinned art near it); ' +
-      'the parent joints solve so the limb bends to follow.';
-    el.appendChild(ikHint);
-  }
+  // One hint line, always — the IK tool's overrides the mode hint (never stacks a
+  // second paragraph) so the bar never needs more than the one slim row.
+  const hint = document.createElement('p');
+  hint.className = 'hint ct-hint';
+  hint.textContent = state.tool === 'ik'
+    ? "IK: drag a chain's end — parent joints follow"
+    : setup
+      ? part
+        ? 'Drag moves · click again for scale/rotate handles · double-click enters'
+        : 'Click selects · Shift adds · scroll zooms · middle-drag pans'
+      : 'Animate — drags key at the playhead. IK tool bends parent chains.';
+  hint.title = hint.textContent;
+  el.appendChild(hint);
 }

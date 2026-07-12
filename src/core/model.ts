@@ -737,11 +737,55 @@ export function boneTipForLength(bone: RigPart, length: number): Vec2 {
 export function setBoneLength(parts: RigPart[], bone: RigPart, length: number): void {
   const tip = boneTipForLength(bone, Math.max(0, length));
   bone.boneTip = { x: tip.x, y: tip.y };
+  carryChildBoneOrigins(parts, bone);
+}
+
+/**
+ * Carry every DIRECT child bone's origin onto `bone`'s (just-moved) tip — one shared
+ * joint — then recurse so grandchildren follow their own (also-moved) parent tip.
+ *
+ * A child bone's own LOCAL geometry (its `boneTip − pivot` vector, i.e. its length and
+ * direction relative to its own rotation) must stay byte-identical: only `child.pivot`
+ * is solved for the new joint position, so `child.boneTip` has to shift by the exact
+ * same delta or the child SHORTENS/LENGTHENS as a side effect of its parent moving (the
+ * reported bug — dragging a parent tip left every descendant bone's length wrong).
+ * Shifting boneTip by the identical delta keeps (boneTip − pivot) exactly unchanged
+ * (the delta cancels algebraically), independent of any rounding applied to the delta
+ * itself. Shared by the canvas tip-drag path (`rigOps.ts` `aimBoneAtTip`/
+ * `carryChildOrigins`, which mirrors this) and the inspector length field above.
+ */
+export function carryChildBoneOrigins(parts: RigPart[], bone: RigPart): void {
+  if (!bone.boneTip) return;
   for (const child of parts) {
-    if (child.kind === 'bone' && child.parentId === bone.id) {
-      child.pivot = { x: tip.x - child.rest.tx, y: tip.y - child.rest.ty };
+    if (child.kind !== 'bone' || child.parentId !== bone.id) continue;
+    const newPivot = { x: bone.boneTip.x - child.rest.tx, y: bone.boneTip.y - child.rest.ty };
+    if (child.boneTip) {
+      const dx = newPivot.x - child.pivot.x;
+      const dy = newPivot.y - child.pivot.y;
+      child.boneTip = { x: child.boneTip.x + dx, y: child.boneTip.y + dy };
+    }
+    child.pivot = newPivot;
+    carryChildBoneOrigins(parts, child); // grandchildren ride this child's moved tip too
+  }
+}
+
+/**
+ * Every bone chained directly under `part` (Bones 2.0 hierarchy-as-assignment): the
+ * union of `boneChain` for each of the part's direct bone children. Pure over the parts
+ * array. Used by node editing — bones of the edited part's own chain stay visible and
+ * selectable while every other part dims (`view/focus.ts`) — and by the node-editing
+ * "bind to bone…" quick action, which only offers a part's own chain (`view/rigOps.ts`).
+ */
+export function chainBonesOfPart(parts: RigPart[], part: RigPart): RigPart[] {
+  const roots = parts.filter((p) => p.kind === 'bone' && p.parentId === part.id);
+  const seen = new Set<string>();
+  const out: RigPart[] = [];
+  for (const root of roots) {
+    for (const b of boneChain(parts, root.id)) {
+      if (!seen.has(b.id)) { seen.add(b.id); out.push(b); }
     }
   }
+  return out;
 }
 
 /**

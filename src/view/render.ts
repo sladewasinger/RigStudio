@@ -11,7 +11,7 @@
 import { state, activeClip, Channel, RigDoc } from '../core/model';
 import { ctx, SVG_NS } from './context';
 import { poseTime, rootPoseTransform, groupTransformOf } from './pose';
-import { focusContext } from './focus';
+import { focusContext, nodeEditSkinSuspendId } from './focus';
 import { renderSkinnedPart } from './skinRender';
 import { renderOverlay } from './overlay';
 
@@ -28,16 +28,27 @@ export function renderPose(): void {
   ctx.svg?.parentElement?.classList.toggle('freeze-mode', state.freezeMode);
   ctx.rootGroup.setAttribute('transform', rootPoseTransform(t));
   const focus = focusContext();
+  const suspendSkinId = nodeEditSkinSuspendId();
   for (const part of doc.parts) {
     const g = ctx.partGroups.get(part.id);
     if (!g) continue;
     // Drill-down focus: parts outside the editing context fade and stop catching
     // pointer events (clicks fall through; node marquees sweep right over them).
     g.classList.toggle('dimmed', !!focus && !focus.has(part.id));
-    if (part.skin) {
+    if (part.skin && part.id !== suspendSkinId) {
       // Skinned parts deform by their bones, not by a group transform.
       g.setAttribute('transform', '');
       renderSkinnedPart(part, g, t);
+    } else if (part.skin) {
+      // Node-editing target (suspended): render the RIGID bind/rest geometry — the same
+      // data node ops actually edit — so handles sit exactly on the drawn outline
+      // instead of a stale deformed pose (never mutates path.d; DOM `d` only, same rule
+      // as the deformed path). Bind zeroed this part's own pose, so the rigid transform
+      // is the identity `groupTransformOf` would compute anyway.
+      g.setAttribute('transform', groupTransformOf(part, t));
+      for (const p of part.paths) {
+        g.querySelector(`[data-path-id="${p.id}"]`)?.setAttribute('d', p.d);
+      }
     } else {
       g.setAttribute('transform', groupTransformOf(part, t));
     }

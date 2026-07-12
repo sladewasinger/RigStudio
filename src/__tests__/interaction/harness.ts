@@ -23,7 +23,7 @@
 import '../../style.css';
 import { expect } from 'vitest';
 import { state, notify, selectPart as modelSelectPart } from '../../core/model';
-import { renderPose } from '../../view';
+import { renderPose, zoomBy } from '../../view';
 import { Mat, matrixOfTransform } from '../../geometry/transforms';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -242,6 +242,34 @@ export function expectClose(actual: number, expected: number, eps: number, msg =
 export function clientCenterOf(el: Element): { x: number; y: number } {
   const r = el.getBoundingClientRect();
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+/** The FIRST element matching `selector`'s on-screen bbox, in CLIENT px. Always
+ *  re-queries live (never a captured element — overlay rebuilds detach them). */
+export function elementScreenSize(selector: string): { w: number; h: number } {
+  const el = document.querySelector(selector);
+  if (!el) throw new Error(`elementScreenSize: no element matches "${selector}"`);
+  const r = el.getBoundingClientRect();
+  return { w: r.width, h: r.height };
+}
+
+/**
+ * GOTCHA regression guard (CLAUDE.md "ALL canvas chrome must be screen-constant under
+ * zoom"): re-measures `selector`'s on-screen bbox at the CURRENT zoom, zooms in ~8x
+ * around the canvas center, re-measures again, and asserts both are within
+ * `tolerancePct` — the generic form of the pivot-ring/gizmo/node-glyph/bone-glyph bug
+ * that has shipped repeatedly. `selector` should resolve to a size-only feature (e.g. a
+ * bone glyph's small joint circle, not its whole kite — the origin→tip SPAN legitimately
+ * scales with zoom since it tracks real doc-space positions; only girth/radius chrome
+ * must not).
+ */
+export function assertScreenConstant(selector: string, tolerancePct = 8): void {
+  const before = elementScreenSize(selector);
+  zoomBy(8);
+  const after = elementScreenSize(selector);
+  const tol = (v: number) => Math.max(0.5, v * (tolerancePct / 100));
+  expectClose(after.w, before.w, tol(before.w), `${selector} width screen-constant across zoom`);
+  expectClose(after.h, before.h, tol(before.h), `${selector} height screen-constant across zoom`);
 }
 
 /**

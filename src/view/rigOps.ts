@@ -6,7 +6,7 @@
  */
 
 import {
-  state, selectedParts, selectedPart, setKeyframe, channelValue, boneChain,
+  state, selectedParts, selectedPart, setKeyframe, channelValue, boneChain, chainBonesOfPart,
   RigPart, SkinBone, SkinOverride,
 } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
@@ -360,6 +360,50 @@ export function setNodeBinding(a: string, b: string | null, t: number): boolean 
   return true;
 }
 
+/**
+ * The (a,b,t) override target for the node-editing "bind to bone…" quick action: bone
+ * `boneId` plus which of ITS ends the selected nodes sit at — its origin (the joint
+ * shared with its parent) or its tip (the joint shared with its child). `a` is always
+ * the picked bone; `b` is the neighbor bone on that side WITHIN the part's own chain, or
+ * null when none exists there (a chain root has no parent bone; a leaf has no child) —
+ * `overrideWeightRow` collapses a null `b` to 100% `a` regardless of `t`, so that case is
+ * "100% single-bone" automatically. When a neighbor does exist, t=0.5 blends evenly
+ * across the shared joint (refinable afterward with the inspector's existing % slider).
+ */
+export function quickNodeBindTarget(
+  part: RigPart, boneId: string, end: 'origin' | 'tip',
+): { a: string; b: string | null; t: number } | null {
+  const chain = chainBonesOfPart(state.doc?.parts ?? [], part);
+  const x = chain.find((b) => b.id === boneId);
+  if (!x) return null;
+  const neighbor = end === 'tip'
+    ? chain.find((b) => b.parentId === x.id) ?? null
+    : chain.find((b) => b.id === x.parentId) ?? null;
+  return { a: x.id, b: neighbor?.id ?? null, t: neighbor ? 0.5 : 0 };
+}
+
+/**
+ * Node-editing "bind to bone…" (replaces the old top-bar whole-part bind button):
+ * selecting a bone tip/origin ALONGSIDE node selection is structurally impossible (node
+ * mode's pointerdown routing claims every canvas click for bend/marquee before a part
+ * selection could land — `interactions.ts`), so this always drives the picker dialog
+ * rather than trying a "co-selected bone" fast path. If `part` isn't already skinned by
+ * its own chain, this binds it first (the whole-part bind stays available
+ * PROGRAMMATICALLY — `bindPartsToBones`, which auto-bind also calls — just not from a
+ * toolbar button any more), then pins every selected node per `quickNodeBindTarget`.
+ * Caller checkpoints.
+ */
+export function bindSelectedNodesToBone(
+  part: RigPart, boneId: string, end: 'origin' | 'tip',
+): boolean {
+  const chain = chainBonesOfPart(state.doc?.parts ?? [], part);
+  if (chain.length === 0 || ctx.selectedNodes.size === 0) return false;
+  if (!part.skin) bindPartsToBones([part], chain);
+  const target = quickNodeBindTarget(part, boneId, end);
+  if (!target) return false;
+  return setNodeBinding(target.a, target.b, target.t);
+}
+
 /** Clear per-node overrides on every selected node (caller checkpoints). */
 export function clearNodeBinding(): boolean {
   const part = selectedPart();
@@ -457,15 +501,34 @@ export function aimBoneAtTip(
   carryChildOrigins(bone, t);
 }
 
-/** Glue each direct child bone's origin to this bone's tip (the shared joint). */
+/**
+ * Glue each direct child bone's origin to this bone's tip (the shared joint), preserving
+ * every descendant's own LOCAL geometry: a child's `boneTip − pivot` vector (its length
+ * and direction relative to its own rotation) must stay byte-identical when its origin is
+ * carried onto a moved joint, or it silently shortens/lengthens as a side effect of its
+ * PARENT reshaping (the reported bug). Shifting `boneTip` by the exact same delta as
+ * `pivot` keeps that vector exactly unchanged — the delta cancels algebraically — then
+ * recurses so grandchildren ride this child's (now also moved) tip. round3, not round1:
+ * double-rounding pivot and boneTip independently at the coarser 0.1 grid could itself
+ * introduce up to ~0.1 of drift in the preserved length. Mirrors `core/model.ts`'s
+ * `carryChildBoneOrigins` (the inspector length-field path); freeze mode's bind refresh
+ * runs on top of this and needs no separate handling — the geometry it re-binds is
+ * already correct either way.
+ */
 export function carryChildOrigins(bone: RigPart, t: number | null): void {
   const doc = state.doc;
   if (!doc || !bone.boneTip) return;
   for (const child of doc.parts) {
-    if (child.kind === 'bone' && child.parentId === bone.id) {
-      const ot = ownTranslateOf(child, t);
-      child.pivot = { x: round1(bone.boneTip.x - ot.x), y: round1(bone.boneTip.y - ot.y) };
+    if (child.kind !== 'bone' || child.parentId !== bone.id) continue;
+    const ot = ownTranslateOf(child, t);
+    const newPivot = { x: round3(bone.boneTip.x - ot.x), y: round3(bone.boneTip.y - ot.y) };
+    if (child.boneTip) {
+      const dx = newPivot.x - child.pivot.x;
+      const dy = newPivot.y - child.pivot.y;
+      child.boneTip = { x: round3(child.boneTip.x + dx), y: round3(child.boneTip.y + dy) };
     }
+    child.pivot = newPivot;
+    carryChildOrigins(child, t);
   }
 }
 

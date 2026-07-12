@@ -112,12 +112,17 @@ describe('scenario 10 — dive → click-selects-child → dive deeper (nested g
     groupAction();
     const g2 = state.doc!.parts.find((pt) => pt.kind === 'group')!;
 
-    // Outer group G1 = { body, G2 }. Shift+clicking the arm adds G2 (group-aware).
-    p = clientPointOnPart('body');
+    // Outer group G1 = { right_leg, G2 }. Shift+clicking the arm adds G2 (group-aware).
+    // (Not 'body': the nested-group importer now gives Pip a genuine nested "body" INSIDE
+    // "body" — see io/importSvg.ts's recursive rule — so that label is ambiguous and its
+    // outer part's own geometry (just a shadow sliver) is mostly occluded by the inner
+    // part's silhouette painted on top of it. right_leg has a unique label and real
+    // clickable geometry, serving the same "a third, unrelated part" role.)
+    p = clientPointOnPart('right_leg');
     click(p.x, p.y);
     p = clientPointOnPart('right_arm');
     click(p.x, p.y, { shiftKey: true });
-    expect(new Set(state.selectedPartIds)).toEqual(new Set([partByLabel('body').id, g2.id]));
+    expect(new Set(state.selectedPartIds)).toEqual(new Set([partByLabel('right_leg').id, g2.id]));
     groupAction();
     const g1 = state.doc!.parts.find((pt) => pt.kind === 'group' && pt.id !== g2.id)!;
     // Now nested: G1 ⊃ G2 ⊃ right_arm.
@@ -153,9 +158,18 @@ describe('scenario 10 — dive → click-selects-child → dive deeper (nested g
 
 describe('scenario 11 — Layers panel range + toggle selection (P3)', () => {
   it('Shift+click selects the visible-row range; Ctrl+click toggles one', () => {
-    // Part rows in DOM order == the visible (flattened, expanded-only) row order.
+    // Part rows in DOM order == the visible (flattened, expanded-only) row order. The
+    // nested-group importer gives Pip a genuine duplicate part LABEL ("body" nested
+    // inside "body" — io/importSvg.ts), but no folder starts expanded in a fresh
+    // resetRig(), so only the 7 ROOT-level rows ever render here and every label among
+    // them (reverse doc order: face, body, right_leg, left_arm, right_arm, left_leg,
+    // shadow) is unique — `partByLabel` stays an unambiguous row→id lookup. Assert that
+    // invariant explicitly so a future default-expand change fails loudly here instead
+    // of silently mis-resolving a row to the wrong same-labeled part.
     const rows = [...document.querySelectorAll<HTMLElement>('#layers .layer-row.part')];
     expect(rows.length).toBeGreaterThanOrEqual(3);
+    const labels = rows.map((r) => r.querySelector('.layer-name')!.textContent!);
+    expect(new Set(labels).size, 'every visible row label is unique').toBe(labels.length);
     const idOf = (row: HTMLElement) =>
       partByLabel(row.querySelector('.layer-name')!.textContent!).id;
     const id0 = idOf(rows[0]), id1 = idOf(rows[1]), id2 = idOf(rows[2]);

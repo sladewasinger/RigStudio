@@ -8,19 +8,20 @@
 import {
   state, notify, selectedPart, selectedPath, sampleChannel, channelValue,
   setKeyframe, isAncestorOf, setParent, RigPart, Channel, ensureArtboard,
-  keyAt, removeKeyAt, boneLength, setBoneLength, translateBoneChain,
+  keyAt, removeKeyAt, boneLength, setBoneLength, translateBoneChain, chainBonesOfPart,
 } from '../core/model';
 import {
   renderPose, updatePathAttrs, partRootBoxes, applyRootDeltas, hasSelectedNode,
   applyNodeOp, NodeOp, unbindSelectedSkin, selectedNodeCount, primaryNodeType,
   canJoinNodes, canDeleteSegment, joinSelectedNodes, deleteSelectedSegment,
   setNodeBinding, clearNodeBinding, recomputeAutoWeights, primaryNodeBinding,
-  rebindFrozenChain,
+  rebindFrozenChain, bindSelectedNodesToBone,
 } from '../view';
 import { alignDeltas, distributeDeltas, AlignEdge, AlignReference } from '../geometry/align';
 import { checkpoint } from '../core/history';
 import { iconButton, ICON_PATHS } from './icons';
 import { buildAiPanel } from './ai';
+import { dialog } from '../ui/dialogs';
 
 /** Repaint the canvas and keyframe lanes after an inspector edit. */
 function poseEdited(): void {
@@ -681,6 +682,40 @@ function buildAlignSection(el: HTMLElement): void {
 
 // ---- Node operations (node-editing mode) ----
 
+/**
+ * "bind to bone…" (v2.13 follow-up — replaces the old top-bar whole-part bind button):
+ * a bone tip/origin can never be co-selected alongside path nodes (node mode's canvas
+ * click-routing claims every press for bend/marquee before a part selection could land
+ * — `view/interactions.ts`), so this always opens the picker dialog rather than trying
+ * a "fast path" that can't actually occur. Lists the part's OWN chain bones (hierarchy-
+ * as-assignment — see `chainBonesOfPart`) with a tip/origin choice; binds the part first
+ * if it isn't already skinned (the whole-part bind stays available programmatically,
+ * just not from a button), then pins the selected nodes via `bindSelectedNodesToBone`
+ * (`view/rigOps.ts`), which maps the pick onto the existing {a,b,t} override model.
+ */
+async function openBindToBoneDialog(part: RigPart, chainBones: RigPart[]): Promise<void> {
+  const result = await dialog.form('Bind to bone', [
+    {
+      name: 'bone', label: 'chain bone', type: 'select',
+      options: chainBones.map((b) => ({ value: b.id, label: b.label })),
+      value: chainBones[0].id,
+    },
+    {
+      name: 'end', label: 'at its', type: 'select',
+      options: [
+        { value: 'tip', label: 'tip (toward its child)' },
+        { value: 'origin', label: 'origin (toward its parent)' },
+      ],
+      value: 'tip',
+    },
+  ], { okText: 'Bind' });
+  if (!result) return;
+  const end = result.end === 'origin' ? 'origin' : 'tip';
+  checkpoint();
+  if (!bindSelectedNodesToBone(part, String(result.bone), end)) return;
+  notify();
+}
+
 function buildNodeOpsSection(el: HTMLElement): void {
   const title = document.createElement('h3');
   const count = selectedNodeCount();
@@ -741,6 +776,24 @@ function buildNodeOpsSection(el: HTMLElement): void {
     delOk, () => deleteSelectedSegment(),
   );
   el.appendChild(grid2);
+
+  // "bind to bone…" (v2.13): only offered when this part actually has a bone chain of
+  // its own (hierarchy-as-assignment — placing a chain under a part IS the assignment).
+  const part = selectedPart();
+  const chainBones = part ? chainBonesOfPart(state.doc?.parts ?? [], part) : [];
+  if (part && chainBones.length > 0) {
+    const bindGrid = document.createElement('div');
+    bindGrid.className = 'align-grid';
+    const bindBtn = document.createElement('button');
+    bindBtn.textContent = 'bind to bone…';
+    bindBtn.title = enabled
+      ? "Pin the selected nodes to one of this part's chain bones"
+      : 'Select path nodes first';
+    bindBtn.disabled = !enabled;
+    bindBtn.onclick = () => { void openBindToBoneDialog(part, chainBones); };
+    bindGrid.appendChild(bindBtn);
+    el.appendChild(bindGrid);
+  }
 
   const hint = document.createElement('p');
   hint.className = 'hint';

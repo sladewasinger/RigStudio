@@ -6,7 +6,9 @@
  * class). Clicking through a faded part falls to blank canvas, which exits focus.
  */
 
-import { state, RigPart, selectedPart, selectPart, ancestorChain, partById } from '../core/model';
+import {
+  state, RigPart, selectedPart, selectPart, ancestorChain, partById, chainBonesOfPart,
+} from '../core/model';
 import { ctx } from './context';
 
 /** Escape/blank-click hook: close all entered groups. */
@@ -92,7 +94,11 @@ export function artworkUnderPointer(
 export function focusContext(): Set<string> | null {
   const part = selectedPart();
   if (state.mode === 'nodes' && state.editorMode === 'setup' && part) {
-    return new Set([part.id]);
+    // Bones of the edited part's own chain are its binding context, not "everything
+    // else" — they stay fully visible/selectable while every other part dims.
+    const focus = new Set([part.id]);
+    for (const b of chainBonesOfPart(state.doc?.parts ?? [], part)) focus.add(b.id);
+    return focus;
   }
   if (ctx.enteredGroups.size > 0) {
     const doc = state.doc!;
@@ -105,6 +111,21 @@ export function focusContext(): Set<string> | null {
     return focus;
   }
   return null;
+}
+
+/**
+ * The skinned part, if any, whose LBS deformation should be SUSPENDED this frame: node
+ * editing on a bound part edits `path.d` — its baked BIND/rest geometry — but per-frame
+ * skinning normally overwrites the rendered `d` with the deformed pose, so handles
+ * (computed straight from `path.d`) and the drawn art would coincide only by accident
+ * (the reported bug — a drag temporarily aligned them, release diverged again). Render
+ * that one part through the normal rigid path instead (`render.ts`) for as long as it's
+ * the node-editing target; every other skinned part keeps deforming normally.
+ */
+export function nodeEditSkinSuspendId(): string | null {
+  if (state.mode !== 'nodes' || state.editorMode !== 'setup') return null;
+  const part = selectedPart();
+  return part?.skin ? part.id : null;
 }
 
 /**

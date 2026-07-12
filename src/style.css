@@ -126,22 +126,39 @@ input[type='number'],
   min-width: 0;
   min-height: 0;
 }
+/* Two fixed rows: a CONTROLS row (buttons, never pushed out of view) and a slim HINT
+   row below it (own line, ellipsis overflow — see buildCanvasTools's header comment for
+   the bug this replaced: a long hint used to shrink-to-fit the button row instead of
+   itself, hiding tool buttons past the bar's right edge). */
 #canvas-tools {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  padding: 0 var(--sp-3);
+  background: var(--panel);
+  border-bottom: 1px solid var(--divider);
+}
+#canvas-tools .ct-controls {
   display: flex;
   gap: var(--sp-2);
   align-items: center;
   height: 40px;
   flex: none;
-  padding: 0 var(--sp-3);
-  background: var(--panel);
-  border-bottom: 1px solid var(--divider);
   overflow: hidden;
   white-space: nowrap;
 }
 #canvas-tools button { padding: 0 var(--sp-2); font-size: 12px; }
 #canvas-tools button.armed { background: var(--accent-2); color: #101018; border-color: var(--accent-2); }
 #canvas-tools .tool-sep { width: 1px; height: 20px; background: var(--border-strong); margin: 0 var(--sp-1); }
-#canvas-tools .hint { margin: 0; }
+#canvas-tools .ct-hint {
+  flex: none;
+  height: 18px;
+  line-height: 18px;
+  margin: 0 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 #canvas {
   position: relative;
@@ -622,6 +639,22 @@ input[type='number'] { width: 90px; }
 .null-glyph.selected path, .null-glyph.selected rect {
   fill: rgba(255, 111, 97, 0.4);
   stroke: var(--accent);
+}
+
+/* IK drag feedback: highlight the solving chain's bone glyphs (the two ancestor joints
+   plus the grabbed bone itself), and draw a target line from the effector to the
+   pointer so an out-of-reach clamp is visible instead of the drag looking unresponsive. */
+.null-glyph.ik-active path {
+  fill: rgba(255, 111, 97, 0.55);
+  stroke: var(--accent);
+  stroke-width: 1.8;
+}
+.ik-target-line {
+  stroke: var(--accent);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
 }
 
 /* Layers tree kind icons */

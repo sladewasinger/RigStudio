@@ -200,6 +200,38 @@ describe('scenario F4 — freeze tip reshape: static art, then pose from the NEW
   });
 });
 
+describe("scenario F6 — a parent tip reshape preserves the CHILD bone's own length/direction (freeze)", () => {
+  it('dragging the parent tip carries the child origin without shortening/lengthening the child', () => {
+    const [b1, b2] = placeChain('left_leg', 2);
+    const cur = (id: string) => state.doc!.parts.find((p) => p.id === id)!;
+    pressKey('y'); // freeze — isolates the geometry carry from the art's bind-refresh
+    modelSelectPart(b1.id);
+    repaint();
+
+    const tip0 = { ...cur(b1.id).boneTip! };
+    const len0 = boneLen(cur(b2.id));
+    const tipVec0 = {
+      x: cur(b2.id).boneTip!.x - cur(b2.id).pivot.x,
+      y: cur(b2.id).boneTip!.y - cur(b2.id).pivot.y,
+    };
+
+    const tipC = clientCenterOf(overlayEl().querySelector('.bone-tip-handle')!);
+    gestureDrag(tipC, { x: tipC.x + 60, y: tipC.y - 45 }, { steps: 10 });
+
+    const moved = Math.hypot(cur(b1.id).boneTip!.x - tip0.x, cur(b1.id).boneTip!.y - tip0.y);
+    expect(moved, 'the parent tip actually moved substantially').toBeGreaterThan(10);
+
+    const len1 = boneLen(cur(b2.id));
+    const tipVec1 = {
+      x: cur(b2.id).boneTip!.x - cur(b2.id).pivot.x,
+      y: cur(b2.id).boneTip!.y - cur(b2.id).pivot.y,
+    };
+    expectClose(len1, len0, 0.01, "child bone's own length unchanged (freeze)");
+    expectClose(tipVec1.x, tipVec0.x, 0.01, 'child local tip vector x unchanged (freeze)');
+    expectClose(tipVec1.y, tipVec0.y, 0.01, 'child local tip vector y unchanged (freeze)');
+  });
+});
+
 describe('scenario F3 — the freeze indicator + Y / Escape toggling', () => {
   it('Y turns on the banner/tint (freeze-mode class + visible banner); Escape exits', () => {
     const canvas = document.getElementById('canvas')!;

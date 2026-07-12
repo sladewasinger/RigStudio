@@ -1,12 +1,19 @@
 // @vitest-environment jsdom
+/// <reference types="vite/client" />
 /**
  * Tests for the SVG → RigDoc importer, run under jsdom for DOMParser. Fixtures are
  * small inline SVG strings; the inkscape namespace is declared on the root so
  * getAttributeNS() resolves inkscape:* attributes exactly as in a real Inkscape file.
+ * The one real-world fixture (girl_example.svg) is pulled in as a raw string via
+ * Vite's `?raw` import (avoids a node:fs/@types/node dependency this package doesn't
+ * otherwise need).
  */
 
 import { describe, expect, it } from 'vitest';
 import { importSvg } from '../io/importSvg';
+import { applyMat, matrixOfTransform, multiply } from '../geometry/transforms';
+// eslint-disable-next-line import/no-unresolved
+import GIRL_SVG from '../../public/girl_example.svg?raw';
 
 const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
 
@@ -104,7 +111,7 @@ describe('importSvg', () => {
     expect(doc.parts[0].paths[1].d).toBe('M 1,2 L 4,2 L 4,6 L 1,6 Z');
   });
 
-  it('accumulates nested group transforms onto the leaf path, not the part transform', () => {
+  it('gives every nested group — even unlabeled — its own part; a path only ever carries its own transform', () => {
     const doc = importSvg(
       svg(
         `<g inkscape:label="arm" transform="translate(100,0)">` +
@@ -115,9 +122,20 @@ describe('importSvg', () => {
       ),
       'a.svg',
     );
-    expect(doc.parts[0].transform).toBe('translate(100,0)');
-    expect(doc.parts[0].paths).toHaveLength(1);
-    expect(doc.parts[0].paths[0].transform).toBe('translate(1,2) scale(2)');
+    // Nothing dissolves: the unlabeled wrapper is its OWN part (id/fresh-labeled),
+    // parented to "arm" — not folded into the leaf path's transform.
+    expect(doc.parts).toHaveLength(2);
+    const [arm, wrapper] = doc.parts;
+    expect(arm.transform).toBe('translate(100,0)');
+    expect(arm.paths).toHaveLength(0);
+    expect(arm.kind).toBe('group'); // no direct paths of its own anymore
+    expect(wrapper.parentId).toBe(arm.id);
+    expect(wrapper.label).toMatch(/^part_\d+$/); // no id, no inkscape:label -> fresh
+    // DOC-SPACE INVARIANT: the wrapper's baked transform is the FULL chain (arm's own
+    // composed with its own), not just its own local "translate(1,2)".
+    expect(wrapper.transform).toBe('translate(100,0) translate(1,2)');
+    expect(wrapper.paths).toHaveLength(1);
+    expect(wrapper.paths[0].transform).toBe('scale(2)');
   });
 
   it('uses the leaf inkscape:label as the RigPath label, falling back to id', () => {
@@ -161,5 +179,204 @@ describe('sodipodi node types', () => {
     );
     expect(doc.parts[0].paths[0].nodeTypes).toBe('csc');
     expect(doc.parts[0].paths[1].nodeTypes).toBeNull();
+  });
+});
+
+describe('nested groups', () => {
+  it('turns every nested group into its own part, parented to its immediate enclosing group', () => {
+    const doc = importSvg(
+      svg(
+        `<g inkscape:label="Girl">` +
+          `<g inkscape:label="Head">${LEAF}</g>` +
+          `<g inkscape:label="RightArm"><g inkscape:label="Arm">${LEAF}</g></g>` +
+          `<g inkscape:label="Pants">` +
+            `<g inkscape:label="Pants">${LEAF}</g>` +
+          `</g>` +
+        `</g>`,
+      ),
+      'x.svg',
+    );
+
+    // doc.parts order = depth-first document order = paint order (last = topmost).
+    expect(doc.parts.map((p) => p.label)).toEqual([
+      'Girl', 'Head', 'RightArm', 'Arm', 'Pants', 'Pants',
+    ]);
+
+    const [girl, head, rightArm, arm, pantsOuter, pantsInner] = doc.parts;
+    expect(head.parentId).toBe(girl.id);
+    expect(rightArm.parentId).toBe(girl.id);
+    expect(arm.parentId).toBe(rightArm.id);
+    expect(pantsOuter.parentId).toBe(girl.id);
+    expect(pantsInner.parentId).toBe(pantsOuter.id);
+    expect(girl.parentId).toBeNull();
+  });
+
+  it('assigns kind "group" to a part with no direct drawable content of its own, "art" otherwise', () => {
+    const doc = importSvg(
+      svg(`<g inkscape:label="folder"><g inkscape:label="leaf">${LEAF}</g></g>`),
+      'x.svg',
+    );
+    const folder = doc.parts.find((p) => p.label === 'folder')!;
+    const leaf = doc.parts.find((p) => p.label === 'leaf')!;
+    expect(folder.paths).toHaveLength(0);
+    expect(folder.kind).toBe('group');
+    expect(leaf.paths).toHaveLength(1);
+    expect(leaf.kind).toBe('art');
+  });
+
+  it('does NOT dissolve unlabeled wrapper groups — they become parts too, labeled by id or freshly minted, and still carry the full doc-space chain', () => {
+    const doc = importSvg(
+      svg(
+        `<g inkscape:label="torso" transform="translate(10,0)">` +
+          `<g transform="rotate(15,5,5)">` + // no id, no label -> fresh id
+            `<g id="autogen_wrapper" transform="scale(1.5)">` + // id, no label -> id
+              `<g inkscape:label="head" transform="translate(2,3)">${LEAF}</g>` +
+            `</g>` +
+          `</g>` +
+        `</g>`,
+      ),
+      'x.svg',
+    );
+    // All FOUR groups become parts now — nothing dissolves.
+    expect(doc.parts).toHaveLength(4);
+    const [torso, bareWrapper, idWrapper, head] = doc.parts;
+    expect(torso.label).toBe('torso');
+    expect(bareWrapper.label).toMatch(/^part_\d+$/); // neither id nor inkscape:label
+    expect(idWrapper.label).toBe('autogen_wrapper'); // id, no inkscape:label
+    expect(head.label).toBe('head');
+
+    expect(bareWrapper.parentId).toBe(torso.id);
+    expect(idWrapper.parentId).toBe(bareWrapper.id);
+    expect(head.parentId).toBe(idWrapper.id); // immediate parent, not a shortcut to torso
+
+    // The full doc-space chain baked into the deepest part: all four transforms,
+    // composed left to right, root to leaf — regardless of which ones got labels.
+    const expected = [
+      'translate(10,0)', 'rotate(15,5,5)', 'scale(1.5)', 'translate(2,3)',
+    ].reduce((m, t) => multiply(m, matrixOfTransform(t)), matrixOfTransform(''));
+    const actual = matrixOfTransform(head.transform);
+    expect(actual.a).toBeCloseTo(expected.a, 9);
+    expect(actual.b).toBeCloseTo(expected.b, 9);
+    expect(actual.c).toBeCloseTo(expected.c, 9);
+    expect(actual.d).toBeCloseTo(expected.d, 9);
+    expect(actual.e).toBeCloseTo(expected.e, 9);
+    expect(actual.f).toBeCloseTo(expected.f, 9);
+  });
+
+  it('bakes the full ancestor chain into a deeply nested part, matching direct composition of the raw SVG transforms (doc-space equivalence)', () => {
+    // Three levels of plain (unlabeled) wrapper groups around one leaf path. Each
+    // wrapper is its own part now; the doc-space position of the leaf endpoint (1,1)
+    // must be identical to what you'd get by concatenating every original SVG
+    // transform into one list and applying it directly — proof that baking ancestors'
+    // transforms into each part's own `transform` (rather than relying on parenting,
+    // which composes POSE only) reproduces the pre-nesting flattened behavior exactly.
+    const doc = importSvg(
+      svg(
+        `<g inkscape:label="arm" transform="translate(100,0)">` +
+          `<g transform="translate(1,2)">` +
+            `<g transform="rotate(10,3,4)">` +
+              `<path d="M 0,0 L 1,1" transform="scale(2)" />` +
+            `</g>` +
+          `</g>` +
+        `</g>`,
+      ),
+      'a.svg',
+    );
+    expect(doc.parts).toHaveLength(3);
+    const [arm, wrapper1, wrapper2] = doc.parts;
+    expect(wrapper1.parentId).toBe(arm.id);
+    expect(wrapper2.parentId).toBe(wrapper1.id);
+    expect(wrapper2.paths).toHaveLength(1);
+    expect(wrapper2.paths[0].transform).toBe('scale(2)'); // only its own transform
+
+    const naive = matrixOfTransform('translate(100,0) translate(1,2) rotate(10,3,4) scale(2)');
+    const actual = multiply(
+      matrixOfTransform(wrapper2.transform), matrixOfTransform(wrapper2.paths[0].transform),
+    );
+    const expectedPoint = applyMat(naive, 1, 1);
+    const actualPoint = applyMat(actual, 1, 1);
+    expect(actualPoint.x).toBeCloseTo(expectedPoint.x, 9);
+    expect(actualPoint.y).toBeCloseTo(expectedPoint.y, 9);
+  });
+});
+
+describe('girl_example.svg fixture (real-world nested Illustrator/Inkscape export)', () => {
+  it('imports EVERY group — labeled or not — as its own part, in depth-first paint order', () => {
+    const doc = importSvg(GIRL_SVG, 'girl_example.svg');
+    expect(doc.name).toBe('girl_example');
+
+    // Every <g> in the file becomes a part (21 total: labeled ones like Girl/Head/
+    // RightArm/Arm/Pants keep their inkscape:label; plain Illustrator wrapper groups
+    // like Head's inner g142-7/g173-9/g155-8/g1/g164-5/g166-0/g181-1 fall back to their
+    // id). Order is depth-first document order == paint order (last = topmost).
+    expect(doc.parts.map((p) => p.label)).toEqual([
+      'Girl', 'Head', 'g142-7', 'g173-9', 'g155-8', 'g1', 'g164-5', 'g166-0', 'g181-1',
+      'RightArm', 'Arm', 'g291-2', 'g289',
+      'LeftArm', 'Arm', 'g291', 'g289-4',
+      'Pants', 'g112-5', 'g118-5', 'Pants',
+    ]);
+
+    const byLabelAt = (label: string, occurrence = 0) =>
+      doc.parts.filter((p) => p.label === label)[occurrence];
+    const girl = byLabelAt('Girl');
+    const head = byLabelAt('Head');
+    const rightArm = byLabelAt('RightArm');
+    const leftArm = byLabelAt('LeftArm');
+    const pantsOuter = byLabelAt('Pants', 0);
+    const pantsInner = byLabelAt('Pants', 1);
+    const [armR, armL] = doc.parts.filter((p) => p.label === 'Arm');
+
+    // The brief's headline shapes: Girl->Head, Girl->RightArm->Arm, Pants->Pants.
+    expect(head.parentId).toBe(girl.id);
+    expect(rightArm.parentId).toBe(girl.id);
+    expect(armR.parentId).toBe(rightArm.id);
+    expect(leftArm.parentId).toBe(girl.id);
+    expect(armL.parentId).toBe(leftArm.id);
+    expect(pantsOuter.parentId).toBe(girl.id);
+    expect(pantsInner.parentId).toBe(pantsOuter.id);
+    expect(girl.parentId).toBeNull();
+
+    // An id-only wrapper (no inkscape:label) still becomes a real part, parented under
+    // its nearest enclosing group's part — Head's inner g142-7/g173-9/g181-1.
+    const g142 = doc.parts.find((p) => p.label === 'g142-7')!;
+    const g173 = doc.parts.find((p) => p.label === 'g173-9')!;
+    const g181 = doc.parts.find((p) => p.label === 'g181-1')!;
+    expect(g142.parentId).toBe(head.id);
+    expect(g173.parentId).toBe(head.id);
+    expect(g181.parentId).toBe(head.id);
+    // ...and wrapper nesting keeps going below that (g155-8 -> g1 -> both under g173-9).
+    const g155 = doc.parts.find((p) => p.label === 'g155-8')!;
+    const g1 = doc.parts.find((p) => p.label === 'g1')!;
+    expect(g155.parentId).toBe(g173.id);
+    expect(g1.parentId).toBe(g155.id);
+
+    // Girl's OWN direct paths (Hair, Neck, and an id-only third path) are authored
+    // right in the Girl group in the source file, not under Head or any limb.
+    expect(girl.paths.map((p) => p.label)).toEqual(
+      expect.arrayContaining(['Hair', 'Neck']),
+    );
+    expect(head.paths.some((p) => p.label === 'Hair')).toBe(false);
+
+    // RightArm/LeftArm carry no direct paths of their own now (their old dissolved
+    // content lives in the "g289"/"g289-4" wrapper parts instead) -> honestly 'group'.
+    expect(rightArm.paths).toHaveLength(0);
+    expect(rightArm.kind).toBe('group');
+    expect(leftArm.paths).toHaveLength(0);
+    expect(leftArm.kind).toBe('group');
+
+    // Every other part is honestly marked: 'art' iff it carries a direct path, and
+    // (aside from RightArm/LeftArm above) this fixture has real content everywhere.
+    for (const part of doc.parts) {
+      expect(part.kind).toBe(part.paths.length > 0 ? 'art' : 'group');
+    }
+  });
+
+  it('keeps gradient-fill paths verbatim (no gradient resolution attempted)', () => {
+    const doc = importSvg(GIRL_SVG, 'girl_example.svg');
+    const gradientPath = doc.parts
+      .flatMap((p) => p.paths)
+      .find((p) => (p.fill ?? '').startsWith('url('));
+    expect(gradientPath).toBeDefined();
+    expect(gradientPath!.fill).toMatch(/^url\(#/);
   });
 });

@@ -19,11 +19,14 @@ import {
   selectPart as modelSelectPart, setKeyframe, notify,
   serializeDoc, deserializeDoc,
 } from '../../core/model';
-import { startBonePlacement, renderPose, setNodeBinding, recomputeAutoWeights } from '../../view';
+import {
+  startBonePlacement, renderPose, setNodeBinding, recomputeAutoWeights, resetView,
+} from '../../view';
 import {
   bootRig, resetRig, state, partByLabel, partGroupEl, gestureDrag, click,
   clientCenterOf, overlayEl, overlayCount, expectClose, setEditorMode, repaint,
   enterNodeMode, medialPoints, clientPointOnPart, svgEl, selectByLabel, pressKey, hitAt,
+  rootGEl, pathElById, assertScreenConstant, waitFor,
 } from './harness';
 
 beforeAll(bootRig);
@@ -217,6 +220,14 @@ describe('scenario B5 — per-node weight overrides', () => {
     const b = clientCenterOf(handles[Math.floor(handles.length / 2)]);
     click(a.x, a.y);
     click(b.x, b.y, { shiftKey: true });
+
+    // Leave node-editing scope before measuring the render: node editing SUSPENDS LBS
+    // deformation on its target part (v2.13 follow-up — handles must sit on the
+    // undeformed art, see scenario B17), so the rendered `d` while still in node mode
+    // would be the rigid rest shape regardless of bone rotation or overrides. Node
+    // selection survives the mode flip (setNodeBinding reads it directly), so this is
+    // still the exact override the handle clicks above selected.
+    state.mode = 'rig';
 
     const endBone = state.doc!.parts.find((p) => p.id === end.id)!;
     endBone.rest.rotate = 55;
@@ -579,5 +590,224 @@ describe('scenario B16 — one gesture = one undo (freeze tip reshape + bind ref
     expect(canUndo()).toBe(true);
     undo();
     expect(serializeDoc(state.doc!), 'ONE undo reverts the reshape AND its bind refresh').toBe(before);
+  });
+});
+
+// ---- v2.13 follow-ups from live bones testing ----
+
+describe('scenario B17 — node editing on a bound part is coherent (handles == rendered art)', () => {
+  it('suspends LBS while node-editing (rendered d == rest data, handle sits on the true outline), resumes exactly on exit', () => {
+    const [bone] = placeParentedChain(LIMB, 1);
+    modelSelectPart(bone.id);
+    bone.rest.rotate = 35; // pose the limb away from its bind/rest look
+    repaint();
+    const posedD = renderedD(LIMB);
+    expect(posedD, 'posing actually deformed the art').not.toBe(modelD(LIMB));
+
+    enterNodeMode(LIMB);
+    // Coherence: the rendered geometry is EXACTLY the model's bind/rest data — the same
+    // data node ops actually edit — not the posed/deformed look a stray drag used to
+    // show only transiently.
+    expect(renderedD(LIMB), 'suspended render == bind/rest data').toBe(modelD(LIMB));
+    expect(overlayCount('.skin-hint'), 'the "bone deformation paused" hint is shown').toBe(1);
+
+    // Handles sit ON the rendered outline: the first node's handle (cmdIndex 0, the M
+    // command) must land on the LIVE rendered path's own start point — a real geometric
+    // check against the DOM, not a re-derivation that would pass vacuously even broken.
+    const path0 = partByLabel(LIMB).paths[0];
+    const handle0 = overlayEl().querySelector(
+      `.node-handle[data-path-id="${path0.id}"][data-cmd-index="0"]`,
+    ) as SVGElement;
+    expect(handle0, 'first node handle present').toBeTruthy();
+    const pe = pathElById(path0.id);
+    const start = pe.getPointAtLength(0);
+    const m = pe.getScreenCTM()!;
+    const sp = svgEl().createSVGPoint();
+    sp.x = start.x; sp.y = start.y;
+    const truePt = sp.matrixTransform(m);
+    const handleC = clientCenterOf(handle0);
+    expectClose(handleC.x, truePt.x, 1, 'handle sits on the true rendered outline (x)');
+    expectClose(handleC.y, truePt.y, 1, 'handle sits on the true rendered outline (y)');
+
+    // Exit node editing → deformation resumes to the EXACT prior (posed) pose.
+    state.mode = 'rig';
+    repaint();
+    expect(renderedD(LIMB), 'deformation resumes to the exact prior pose').toBe(posedD);
+  });
+});
+
+describe('scenario B18 — bones stay visible + selectable while their own part is node-edited', () => {
+  it('the chain bones render undimmed in the overlay; an unrelated part still dims', () => {
+    const bones = placeParentedChain(LIMB, 2);
+    enterNodeMode(LIMB);
+
+    for (const b of bones) {
+      expect(
+        overlayEl().querySelector(`[data-part-id="${b.id}"]`),
+        `${b.id} glyph drawn in node mode`,
+      ).toBeTruthy();
+      const g = rootGEl().querySelector(`[data-part-id="${b.id}"]`)!;
+      expect(g.classList.contains('dimmed'), `${b.id} not dimmed`).toBe(false);
+    }
+    const otherG = rootGEl().querySelector(`[data-part-id="${partByLabel('right_arm').id}"]`)!;
+    expect(otherG.classList.contains('dimmed'), 'an unrelated part still dims').toBe(true);
+  });
+});
+
+describe('scenario B19 — canvas chrome stays screen-constant across a zoom sweep (GOTCHA guard)', () => {
+  it('a bone glyph, a node handle, and the pivot ring hold their on-screen size from fit to ~8x zoom', () => {
+    // Deliberately SHORT (a ~12px client-space press-drag, well under a limb's medial
+    // span): the girth formula this guards against mixed doc-space and screen-space
+    // terms in a Math.min, which only shows non-constant width for a bone short enough
+    // that the doc-space term wins at fit zoom — a full-limb bone (medialPoints) never
+    // exercised that branch, so it wouldn't have caught the bug this test is for.
+    const origin = clientPointOnPart(LIMB);
+    placeBoneGesture(origin, { x: origin.x + 12, y: origin.y + 8 });
+    modelSelectPart(null);
+    resetView();
+    repaint();
+    assertScreenConstant('.null-glyph.bone circle');
+
+    resetView();
+    enterNodeMode('right_arm');
+    assertScreenConstant('.node-handle');
+
+    resetView();
+    state.mode = 'rig'; // back to the pose tool — node mode's overlay branch has no pivot ring
+    selectByLabel('right_leg');
+    assertScreenConstant('.pivot-ring');
+  });
+});
+
+describe('scenario B20 — IK drag feedback: chain highlight + target line', () => {
+  it('highlights the solving chain and draws an effector→pointer line mid-drag, clearing on release', () => {
+    const [, , b3] = placeParentedChain(LIMB, 3);
+    state.tool = 'ik';
+    modelSelectPart(null);
+    repaint();
+
+    const glyph = overlayEl().querySelector(`[data-part-id="${b3.id}"]`)!;
+    const from = clientCenterOf(glyph);
+    let activeCount = 0, lineCount = 0;
+    gestureDrag(from, { x: from.x - 40, y: from.y + 30 }, {
+      steps: 10,
+      beforeUp: () => {
+        activeCount = overlayCount('.null-glyph.ik-active');
+        lineCount = overlayCount('.ik-target-line');
+      },
+    });
+
+    expect(activeCount, 'the solving chain (2 ancestors + the grabbed bone) is highlighted mid-drag')
+      .toBe(3);
+    expect(lineCount, 'a target line is drawn mid-drag').toBe(1);
+    expect(overlayCount('.null-glyph.ik-active'), 'highlight cleared on release').toBe(0);
+    expect(overlayCount('.ik-target-line'), 'target line cleared on release').toBe(0);
+  });
+});
+
+describe("scenario B21 — a parent tip reshape preserves the CHILD bone's own length/direction (non-freeze)", () => {
+  it('dragging the parent tip carries the child origin without shortening/lengthening the child', () => {
+    const [b1, b2] = placeParentedChain(LIMB, 2);
+    modelSelectPart(b1.id);
+    repaint();
+
+    const tip0 = { ...b1.boneTip! };
+    const len0 = boneLen(b2);
+    const tipVec0 = { x: b2.boneTip!.x - b2.pivot.x, y: b2.boneTip!.y - b2.pivot.y };
+
+    const tipC = clientCenterOf(overlayEl().querySelector('.bone-tip-handle')!);
+    gestureDrag(tipC, { x: tipC.x + 55, y: tipC.y - 40 }, { steps: 10 });
+
+    const b1After = state.doc!.parts.find((p) => p.id === b1.id)!;
+    const b2After = state.doc!.parts.find((p) => p.id === b2.id)!;
+    const moved = Math.hypot(b1After.boneTip!.x - tip0.x, b1After.boneTip!.y - tip0.y);
+    expect(moved, 'the parent tip actually moved substantially').toBeGreaterThan(10);
+
+    expectClose(boneLen(b2After), len0, 0.01, "child bone's own length unchanged");
+    expectClose(
+      b2After.boneTip!.x - b2After.pivot.x, tipVec0.x, 0.01, 'child local tip vector x unchanged',
+    );
+    expectClose(
+      b2After.boneTip!.y - b2After.pivot.y, tipVec0.y, 0.01, 'child local tip vector y unchanged',
+    );
+  });
+});
+
+describe('scenario B22 — child length preservation recurses down a 3-bone chain', () => {
+  it('reshaping the ROOT carries both its child AND grandchild without touching either one\'s own length', () => {
+    const [b1, b2, b3] = placeParentedChain(LIMB, 3);
+    // Not the 'select' tool's default: its rotate-gizmo RING is a fixed screen radius
+    // around the pivot, and a 3-way-subdivided limb's individual bones are short enough
+    // for the ring to reach the tip handle and steal the press. The IK tool draws no
+    // such pivot-centered chrome (only its own drag-time feedback, scenario B20).
+    state.tool = 'ik';
+    modelSelectPart(b1.id);
+    repaint();
+
+    const len2 = boneLen(b2), len3 = boneLen(b3);
+    const vec2 = { x: b2.boneTip!.x - b2.pivot.x, y: b2.boneTip!.y - b2.pivot.y };
+    const vec3 = { x: b3.boneTip!.x - b3.pivot.x, y: b3.boneTip!.y - b3.pivot.y };
+
+    // Pull straight out along the root's OWN axis (like scenario B15) so the drag is
+    // mostly a LENGTH change, not just a rotation — the carried delta this exercises is
+    // (new tip local coord − old tip local coord), which stays small for a
+    // mostly-rotational drag even when the carry is broken (the bug is a length
+    // mismatch, not an angle one); a deliberate stretch makes it unmissable.
+    const originC = clientCenterOf(overlayEl().querySelector('.pivot-grab')!);
+    const tipC = clientCenterOf(overlayEl().querySelector('.bone-tip-handle')!);
+    const dx = tipC.x - originC.x, dy = tipC.y - originC.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const to = { x: tipC.x + (dx / d) * d * 0.6, y: tipC.y + (dy / d) * d * 0.6 };
+    gestureDrag(tipC, to, { steps: 10 });
+
+    const cur = (id: string) => state.doc!.parts.find((p) => p.id === id)!;
+    expectClose(boneLen(cur(b2.id)), len2, 0.01, 'grandparent reshape leaves the child length unchanged');
+    expectClose(boneLen(cur(b3.id)), len3, 0.01, 'grandparent reshape leaves the grandchild length unchanged');
+    expectClose(cur(b2.id).boneTip!.x - cur(b2.id).pivot.x, vec2.x, 0.01, 'child local tip x unchanged');
+    expectClose(cur(b2.id).boneTip!.y - cur(b2.id).pivot.y, vec2.y, 0.01, 'child local tip y unchanged');
+    expectClose(cur(b3.id).boneTip!.x - cur(b3.id).pivot.x, vec3.x, 0.01, 'grandchild local tip x unchanged');
+    expectClose(cur(b3.id).boneTip!.y - cur(b3.id).pivot.y, vec3.y, 0.01, 'grandchild local tip y unchanged');
+  });
+});
+
+describe('scenario B23 — node-editing "bind to bone…" dialog', () => {
+  it('pins the selected nodes to the picked bone/endpoint via the {a,b,t} override model', async () => {
+    const [b1, b2] = placeParentedChain('left_arm', 2); // auto-bound by placement
+    expect(partByLabel('left_arm').skin, 'auto-bound by placement').toBeTruthy();
+
+    enterNodeMode('left_arm');
+    const handles = Array.from(
+      overlayEl().querySelectorAll('.node-handle[data-field="x"]'),
+    ) as SVGElement[];
+    expect(handles.length, 'node handles present').toBeGreaterThan(1);
+    const p0 = clientCenterOf(handles[0]);
+    click(p0.x, p0.y);
+
+    const bindBtn = Array.from(document.querySelectorAll<HTMLButtonElement>('#inspector button'))
+      .find((b) => /bind to bone/.test(b.textContent ?? ''));
+    expect(bindBtn, '"bind to bone…" button present with a node selected').toBeTruthy();
+    expect(bindBtn!.disabled, 'enabled once a node is selected').toBe(false);
+    bindBtn!.click();
+
+    await waitFor(() => document.querySelector('.ui-dialog'), { message: 'bind dialog open' });
+    const selects = Array.from(document.querySelectorAll<HTMLSelectElement>('.ui-dialog select'));
+    expect(selects.length, 'bone + endpoint selects').toBe(2);
+    const [boneSel, endSel] = selects;
+    boneSel.value = b2.id;
+    endSel.value = 'origin';
+    const ok = document.querySelector<HTMLButtonElement>('.ui-dialog-primary')!;
+    ok.click();
+
+    await waitFor(() => partByLabel('left_arm').skin?.overrides, { message: 'override applied' });
+    const overrides = partByLabel('left_arm').skin!.overrides!;
+    const pathId = Object.keys(overrides)[0];
+    const cmdIndex = Object.keys(overrides[pathId])[0];
+    const ov = overrides[pathId][cmdIndex];
+    // "origin" of b2 (a child bone) is the joint shared with its PARENT (b1) — a = the
+    // picked bone, b = that neighbor, t = 0.5 (an even blend across the shared joint).
+    expect(ov.a).toBe(b2.id);
+    expect(ov.b).toBe(b1.id);
+    expectClose(ov.t, 0.5, 1e-9, 'even blend toward the neighbor');
+    expect(canUndo(), 'the bind + pin round-trips through undo').toBe(true);
   });
 });

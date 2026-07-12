@@ -67,6 +67,9 @@ export type DragState =
       /** Grab point in the clicked part's full-pose frame (rides the chain). */
       grabLocal: { x: number; y: number };
       grabbed: RigPart;
+      /** Live pointer position (root coords) — drives the drag-time target line from the
+       *  effector to the pointer, showing how far short a clamped reach falls. */
+      current: { x: number; y: number } | null;
       startClient: { x: number; y: number };
       active: boolean;
     }

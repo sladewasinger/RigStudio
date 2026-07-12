@@ -11,10 +11,16 @@
  */
 
 import { ctx, SVG_NS, round1, nodeKey, parseNodeKey } from './context';
-import { state, RigPart, selectedPart, selectedParts, ancestorChain } from '../core/model';
+import {
+  state, RigPart, selectedPart, selectedParts, ancestorChain, chainBonesOfPart,
+} from '../core/model';
 import { parsePath } from '../geometry/paths';
+import { applyMat, matrixOfTransform } from '../geometry/transforms';
 import { handleSize } from './coords';
-import { poseTime, effectivePivot, effectiveTip, partRootBoxes } from './pose';
+import {
+  poseTime, effectivePivot, effectiveTip, partRootBoxes, fullPoseTransform,
+} from './pose';
+import { nodeEditSkinSuspendId } from './focus';
 
 /** The 4 corner rotate-handle circles of the Inkscape-style rotate/skew handle set —
  *  shared between Edit's rotate+skew set and Animate's rotate-only set (bug fix: the
@@ -52,16 +58,29 @@ export function renderOverlay(): void {
     ctx.handleMode = 'scale';
   }
 
-  if (state.mode === 'nodes' && setup) {
-    const part = selectedPart();
-    if (part) renderNodeHandles(part);
-    drawSnapMarker();
-    return;
-  }
-
   const size = handleSize();
   const t = poseTime();
   const rootTransform = ctx.rootGroup.getAttribute('transform') ?? '';
+
+  if (state.mode === 'nodes' && setup) {
+    const part = selectedPart();
+    if (part) {
+      renderNodeHandles(part);
+      // Bones of the edited part's own chain are its binding context, not "everything
+      // else" that node editing dims away — draw them (undimmed, still selectable via
+      // Layers) exactly like the main loop below does. Also surface the skin-suspend
+      // hint (render.ts) so it's clear the art is showing its base shape right now.
+      let selectedBoneTip: SVGGElement | null = null;
+      for (const bone of chainBonesOfPart(doc.parts, part)) {
+        const tipWrap = appendNullGlyph(bone, t, rootTransform, size, setup);
+        if (tipWrap) selectedBoneTip = tipWrap;
+      }
+      if (selectedBoneTip) ctx.overlay.appendChild(selectedBoneTip);
+      if (nodeEditSkinSuspendId() === part.id) drawSkinSuspendHint(part, size);
+    }
+    drawSnapMarker();
+    return;
+  }
 
   // Everything positioned in root coordinates rides in one passive holder.
   const holder = document.createElementNS(SVG_NS, 'g');
@@ -128,46 +147,8 @@ export function renderOverlay(): void {
   let selectedBoneTip: SVGGElement | null = null;
   for (const part of doc.parts) {
     if (part.paths.length > 0) continue;
-    const p = effectivePivot(part, t);
-    const s = size * 1.6;
-    const glyph = document.createElementNS(SVG_NS, 'g');
-    glyph.dataset.partId = part.id;
-    const sel = state.selectedPartIds.includes(part.id) ? ' selected' : '';
-    glyph.setAttribute('class', `null-glyph ${part.kind}${sel}`);
-    if (rootTransform) glyph.setAttribute('transform', rootTransform);
-    const tip = effectiveTip(part, t);
-    if (part.kind === 'group') {
-      glyph.innerHTML =
-        `<rect x="${p.x - s * 0.8}" y="${p.y - s * 0.8}" width="${s * 1.6}" height="${s * 1.6}" />`;
-    } else if (tip) {
-      // Classic bone: a kite from the joint to the tip, widest near the joint.
-      glyph.innerHTML = boneKitePath(p, tip, size);
-    } else {
-      glyph.innerHTML =
-        `<path d="M ${p.x},${p.y - s} L ${p.x + s * 0.7},${p.y} L ${p.x},${p.y + s} ` +
-        `L ${p.x - s * 0.7},${p.y} Z" />`;
-    }
-    ctx.overlay.appendChild(glyph);
-
-    // The selected bone's tip is editable in Setup (re-aim / re-length). Build it here
-    // but append it AFTER the whole glyph loop, so a connected child bone's glyph (which
-    // sits on the shared joint == this tip) can't occlude it — otherwise the parent-tip
-    // drag is unreachable and only the child's pivot moves the shared joint.
-    if (setup && tip && part.id === state.selectedPartId) {
-      const th = document.createElementNS(SVG_NS, 'circle');
-      th.setAttribute('cx', String(tip.x));
-      th.setAttribute('cy', String(tip.y));
-      th.setAttribute('r', String(size * 0.9));
-      // A tip with a child bone hanging off it is a shared JOINT (origin editing) —
-      // freeze-gated, so mark it so the cursor drops its move affordance outside freeze.
-      const tipIsJoint = doc.parts.some((p) => p.kind === 'bone' && p.parentId === part.id);
-      th.setAttribute('class', `bone-tip-handle${tipIsJoint ? ' joint' : ''}`);
-      th.dataset.role = 'bone-tip';
-      const wrap = document.createElementNS(SVG_NS, 'g');
-      if (rootTransform) wrap.setAttribute('transform', rootTransform);
-      wrap.appendChild(th);
-      selectedBoneTip = wrap;
-    }
+    const tipWrap = appendNullGlyph(part, t, rootTransform, size, setup);
+    if (tipWrap) selectedBoneTip = tipWrap;
   }
   if (selectedBoneTip) ctx.overlay.appendChild(selectedBoneTip);
 
@@ -351,20 +332,119 @@ export function renderOverlay(): void {
   drawSnapMarker();
 }
 
-/** The classic bone silhouette between two points (joint fat end, pointed tip). */
+/**
+ * The classic bone silhouette between two points (joint fat end, pointed tip). The
+ * origin→tip SPAN legitimately scales with zoom (it's the true joint positions), but
+ * per the screen-constant-chrome GOTCHA the kite's CROSS-SECTION must not: `w` (and the
+ * along-axis offset of its widest point) derive only from `size` (handleSize(), already
+ * screen-constant), never from `len` (a fixed doc-space quantity whose on-screen size
+ * grows with zoom) — that mixed-unit `Math.min(len*k, size*k)` used to win on whichever
+ * term was smaller, so the girth crept wider through most of a zoom-in before a
+ * high-zoom crossover finally capped it (the reported "bone glyphs not zoom-stable"
+ * bug). `len` still bounds where the widest point sits ALONG the segment, purely so a
+ * very short bone's kite doesn't overshoot its own tip — that's a shape/proportion
+ * clamp, not a girth one, and doesn't reintroduce the bug.
+ */
 function boneKitePath(p: { x: number; y: number }, q: { x: number; y: number }, size: number): string {
   const dx = q.x - p.x, dy = q.y - p.y;
   const len = Math.hypot(dx, dy);
   if (len < 1e-6) return '';
   const ux = dx / len, uy = dy / len;
-  const w = Math.min(len * 0.18, size * 1.6);
-  const bx = p.x + ux * Math.min(len * 0.22, size * 2);
-  const by = p.y + uy * Math.min(len * 0.22, size * 2);
+  const w = size * 1.6;
+  const off = Math.min(len * 0.5, size * 2);
+  const bx = p.x + ux * off;
+  const by = p.y + uy * off;
   return (
     `<path d="M ${p.x},${p.y} L ${bx - uy * w},${by + ux * w} L ${q.x},${q.y} ` +
     `L ${bx + uy * w},${by - ux * w} Z" />` +
     `<circle cx="${p.x}" cy="${p.y}" r="${w * 0.5}" />`
   );
+}
+
+/**
+ * One bone/group's canvas glyph (kite/diamond/square) + its tip-handle wrapper (Setup,
+ * when it's the primary selection) — shared by the main overlay loop and the
+ * node-editing chain-bone loop (item v2.13 follow-up: bones stay visible/selectable
+ * while their owning part is node-edited) so both draw an identical, fully interactive
+ * glyph. Returns the tip-handle wrapper (append it AFTER every glyph in the caller's
+ * loop — see the loop below for why) or null.
+ */
+function appendNullGlyph(
+  part: RigPart, t: number | null, rootTransform: string, size: number, setup: boolean,
+): SVGGElement | null {
+  const doc = state.doc!;
+  const p = effectivePivot(part, t);
+  const s = size * 1.6;
+  const glyph = document.createElementNS(SVG_NS, 'g');
+  glyph.dataset.partId = part.id;
+  const sel = state.selectedPartIds.includes(part.id) ? ' selected' : '';
+  const drag = ctx.drag;
+  const ikActive = !!drag && drag.kind === 'ik' && drag.active && (
+    part.id === drag.p1.id
+    || (!!drag.p2 && part.id === drag.p2.id)
+    || (drag.grabbed.kind === 'bone' && part.id === drag.grabbed.id)
+  );
+  glyph.setAttribute('class', `null-glyph ${part.kind}${sel}${ikActive ? ' ik-active' : ''}`);
+  if (rootTransform) glyph.setAttribute('transform', rootTransform);
+  const tip = effectiveTip(part, t);
+  if (part.kind === 'group') {
+    glyph.innerHTML =
+      `<rect x="${p.x - s * 0.8}" y="${p.y - s * 0.8}" width="${s * 1.6}" height="${s * 1.6}" />`;
+  } else if (tip) {
+    // Classic bone: a kite from the joint to the tip, widest near the joint.
+    glyph.innerHTML = boneKitePath(p, tip, size);
+  } else {
+    glyph.innerHTML =
+      `<path d="M ${p.x},${p.y - s} L ${p.x + s * 0.7},${p.y} L ${p.x},${p.y + s} ` +
+      `L ${p.x - s * 0.7},${p.y} Z" />`;
+  }
+  ctx.overlay!.appendChild(glyph);
+
+  // The selected bone's tip is editable in Setup (re-aim / re-length). Build it here
+  // but return it for the caller to append AFTER the whole glyph loop, so a connected
+  // child bone's glyph (which sits on the shared joint == this tip) can't occlude it —
+  // otherwise the parent-tip drag is unreachable and only the child's pivot moves the
+  // shared joint.
+  if (setup && tip && part.id === state.selectedPartId) {
+    const th = document.createElementNS(SVG_NS, 'circle');
+    th.setAttribute('cx', String(tip.x));
+    th.setAttribute('cy', String(tip.y));
+    th.setAttribute('r', String(size * 0.9));
+    // A tip with a child bone hanging off it is a shared JOINT (origin editing) —
+    // freeze-gated, so mark it so the cursor drops its move affordance outside freeze.
+    const tipIsJoint = doc.parts.some((pp) => pp.kind === 'bone' && pp.parentId === part.id);
+    th.setAttribute('class', `bone-tip-handle${tipIsJoint ? ' joint' : ''}`);
+    th.dataset.role = 'bone-tip';
+    const wrap = document.createElementNS(SVG_NS, 'g');
+    if (rootTransform) wrap.setAttribute('transform', rootTransform);
+    wrap.appendChild(th);
+    return wrap;
+  }
+  return null;
+}
+
+/**
+ * The node-editing equivalent of the `.skin-hint` "posed by its bones" label (item
+ * v2.13 follow-up): while this part's deformation is suspended for node editing, say so
+ * — the art on screen is its base/bind shape, not its current pose.
+ */
+function drawSkinSuspendHint(part: RigPart, size: number): void {
+  const g = ctx.partGroups.get(part.id);
+  if (!g || !ctx.overlay) return;
+  const box = g.getBBox();
+  const rootTransform = ctx.rootGroup?.getAttribute('transform') ?? '';
+  const groupTransform = g.getAttribute('transform') ?? '';
+  const hint = document.createElementNS(SVG_NS, 'text');
+  hint.setAttribute('x', String(box.x));
+  hint.setAttribute('y', String(box.y - size * 0.6));
+  hint.setAttribute('class', 'skin-hint');
+  hint.setAttribute('font-size', String(size * 1.5));
+  hint.textContent = 'editing base shape — bone deformation paused';
+  const wrap = document.createElementNS(SVG_NS, 'g');
+  wrap.setAttribute('class', 'overlay-passive');
+  wrap.setAttribute('transform', [rootTransform, groupTransform].filter(Boolean).join(' '));
+  wrap.appendChild(hint);
+  ctx.overlay.appendChild(wrap);
 }
 
 /**
@@ -523,6 +603,20 @@ function renderDragGizmo(holder: SVGGElement, size: number): void {
       `${Math.round(ctx.drag.part.rest.sx * 100)}% × ${Math.round(ctx.drag.part.rest.sy * 100)}%`,
       size,
     );
+  } else if (ctx.drag.kind === 'ik' && ctx.drag.current) {
+    // Target line: effector (the grabbed point, recomputed live off the just-solved
+    // pose) → pointer. At full reach the two coincide; a visible gap explains an
+    // out-of-reach clamp instead of leaving the drag looking unresponsive.
+    const current = ctx.drag.current;
+    const m = matrixOfTransform(fullPoseTransform(ctx.drag.grabbed, poseTime()));
+    const eff = applyMat(m, ctx.drag.grabLocal.x, ctx.drag.grabLocal.y);
+    const line = document.createElementNS(SVG_NS, 'line');
+    line.setAttribute('x1', String(eff.x));
+    line.setAttribute('y1', String(eff.y));
+    line.setAttribute('x2', String(current.x));
+    line.setAttribute('y2', String(current.y));
+    line.setAttribute('class', 'ik-target-line');
+    holder.appendChild(line);
   }
 }
 

@@ -34,7 +34,7 @@ export {
   bindPartsToBones, autoBindPlacedBone, unbindSelectedSkin,
   startBonePlacement, cancelBonePlacement, rebindFrozenChain,
   primaryNodeBinding, setNodeBinding, clearNodeBinding, resetNodeBindings,
-  recomputeAutoWeights,
+  recomputeAutoWeights, bindSelectedNodesToBone, quickNodeBindTarget,
 } from './rigOps';
 export type { NodeBindingInfo } from './rigOps';
 export { resetView, zoomBy } from './camera';

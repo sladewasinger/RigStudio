@@ -521,6 +521,7 @@ export function wireInteractions(): void {
               ctx.drag = {
                 kind: 'ik', p1, p2, grabbed: p1,
                 grabLocal: { x: grabLocal.x, y: grabLocal.y },
+                current: { x: p.x, y: p.y },
                 startClient: { x: ev.clientX, y: ev.clientY },
                 active: false,
               };
@@ -557,6 +558,7 @@ export function wireInteractions(): void {
             ctx.drag = {
               kind: 'ik', p1, p2, grabbed: part,
               grabLocal: { x: grabLocal.x, y: grabLocal.y },
+              current: { x: p.x, y: p.y },
               startClient: { x: ev.clientX, y: ev.clientY },
               active: false,
             };
@@ -810,6 +812,7 @@ export function wireInteractions(): void {
       const d = ctx.drag;
       const p = pointerInRoot(ev);
       const t = poseTime();
+      d.current = { x: p.x, y: p.y }; // drives the overlay's effector→pointer target line
       // Current geometry (recomputed every move — the solve is incremental).
       const e = applyMat(matrixOfTransform(fullPoseTransform(d.grabbed, t)), d.grabLocal.x, d.grabLocal.y);
       const bPiv = effectivePivot(d.p1, t);
