@@ -11,6 +11,7 @@ import {
 import { renderPose, registerPart, bindPartsToBones } from '../view';
 import { animateWithClaude, critiqueWithClaude, AnimateResult } from '../ai/claude';
 import { checkpoint } from '../core/history';
+import { cloneArtworkSvg, rasterizeSvg } from '../ui/snapshot';
 
 /**
  * Rasterize the canvas at the CURRENT PLAYHEAD TIME (sans overlay/onion) to a PNG for
@@ -18,39 +19,18 @@ import { checkpoint } from '../core/history';
  * pose is on screen, which in Animate mode is always the playhead's pose (renderPose
  * samples `state.currentTime`) — so cloning it verbatim is exactly "current playhead
  * pose", not e.g. a rest pose or an arbitrary frame. Returns base64 image data (no
- * data: prefix).
+ * data: prefix). Shares the clone/rasterize primitives with the toolbar's still-image
+ * export (ui/snapshot.ts) — this call keeps the exact prior behavior (full-document
+ * viewBox, artboard rect NOT stripped, 512px-wide white-background PNG).
  */
 async function snapshotPose(): Promise<string | null> {
-  const live = document.getElementById('rig-svg') as SVGSVGElement | null;
-  const doc = state.doc;
-  if (!live || !doc) return null;
-  const clone = live.cloneNode(true) as SVGSVGElement;
-  clone.querySelector('#overlay')?.remove();
-  clone.querySelector('#onion')?.remove();
-  // Full-document framing regardless of the user's current zoom.
-  const { x, y, w, h } = doc.viewBox;
-  clone.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
+  const clone = cloneArtworkSvg();
+  if (!clone) return null;
+  const { w, h } = state.doc!.viewBox;
   const outW = 512;
   const outH = Math.round((512 * h) / w);
-  clone.setAttribute('width', String(outW));
-  clone.setAttribute('height', String(outH));
-
-  const svgText = new XMLSerializer().serializeToString(clone);
-  const url = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgText)}`;
-  const img = new Image();
-  await new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve();
-    img.onerror = () => reject(new Error('snapshot render failed'));
-    img.src = url;
-  });
-  const canvas = document.createElement('canvas');
-  canvas.width = outW;
-  canvas.height = outH;
-  const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, outW, outH);
-  ctx.drawImage(img, 0, 0, outW, outH);
-  return canvas.toDataURL('image/png').split(',')[1] ?? null;
+  const dataUrl = await rasterizeSvg(clone, outW, outH, '#ffffff');
+  return dataUrl.split(',')[1] ?? null;
 }
 
 /**

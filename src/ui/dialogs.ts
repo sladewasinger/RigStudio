@@ -239,44 +239,95 @@ function promptDialog(
 export interface DialogFormField {
   name: string;
   label: string;
+  /** Field kind; defaults to 'text'. */
+  type?: 'text' | 'select' | 'checkbox';
+  /** Initial value: the text content for 'text', the selected option's value for
+   *  'select'. Unused for 'checkbox' (use `checked`). */
   value?: string;
-  placeholder?: string;
+  placeholder?: string; // 'text' only
+  options?: { value: string; label: string }[]; // 'select' only
+  checked?: boolean; // 'checkbox' only
 }
 
+/** A form dialog with mixed field types (text/select/checkbox). Every field resolves
+ *  to a string ('text'/'select') or boolean ('checkbox') in the returned record,
+ *  keyed by `field.name`; null means the dialog was cancelled. */
 function formDialog(
   title: string,
   fields: DialogFormField[],
   opts: { okText?: string } = {},
-): Promise<Record<string, string> | null> {
-  return runExclusive(() => new Promise<Record<string, string> | null>((resolve) => {
-    const shell = openShell<Record<string, string> | null>(title, (v) => resolve(v as Record<string, string> | null));
-    const inputs = new Map<string, HTMLInputElement>();
+): Promise<Record<string, string | boolean> | null> {
+  return runExclusive(() => new Promise<Record<string, string | boolean> | null>((resolve) => {
+    const shell = openShell<Record<string, string | boolean> | null>(
+      title, (v) => resolve(v as Record<string, string | boolean> | null),
+    );
+    const inputs = new Map<string, HTMLInputElement | HTMLSelectElement>();
+    let firstFocusable: HTMLInputElement | HTMLSelectElement | null = null;
     for (const field of fields) {
+      const kind = field.type ?? 'text';
       const labelEl = document.createElement('label');
-      labelEl.className = 'ui-dialog-field-label';
-      labelEl.textContent = field.label;
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.value = field.value ?? '';
-      if (field.placeholder) input.placeholder = field.placeholder;
-      labelEl.appendChild(input);
+      if (kind === 'checkbox') {
+        // Reuses the app-wide `.field` row layout (style.css): label text then the
+        // control, spaced apart — matches every other checkbox row in the editor.
+        labelEl.className = 'field';
+        const span = document.createElement('span');
+        span.textContent = field.label;
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = field.checked ?? false;
+        labelEl.append(span, input);
+        inputs.set(field.name, input);
+        firstFocusable ??= input;
+      } else if (kind === 'select') {
+        labelEl.className = 'ui-dialog-field-label';
+        labelEl.textContent = field.label;
+        const select = document.createElement('select');
+        for (const opt of field.options ?? []) {
+          const o = document.createElement('option');
+          o.value = opt.value;
+          o.textContent = opt.label;
+          select.appendChild(o);
+        }
+        if (field.value !== undefined) select.value = field.value;
+        labelEl.appendChild(select);
+        inputs.set(field.name, select);
+        firstFocusable ??= select;
+      } else {
+        labelEl.className = 'ui-dialog-field-label';
+        labelEl.textContent = field.label;
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.value = field.value ?? '';
+        if (field.placeholder) input.placeholder = field.placeholder;
+        labelEl.appendChild(input);
+        inputs.set(field.name, input);
+        firstFocusable ??= input;
+      }
       shell.body.appendChild(labelEl);
-      inputs.set(field.name, input);
     }
 
     const cancel = button('Cancel');
     cancel.addEventListener('click', () => shell.finish(null));
     const ok = button(opts.okText ?? 'OK', 'primary');
     const submit = () => {
-      const out: Record<string, string> = {};
-      for (const [name, input] of inputs) out[name] = input.value.trim();
+      const out: Record<string, string | boolean> = {};
+      for (const [name, el] of inputs) {
+        out[name] = el instanceof HTMLInputElement && el.type === 'checkbox'
+          ? el.checked
+          : el.value.trim();
+      }
       shell.finish(out);
     };
     ok.addEventListener('click', submit);
     shell.footer.append(cancel, ok);
     shell.setPrimary(ok);
 
-    queueMicrotask(() => { const first = [...inputs.values()][0]; first?.focus(); first?.select(); });
+    queueMicrotask(() => {
+      firstFocusable?.focus();
+      if (firstFocusable instanceof HTMLInputElement && firstFocusable.type === 'text') {
+        firstFocusable.select();
+      }
+    });
   }));
 }
 

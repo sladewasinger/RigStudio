@@ -5,9 +5,14 @@
  * immediately BEFORE any mutation (one call per user gesture — a whole drag is a single
  * checkpoint at pointer-down, so undo reverts the entire drag). Undo/redo swap the live
  * document with a snapshot and rebuild the canvas via the restore handler.
+ *
+ * checkpoint() is also the unsaved-changes guard's single chokepoint: it marks
+ * state.dirty (model.ts's markDirty) since every doc mutation in the app is preceded
+ * by a checkpoint() call. See the `dirty` field's doc comment on AppState for the
+ * full set/clear rule.
  */
 
-import { state, notify, RigDoc } from './model';
+import { state, notify, markDirty, RigDoc } from './model';
 
 const MAX_ENTRIES = 100;
 
@@ -22,6 +27,7 @@ export function setRestoreHandler(fn: () => void): void {
 
 export function checkpoint(): void {
   if (!state.doc) return;
+  markDirty();
   undoStack.push(structuredClone(state.doc));
   if (undoStack.length > MAX_ENTRIES) undoStack.shift();
   redoStack = [];

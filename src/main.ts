@@ -2,6 +2,7 @@ import {
   state, notify, subscribe, activeClip, serializeDoc, deserializeDoc, EditorMode,
   selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder,
   setSnapEnabled, setFreezeMode, selectAllParts, partById, newBlankDoc,
+  markClean,
 } from './core/model';
 import { importSvg } from './io/importSvg';
 import {
@@ -26,6 +27,8 @@ import { toggleHelp, closeHelp, isHelpOpen } from './ui/help';
 import { dialog, isDialogOpen, closeActiveDialog } from './ui/dialogs';
 import { showContextMenu, isMenuOpen, closeMenu } from './ui/contextMenu';
 import { canDuplicateSelection, duplicateSelectedParts, deleteSelectedParts, buildPartContextMenu } from './ui/actions';
+import { download } from './ui/download';
+import { exportPngFlow, exportSvgFlow, canExportImage } from './ui/imageExport';
 
 const layersEl = document.getElementById('layers')!;
 const canvasEl = document.getElementById('canvas')!;
@@ -46,7 +49,21 @@ function afterDocReplaced(): void {
   resetHistory(); // no undoing past a document swap
   buildCanvas(canvasEl);
   resetView(); // fit the fresh document (zoom/pan otherwise survives rebuilds)
+  markClean(); // a freshly loaded/blank doc has no unsaved edits yet
   notify();
+}
+
+/** Unsaved-changes guard for every doc-REPLACING UI action (New / Open / Load
+ *  sample): confirm only when there's something to lose. Deliberately NOT called by
+ *  loadProjectText/loadSvgText themselves — those are also the programmatic path
+ *  (window.__rigStudio.loadProjectText, the interaction-test harness's resetRig)
+ *  which must swap docs silently. */
+async function confirmReplaceIfDirty(): Promise<boolean> {
+  if (!state.dirty) return true;
+  return dialog.confirm(
+    'You have unsaved changes — replace the current project?',
+    { title: 'Replace project', okText: 'Replace' },
+  );
 }
 
 function loadSvgText(text: string, name: string): void {
@@ -74,13 +91,7 @@ function loadProjectText(text: string): boolean {
  *  there's work to lose), through the SAME afterDocReplaced path Open uses. The debounced
  *  autosave then overwrites the saved session with the blank doc — it IS the current doc. */
 async function newProject(): Promise<void> {
-  if (state.doc) {
-    const ok = await dialog.confirm(
-      'Start a new project? The current one will be replaced — save first if you want to keep it.',
-      { title: 'New project', okText: 'New project' },
-    );
-    if (!ok) return;
-  }
+  if (!(await confirmReplaceIfDirty())) return;
   state.doc = newBlankDoc();
   state.editorMode = 'setup';
   afterDocReplaced();
@@ -91,6 +102,7 @@ document.getElementById('btn-open')!.onclick = () => fileInput.click();
 fileInput.onchange = async () => {
   const file = fileInput.files?.[0];
   if (!file) return;
+  if (!(await confirmReplaceIfDirty())) { fileInput.value = ''; return; }
   const text = await file.text();
   if (/\.json$/i.test(file.name)) loadProjectText(text);
   else loadSvgText(text, file.name);
@@ -98,6 +110,7 @@ fileInput.onchange = async () => {
 };
 
 document.getElementById('btn-sample')!.onclick = async () => {
+  if (!(await confirmReplaceIfDirty())) return;
   const res = await fetch('/PIP_MASTER.svg');
   if (!res.ok) {
     void dialog.alert('Sample not found — copy PIP_MASTER.svg into public/');
@@ -118,17 +131,10 @@ async function saveProject(): Promise<void> {
   const filename = await dialog.prompt('Save project as', `${state.doc.name}.rig.json`);
   if (!filename) return;
   download(filename, serializeDoc(state.doc), 'application/json');
+  markClean(); // the download completed — nothing left unsaved
+  notify();
 }
 document.getElementById('btn-save')!.onclick = () => { void saveProject(); };
-
-function download(filename: string, content: string | Uint8Array, type: string): void {
-  const blob = new Blob([content as BlobPart], { type });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
 
 let autosaveTimer = 0;
 function scheduleAutosave(): void {
@@ -138,8 +144,19 @@ function scheduleAutosave(): void {
     if (state.doc) localStorage.setItem(AUTOSAVE_KEY, serializeDoc(state.doc));
   }, 800);
 }
-window.addEventListener('beforeunload', () => {
+// Autosave to localStorage unconditionally (never loses data on close), and ADDITIONALLY
+// warn via the browser's native prompt when there are unsaved changes relative to the
+// last project save/replace (state.dirty) — the autosave slot round-trips on reload, but
+// it isn't the same as the user's own "Save project" .rig.json, and closing without either
+// discards undo history. preventDefault() + returnValue is the standard cross-browser
+// pattern; the string content of returnValue is ignored by modern browsers (they show
+// their own fixed wording), but is set for older-browser compatibility.
+window.addEventListener('beforeunload', (ev: BeforeUnloadEvent) => {
   if (state.doc) localStorage.setItem(AUTOSAVE_KEY, serializeDoc(state.doc));
+  if (state.dirty) {
+    ev.preventDefault();
+    ev.returnValue = '';
+  }
 });
 
 // ---- Exports ----
@@ -177,6 +194,19 @@ async function exportRivFlow(): Promise<void> {
   } catch (err) {
     await dialog.alert(`Rive export failed: ${err instanceof Error ? err.message : err}`);
   }
+}
+
+const exportPngBtn = document.getElementById('btn-export-png') as HTMLButtonElement;
+const exportSvgBtn = document.getElementById('btn-export-svg') as HTMLButtonElement;
+exportPngBtn.onclick = () => { void exportPngFlow(); };
+exportSvgBtn.onclick = () => { void exportSvgFlow(); };
+
+/** No document loaded → still-image export has nothing to render; disable rather
+ *  than pop an alert (mirrors the undo/redo button pattern below). */
+function syncExportImageButtons(): void {
+  const enabled = canExportImage();
+  exportPngBtn.disabled = !enabled;
+  exportSvgBtn.disabled = !enabled;
 }
 
 // ---- Setup / Animate mode toggle ----
@@ -534,6 +564,7 @@ document.addEventListener('keydown', (ev) => {
 // far more often) by renderPose().
 subscribe(() => {
   syncModeToggle();
+  syncExportImageButtons();
   buildLayersPanel(layersEl);
   buildCanvasTools(canvasToolsEl);
   buildInspector(inspectorEl);
@@ -557,6 +588,7 @@ if (autosaved) {
     state.doc = deserializeDoc(autosaved);
     buildCanvas(canvasEl);
     resetView();
+    markClean(); // restoring the autosave slot IS the durable state — nothing unsaved yet
   } catch {
     localStorage.removeItem(AUTOSAVE_KEY);
   }

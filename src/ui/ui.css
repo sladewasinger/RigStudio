@@ -55,7 +55,8 @@
   color: var(--muted);
   font-size: 12px;
 }
-.ui-dialog-field-label input { margin-top: 2px; }
+.ui-dialog-field-label input,
+.ui-dialog-field-label select { margin-top: 2px; }
 .ui-dialog-footer {
   display: flex;
   justify-content: flex-end;

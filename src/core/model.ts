@@ -351,6 +351,23 @@ export interface AppState {
    * saved preference — never serialized into a project and never persisted to localStorage.
    */
   freezeMode: boolean;
+  /**
+   * Unsaved-changes flag backing main.ts's "replace project" confirm guard and the
+   * beforeunload warning. Set by history.ts's checkpoint() — the single chokepoint
+   * every doc mutation already flows through per this codebase's convention
+   * ("checkpoint() before every mutation, once per gesture") — via markDirty()
+   * below. Cleared via markClean() when the in-memory doc is known to match
+   * something durable: a fresh doc load/replace completes (main.ts's
+   * afterDocReplaced, covering New/Open/Load sample, and the boot-time autosave
+   * restore) or an explicit project save completes (main.ts's saveProject —
+   * downloading the .rig.json). Lottie/.riv export do NOT clear it: they're lossy
+   * one-way renders, not project saves, so losing further edits after one of those
+   * would still lose real work. Undo/redo don't specially clear it either
+   * (deliberate simplification: undoing back past the last save can leave
+   * dirty=true even though the doc now matches disk — a safe false positive, never
+   * a false negative). Never serialized into a project, never persisted.
+   */
+  dirty: boolean;
 }
 
 /** localStorage key for the snapping preference (a UI setting, not project data). */
@@ -392,11 +409,25 @@ export const state: AppState = {
   onionSkin: false,
   snapEnabled: readSnapEnabled(),
   freezeMode: false,
+  dirty: false,
 };
 
 /** Toggle freeze (origin-editing) mode. App state only — never serialized or persisted. */
 export function setFreezeMode(on: boolean): void {
   state.freezeMode = on;
+}
+
+/** Mark the document as having unsaved changes. Called from history.ts's
+ *  checkpoint() — see the `dirty` field's doc comment on AppState for the full rule. */
+export function markDirty(): void {
+  state.dirty = true;
+}
+
+/** Mark the document clean (matches something durable) — called after a full doc
+ *  replace completes (main.ts's afterDocReplaced) or a project save completes
+ *  (main.ts's saveProject). See the `dirty` field's doc comment for the full rule. */
+export function markClean(): void {
+  state.dirty = false;
 }
 
 type Listener = () => void;
