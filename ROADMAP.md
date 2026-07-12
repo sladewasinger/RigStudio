@@ -454,13 +454,14 @@ principles pass integrates last as a preset refinement turn.
   Apply = the existing atomic one-undo path; Retry = posts back into the thread
   (A4) with the preview visible; Discard = zero trace. Structural changes (new
   bones) preview as ghost overlays where feasible, else summarized in the bar.
-- [ ] **A3. Filmstrip vision** (idea 1) — replace the single playhead snapshot
+- [x] **A3. Filmstrip vision** (9a49106) (idea 1) — replace the single playhead snapshot
   with a strip of rendered frames (t = 0/25/50/75/100% of the clip, or one per
   keyframe cluster when denser), downscaled, payload-capped. Sent on BOTH
   animate and critique calls so Claude sees motion arcs, clipping, dead holds —
   and on A2 Retry turns it re-renders the CANDIDATE clip so refinement reacts to
   what the model actually produced.
-- [ ] **A4. Clip-scoped refinement threads** (idea 2) — each clip keeps a
+- [x] **A4. Clip-scoped refinement threads** (f902260, incl. the panels/ai
+  folder split — first ratchet burn-down) (idea 2) — each clip keeps a
   conversation thread (app-state + localStorage keyed by doc name + clip name;
   last N turns): prior clip JSON, user instructions, model changes-summaries.
   The prompt box becomes the thread composer; A2's Retry is a thread turn;
