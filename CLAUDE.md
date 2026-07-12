@@ -46,6 +46,14 @@ from the console; `window.__smPanel` drives the state-machine editor determinist
   `view/interactions.ts` and `view/nodeEditing.ts` are documented exceptions
   (every pointer drag pipeline / all node-structure math respectively gain more
   from staying in one place than from being split further).
+  **ENFORCED (2026-07-11, after the standard was violated eight times during the
+  feature blitz — exportRiv 1.1k lines, model 1.6k, smPanel 1.4k...):** a size-
+  ratchet unit test (`architecture.test.ts`) pins every source file's line count;
+  existing oversized files are grandfathered AT their recorded size and may not
+  grow — a wave that adds to one must either split it in the same wave or shrink
+  something else in it; NEW files fail the gate above ~300 lines. The grandfather
+  list burns down in the dedicated refactor pass (see ROADMAP). Do not raise a
+  ratchet number to make a test pass — that defeats the mechanism.
 - **Feature-grouped folders**: `src/` is organized by responsibility, not left
   flat — `core/` (document model, undo/redo, state-machine evaluator), `geometry/`
   (pure math: paths, transforms, snapping, align, IK, skinning), `io/` (SVG

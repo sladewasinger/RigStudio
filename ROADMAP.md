@@ -448,7 +448,7 @@ principles pass integrates last as a preset refinement turn.
   prompt instructs it AND post-apply enforcement restores any protected key the
   model touched). Duration is pinned: the schema echoes the clip's set duration
   and validation rejects/clamps drift.
-- [ ] **A2. Preview-before-apply** (idea 4) — AI results NEVER mutate the doc
+- [x] **A2. Preview-before-apply** (b547c4b/4797149) (idea 4) — AI results NEVER mutate the doc
   directly: the returned clip renders as a looping preview (pose-sampler
   playback, the SM-preview infrastructure) with an Apply / Retry / Discard bar.
   Apply = the existing atomic one-undo path; Retry = posts back into the thread
@@ -505,6 +505,29 @@ Category B — nice-to-have (untracked):
 + 100% reset, copy/paste parts [note: Ctrl+C/V are keyframe-only, no-op in Edit mode],
 marquee part-select, layers visibility/lock/opacity, playback range/work area,
 key-pose + auto-key, SVG-import error surfacing.)
+
+## Architecture refactor pass (user-mandated — run AFTER the A program + fixes,
+## alongside/before H; meanwhile the size-ratchet test stops NEW violations)
+
+The feature blitz outgrew the ~200-line standard in 8 files (audit 2026-07-11):
+model.ts 1634, smPanel.ts 1404, exportRiv.ts 1116, inspector.ts 981, ai.ts 938,
+timeline.ts 817, overlay.ts 801, rigOps.ts 769 (interactions/nodeEditing are the
+two documented exceptions). Target shapes, each behind a facade per the view/
+precedent, zero behavior change, gated on the full suites:
+
+- [ ] **io/riv/** — exportRiv.ts → writer primitives (varuint/ToC), the pinned
+  key table, scene mapping, animation emit, state-machine emit, + the test
+  decoder promoted to a shared test util.
+- [ ] **core/ split** — model.ts → doc types + part helpers / channels + sampling
+  / SM types / serialization + normalizeDoc / app-state.
+- [ ] **panels/sm/** — smPanel.ts → graph canvas, side panels, preview engine.
+- [ ] **panels/ai/** — ai.ts → panel UI, apply pipeline, preview engine, filmstrip.
+- [ ] **inspector sections** → per-section modules (rest/bone/skin/artboard/node-ops).
+- [ ] **timeline/** internals, **view/overlay.ts** (chrome families), **view/rigOps.ts**
+  (placement/bind/freeze clusters) as smaller follow-ups.
+- [ ] **Size-ratchet test** (`architecture.test.ts`) lands FIRST — immediately
+  after the in-flight A3 wave — grandfathering current counts; new files >~300
+  lines fail; grandfathered files may not grow.
 
 ## Headless engine + MCP server (planned with Austin 2026-07-11 — NOT scheduled;
 ## build after/alongside the AI program, sharing its components)
