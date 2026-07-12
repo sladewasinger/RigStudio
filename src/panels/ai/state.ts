@@ -17,8 +17,18 @@ export interface AiPanelState {
   promptText: string;
   critiqueText: string | null;
   abort: AbortController | null;
+  /**
+   * AI Animate System v2 A6 "Polish": the instruction of an in-flight/just-entered
+   * preview that came from the Polish button rather than the prompt box. Non-null from
+   * the moment `requests.ts`'s `runAnimate` enters a preview for a Polish turn until
+   * `panel.ts`'s `handleApply`/`handleDiscard` consumes it (both reset it to null) — it
+   * exists so Apply records the RIGHT text as the thread turn and never clears
+   * `promptText`, which a Polish turn never wrote to in the first place (the user's own
+   * draft, if any, must survive untouched).
+   */
+  polishInstruction: string | null;
 }
 
 export const ai: AiPanelState = {
-  busy: false, status: '', promptText: '', critiqueText: null, abort: null,
+  busy: false, status: '', promptText: '', critiqueText: null, abort: null, polishInstruction: null,
 };

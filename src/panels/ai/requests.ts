@@ -73,12 +73,18 @@ export async function runAnimate(
    *  request reacts to what the model actually produced instead of the doc's stale
    *  pose. undefined = render the DOC's active clip fresh here. */
   retryFrames?: FilmstripFrame[],
+  /** AI Animate System v2 A6 "Polish": when set, this IS the instruction — the prompt
+   *  box is read only as a fallback (Create/Modify/Retry). Its only caller is
+   *  `./polish.ts`'s button; the box is never written to, so the user's own draft (if
+   *  any) survives the whole turn untouched. */
+  instructionOverride?: string,
 ): Promise<void> {
   const { fields, setBusy, previewBarRef } = ctx;
   const ctxv = requireCtx(fields);
   const clip = activeClip();
   if (!ctxv || !clip) return;
-  if (!fields.promptBox.value.trim()) {
+  const rawInstruction = instructionOverride ?? fields.promptBox.value.trim();
+  if (!rawInstruction) {
     fields.status.textContent = 'Describe the motion you want.';
     return;
   }
@@ -134,7 +140,7 @@ export async function runAnimate(
     // AI Animate System v2 A4: clip-scoped refinement thread — MODIFY only (a 'new'
     // clip's name isn't known until the response comes back, so there's no target
     // clip to look a thread up under yet; see src/panels/ai/threads.ts's doc comment).
-    let instruction = fields.promptBox.value.trim();
+    let instruction = rawInstruction;
     if (mode === 'modify') {
       const thread = getThread(ctxv.doc.name, clip.name);
       if (thread && thread.turns.length > 0) {
@@ -163,6 +169,9 @@ export async function runAnimate(
     );
     // The doc is untouched up to this point. A2: a SUCCESSFUL response enters a
     // canvas-only PREVIEW that the user reviews via Apply / Retry / Discard.
+    // A6: mirror which instruction actually produced this candidate — null for a
+    // normal Create/Modify/Retry (handleApply falls back to promptText for those).
+    ai.polishInstruction = instructionOverride ?? null;
     enterPreview(result, mode, {
       clip: mode === 'modify' ? clip : undefined,
       clipName: result.clip.clipName,

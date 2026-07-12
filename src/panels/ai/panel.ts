@@ -15,6 +15,7 @@ import {
   AiFields, applyBusyState, buildAiFields, mountAiActions, mountAiIntroFields, mountAiToggleFields,
 } from './fields';
 import { buildTemplateRow } from './templates';
+import { buildPolishButton } from './polish';
 import { buildThreadStrip } from './threadStrip';
 import { recordTurn, summarizeTracks } from './threads';
 import { buildPreviewBar } from './previewBar';
@@ -29,10 +30,14 @@ import {
  *  (see `./threads.ts`'s doc comment: the thread reflects what actually landed, never a
  *  discarded candidate or an in-flight Retry). */
 function handleApply(): void {
-  const instruction = ai.promptText; // capture BEFORE clearing below — this IS the request's instruction
+  // A6: a Polish turn's instruction lives in ai.polishInstruction, never in
+  // ai.promptText (the prompt box is untouched by Polish) — see state.ts's doc comment.
+  const isPolishTurn = ai.polishInstruction !== null;
+  const instruction = ai.polishInstruction ?? ai.promptText; // capture BEFORE clearing below
   const committed = commitPreview();
   if (!committed || !committed.outcome) {
     ai.status = 'Failed to apply — no document loaded.';
+    ai.polishInstruction = null;
     notify();
     return;
   }
@@ -58,8 +63,11 @@ function handleApply(): void {
     });
   }
 
-  // Clear the prompt only on a SUCCESSFUL apply (state.ts's AiPanelState doc comment).
-  ai.promptText = '';
+  // Clear the prompt only on a SUCCESSFUL apply of a NORMAL turn (state.ts's
+  // AiPanelState doc comment) — a Polish turn never wrote to it, so clearing here
+  // would erase the user's own untouched draft.
+  if (!isPolishTurn) ai.promptText = '';
+  ai.polishInstruction = null;
   renderPose();
   document.dispatchEvent(new CustomEvent('rig-play'));
   notify();
@@ -68,6 +76,7 @@ function handleApply(): void {
 function handleDiscard(): void {
   if (!discardPreview()) return;
   ai.status = '';
+  ai.polishInstruction = null; // A6: never leak into a later normal turn's Apply
   notify();
 }
 
@@ -120,9 +129,18 @@ export function buildAiPanel(el: HTMLElement): void {
 
   mountAiToggleFields(box, fields);
 
+  // A6: the Polish button lives outside `fields` (built after `ctx`, below), but
+  // `setBusy` must still disable it the same instant it disables Create/Modify/Critique
+  // (requests.ts's `setBusy(true)` is a direct DOM mutation for immediate feedback —
+  // the re-enable-on-finish path is only ever the next full notify() rebuild, never a
+  // symmetric `setBusy(false)`, so there's no stale-enabled risk to guard the other way).
+  let polishBtn: HTMLButtonElement | null = null;
   const ctx: AiRequestCtx = {
     fields,
-    setBusy: (busy) => applyBusyState(fields, busy),
+    setBusy: (busy) => {
+      applyBusyState(fields, busy);
+      if (busy && polishBtn) polishBtn.disabled = true;
+    },
     previewBarRef: { current: null },
   };
 
@@ -134,6 +152,9 @@ export function buildAiPanel(el: HTMLElement): void {
   }
 
   mountAiActions(box, fields);
+  // A6: "near the Modify action" per the wave brief.
+  polishBtn = buildPolishButton(ctx);
+  fields.modifyBtn.insertAdjacentElement('afterend', polishBtn);
 
   fields.createBtn.onclick = () => { void runAnimate(ctx, 'new'); };
   fields.modifyBtn.onclick = () => { void runAnimate(ctx, 'modify'); };

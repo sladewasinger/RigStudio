@@ -322,3 +322,19 @@
   color: var(--text);
   border-color: var(--accent-2);
 }
+
+/* ============================================================================
+   AI Polish button (src/panels/ai/polish.ts, AI Animate System v2 A6) — a one-click
+   preset refinement turn on the active clip, mounted right next to "Modify current
+   animation" since it routes through that same flow. Styled like a secondary accent
+   action (a step up from the quiet template pills, a step down from the primary
+   preview-bar Apply button) so it reads as "one click, but still a real request".
+   ============================================================================ */
+.ai-panel .ai-polish-btn {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
+}
+.ai-panel .ai-polish-btn:hover:not(:disabled) {
+  background: var(--accent-2-soft);
+  color: var(--text);
+}
