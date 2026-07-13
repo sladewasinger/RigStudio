@@ -884,7 +884,12 @@ concept seed.
   core/channels + applyRigChanges read/write the `state` singleton — headless
   scripts set `state.doc = doc` first (H2's in-memory sessions will want a
   save/restore or pure-doc variant).
-- [ ] **H2. `rig-studio-mcp` server** — LOCAL stdio transport (an npm package the
+- [x] **H2. `rig-studio-mcp` server** (c9c4ee8 — 12 tools over stdio, in-memory
+  sessions with whole-AppState scoped swap, one clip schema shared with the
+  in-app assistant, e2e-proven via a real SDK client; packaging/naming
+  deferred per the ledger. HYGIENE QUEUED: applyClip.ts/bindHeadless.ts are
+  documented hand-synced ports of panels/ai/apply.ts and view/rigOpsBind.ts —
+  extract shared pure cores so the ports can't drift) — LOCAL stdio transport (an npm package the
   AI client spawns on demand — no hosting, no ports; remote/HTTP hosting is an
   optional later tier). Strictly a wrapper over H1: needed for shell-less clients
   (Claude Desktop etc.) + schema-guided tool calls + in-memory doc sessions;
