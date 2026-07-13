@@ -1,11 +1,26 @@
 /**
  * Keyboard-shortcut reference and the "?" help overlay.
  *
- * SHORTCUTS is the single source of truth for what's documented — main.ts's keydown
- * handler implements the bindings, this list just describes them. Keeping them in one
- * array (grouped by a `context` label rather than nested arrays) makes it cheap to add
- * a row without restructuring anything.
+ * The keyboard rows are GENERATED from `shortcutBindings.ts` + `shortcutBindingsTools.ts`
+ * (the same REGISTRY `shortcuts.ts`'s `installShortcuts()` dispatches against) — a
+ * binding and its documentation live in the SAME object, so they cannot drift apart
+ * (Pattern-driven redesign pass, ROADMAP.md; this file previously hand-maintained a
+ * separate SHORTCUTS array that drifted from main.ts's handler twice before the redesign).
+ * The two priority cascades (Delete, Escape) already carry their JOINED tier descriptions
+ * baked into their registry entry's `help.description` (see `shortcutBindings.ts`'s
+ * `deleteCascade` / `shortcutBindingsTools.ts`'s `escapeCascade`), so this file needs no
+ * special-case logic for them — every entry maps to a row the same way.
+ *
+ * TOOLBAR_ROWS and MOUSE_AND_TOOLS_ROWS are hand-authored on purpose: neither is a
+ * `document.keydown` binding (toolbar buttons and canvas/inspector mouse gestures aren't
+ * REGISTRY entries at all), so mixing them into the generated list would reintroduce
+ * exactly the "pseudo-shortcut" drift risk the redesign eliminates for real bindings.
+ * Kept in their own GROUP_ORDER sections so they render visibly separate from the
+ * generated ones, never interleaved.
  */
+
+import { FILE_EDIT_BINDINGS } from './shortcutBindings';
+import { TOOLS_VIEW_BINDINGS } from './shortcutBindingsTools';
 
 export interface ShortcutEntry {
   keys: string;
@@ -14,180 +29,113 @@ export interface ShortcutEntry {
   context: string;
 }
 
-/** Section order in the overlay (also the canonical group list from the spec). */
+/** Section order in the overlay. Toolbar/Mouse & tools are hand-authored (not real
+ *  keydown bindings) and always render last, clearly separated from the generated ones. */
 const GROUP_ORDER = [
-  'File', 'Edit', 'Tools', 'View', 'Timeline', 'Node editing', 'Mouse',
+  'File', 'Edit', 'Tools', 'View', 'Timeline', 'Toolbar', 'Mouse & tools',
 ] as const;
 
-export const SHORTCUTS: ShortcutEntry[] = [
-  // ---- File ----
-  { keys: 'toolbar only', description: 'New — start a blank project', context: 'File' },
-  { keys: 'Ctrl+S', description: 'Save the project (downloads a .rig.json)', context: 'File' },
-  { keys: 'Ctrl+O', description: 'Open an SVG or a saved .rig.json project', context: 'File' },
-  { keys: 'toolbar only', description: 'Load sample', context: 'File' },
-  { keys: 'toolbar only', description: 'Export Lottie (.json)', context: 'File' },
+/** Toolbar buttons with no keyboard equivalent (Ctrl+S/Ctrl+O ARE real bindings and
+ *  appear in the generated File section instead — not duplicated here). */
+const TOOLBAR_ROWS: ShortcutEntry[] = [
+  { keys: 'toolbar only', description: 'New — start a blank project', context: 'Toolbar' },
+  { keys: 'toolbar only', description: 'Load sample', context: 'Toolbar' },
+  { keys: 'toolbar only', description: 'Export Lottie (.json)', context: 'Toolbar' },
+  {
+    keys: 'toolbar only',
+    description: 'Export Rive (.riv) — all clips + state machines as one binary',
+    context: 'Toolbar',
+  },
+  { keys: 'toolbar only', description: 'Export PNG — the current frame as a still image', context: 'Toolbar' },
+  { keys: 'toolbar only', description: 'Export SVG — the current pose as a vector image', context: 'Toolbar' },
+];
 
-  // ---- Edit ----
-  { keys: 'Ctrl+Z', description: 'Undo', context: 'Edit' },
-  { keys: 'Ctrl+Shift+Z / Ctrl+Y', description: 'Redo', context: 'Edit' },
-  { keys: 'Ctrl+C', description: 'Copy the selected keyframes (Animate)', context: 'Edit' },
-  { keys: 'Ctrl+V', description: 'Paste keyframes at the playhead (Animate)', context: 'Edit' },
+/** Mouse gestures and inspector-button actions — never keyboard bindings, so they can't
+ *  live in the generated sections above (see this file's header comment). */
+const MOUSE_AND_TOOLS_ROWS: ShortcutEntry[] = [
   {
-    keys: 'Ctrl+A',
-    description: 'Select all — every part in Edit/Animate, or every node of the ' +
-      'edited path in node-editing mode',
-    context: 'Edit',
+    keys: 'canvas-tools femur button',
+    description: 'Also arms the bone tool (same as the B key)',
+    context: 'Mouse & tools',
+  },
+  { keys: 'Mouse wheel', description: 'Zoom, centered on the cursor', context: 'Mouse & tools' },
+  { keys: 'Middle-drag', description: 'Pan the canvas', context: 'Mouse & tools' },
+  {
+    keys: 'Body drag',
+    description: 'Select tool: translate the selection; after a second click on it, ' +
+      'rotate around the pivot (both Edit and Animate)',
+    context: 'Mouse & tools',
   },
   {
-    keys: 'Ctrl+D',
-    description: 'Duplicate the selected part(s), offset +12,+12 (Edit only, skips skinned parts)',
-    context: 'Edit',
+    keys: 'Click a selected part',
+    description: 'Cycle the handle set: translate/scale ↔ rotate/skew (flips what a body drag does)',
+    context: 'Mouse & tools',
   },
   {
-    keys: 'Delete / Backspace',
-    description: 'Delete selected keyframes, else selected nodes, else selected layers ' +
-      '(first that applies wins)',
-    context: 'Edit',
-  },
-  { keys: 'Ctrl+G', description: 'Group the selection into a null', context: 'Edit' },
-  { keys: 'Ctrl+Shift+G', description: 'Ungroup/dissolve the selected group or bone', context: 'Edit' },
-  {
-    keys: 'Arrow keys',
-    description: 'Nudge the selected parts 2 screen px (Edit pose mode, Shift = 20)',
-    context: 'Edit',
+    keys: 'Gizmo circle / cross',
+    description: 'Drag the circle to rotate around the pivot, the cross to translate (both modes)',
+    context: 'Mouse & tools',
   },
   {
-    keys: 'PageUp / PageDown',
-    description: 'Bring the selected part (or entered path) forward / send it backward in draw order ' +
-      '(rest stacking; animate a per-part z offset in Animate mode to restack over time)',
-    context: 'Edit',
+    keys: 'Ctrl+drag (translate)',
+    description: 'Constrain a free move to its dominant axis',
+    context: 'Mouse & tools',
   },
-
-  // ---- Tools ----
-  { keys: 'V', description: 'Select tool', context: 'Tools' },
-  { keys: 'T', description: 'Translate tool', context: 'Tools' },
-  { keys: 'R', description: 'Rotate tool', context: 'Tools' },
-  { keys: 'I', description: 'IK tool — drag a limb end, its parent joints solve to follow', context: 'Tools' },
-  { keys: '%', description: 'Toggle Edit-mode snapping', context: 'Tools' },
+  { keys: 'Ctrl+drag (rotate)', description: 'Snap rotation to 15° increments', context: 'Mouse & tools' },
+  { keys: 'Ctrl+drag (corner scale)', description: 'Scale uniformly (equal x/y)', context: 'Mouse & tools' },
+  { keys: 'Shift+drag', description: 'Always translate the selection (either handle set)', context: 'Mouse & tools' },
   {
-    keys: 'Y',
-    description: 'Toggle freeze (origin-editing) mode — unlocks pivot / origin / joint ' +
-      'dragging (off by default so origins never move by accident)',
-    context: 'Tools',
-  },
-  { keys: 'Shift+H', description: 'Flip the selection horizontally, in place (Edit)', context: 'Tools' },
-  { keys: 'Shift+V', description: 'Flip the selection vertically, in place (Edit)', context: 'Tools' },
-  {
-    keys: 'C',
-    description: 'Toggle clean preview (Animate) — hide all editor chrome (handles, ' +
-      'pivots, bones, gizmos, artboard, onion) to watch the animation. Also in canvas-tools',
-    context: 'Tools',
+    keys: 'Shift+click / Ctrl+click',
+    description: 'Add to the multi-selection (canvas parts, pose mode)',
+    context: 'Mouse & tools',
   },
   {
-    keys: 'Bone tool (canvas-tools ⌂)',
-    description: 'Draw a bone chain: click to set the first joint, click again for each ' +
-      'bone tip (the chain grows joint-to-joint, following a selected bone). Enter / Escape ' +
-      '/ double-click finishes; the limb auto-binds once, and the whole chain is one undo',
-    context: 'Tools',
+    keys: 'Layers: Shift+click',
+    description: 'Range-select from the anchor row to the clicked row (Ctrl+click toggles one)',
+    context: 'Mouse & tools',
   },
-
-  // ---- View ----
-  { keys: 'F', description: 'Fit the view to the document', context: 'View' },
-  { keys: '+ / =', description: 'Zoom in, centered on the canvas', context: 'View' },
-  { keys: '-', description: 'Zoom out, centered on the canvas', context: 'View' },
-  { keys: 'Mouse wheel', description: 'Zoom, centered on the cursor', context: 'View' },
-  { keys: 'Middle-drag', description: 'Pan the canvas', context: 'View' },
-  { keys: 'Tab', description: 'Toggle Edit / Animate mode', context: 'View' },
-  { keys: '? / F1', description: 'Toggle this shortcut overlay', context: 'View' },
   {
-    keys: 'Escape',
-    description: 'Step back out: close this overlay → exit freeze mode → discard the AI ' +
-      'preview → stop the logic preview → finish the bone chain → exit path → exit ' +
-      'group / deselect',
-    context: 'View',
+    keys: 'Layers: eye icon',
+    description: 'Hide/show a part on the canvas (editor only — never keyed, never exported)',
+    context: 'Mouse & tools',
   },
-
-  // ---- Timeline ----
-  { keys: 'Space', description: 'Play / pause', context: 'Timeline' },
-  {
-    keys: '← / →',
-    description: 'Scrub the playhead (10 ms, Shift = 100 ms), or nudge selected keyframes',
-    context: 'Timeline',
-  },
-  // ---- Node editing ----
-  { keys: 'Alt+click a node', description: 'Insert a new node after it', context: 'Node editing' },
-  { keys: 'Ctrl+click a node', description: 'Delete that node', context: 'Node editing' },
+  { keys: 'Alt+click a node', description: 'Insert a new node after it', context: 'Mouse & tools' },
+  { keys: 'Ctrl+click a node', description: 'Delete that node', context: 'Mouse & tools' },
   {
     keys: 'Double-click',
     description: 'Dive into a group (enters it, selects nothing); a single click then ' +
       'selects a child, a further double-click dives deeper, then into path/node scope. ' +
       'Escape / blank click steps out one level',
-    context: 'Node editing',
+    context: 'Mouse & tools',
   },
   {
     keys: 'smooth / symmetric / corner',
-    description: 'Set the selected node(s)’ persistent handle type',
-    context: 'Node editing',
+    description: 'Inspector buttons: set the selected node(s)’ persistent handle type',
+    context: 'Mouse & tools',
   },
-  { keys: '→ curve / → line', description: 'Convert the outgoing segment', context: 'Node editing' },
-  { keys: 'join / join seg', description: 'Weld or bridge the two selected end nodes', context: 'Node editing' },
+  { keys: '→ curve / → line', description: 'Inspector buttons: convert the outgoing segment', context: 'Mouse & tools' },
+  {
+    keys: 'join / join seg',
+    description: 'Inspector buttons: weld or bridge the two selected end nodes',
+    context: 'Mouse & tools',
+  },
   {
     keys: 'del seg',
-    description: 'Delete the segment between two selected adjacent nodes',
-    context: 'Node editing',
-  },
-  {
-    keys: 'Arrow keys',
-    description: 'Nudge selected nodes (0.5 doc units, Shift = 5)',
-    context: 'Node editing',
-  },
-
-  // ---- Mouse ----
-  {
-    keys: 'Body drag',
-    description: 'Select tool: translate the selection; after a second click on it, ' +
-      'rotate around the pivot (both Edit and Animate)',
-    context: 'Mouse',
-  },
-  {
-    keys: 'Click a selected part',
-    description: 'Cycle the handle set: translate/scale ↔ rotate/skew (flips what a body drag does)',
-    context: 'Mouse',
-  },
-  {
-    keys: 'Gizmo circle / cross',
-    description: 'Drag the circle to rotate around the pivot, the cross to translate (both modes)',
-    context: 'Mouse',
-  },
-  {
-    keys: 'Ctrl+drag (translate)',
-    description: 'Constrain a free move to its dominant axis',
-    context: 'Mouse',
-  },
-  { keys: 'Ctrl+drag (rotate)', description: 'Snap rotation to 15° increments', context: 'Mouse' },
-  { keys: 'Ctrl+drag (corner scale)', description: 'Scale uniformly (equal x/y)', context: 'Mouse' },
-  { keys: 'Shift+drag', description: 'Always translate the selection (either handle set)', context: 'Mouse' },
-  {
-    keys: 'Shift+click / Ctrl+click',
-    description: 'Add to the multi-selection (canvas parts, pose mode)',
-    context: 'Mouse',
-  },
-  {
-    keys: 'Layers: Shift+click',
-    description: 'Range-select from the anchor row to the clicked row (Ctrl+click toggles one)',
-    context: 'Mouse',
-  },
-  {
-    keys: 'Layers: eye icon',
-    description: 'Hide/show a part on the canvas (editor only — never keyed, never exported)',
-    context: 'Mouse',
+    description: 'Inspector button: delete the segment between two selected adjacent nodes',
+    context: 'Mouse & tools',
   },
 ];
 
-/** SHORTCUTS grouped by context, in GROUP_ORDER order; empty groups are omitted. */
+/** The generated keyboard rows — one per REGISTRY entry, in registry order. */
+function generatedRows(): ShortcutEntry[] {
+  return [...FILE_EDIT_BINDINGS, ...TOOLS_VIEW_BINDINGS].map((b) => b.help);
+}
+
+/** All rows grouped by context, in GROUP_ORDER order; empty groups are omitted. */
 export function groupedShortcuts(): { title: string; entries: ShortcutEntry[] }[] {
+  const all = [...generatedRows(), ...TOOLBAR_ROWS, ...MOUSE_AND_TOOLS_ROWS];
   return GROUP_ORDER
-    .map((title) => ({ title, entries: SHORTCUTS.filter((s) => s.context === title) }))
+    .map((title) => ({ title, entries: all.filter((s) => s.context === title) }))
     .filter((g) => g.entries.length > 0);
 }
 

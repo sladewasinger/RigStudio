@@ -24,7 +24,6 @@ const NEW_FILE_MAX = 300;
 const GRANDFATHERED = new Map<string, number>([
   ['geometry/paths.ts', 434],
   ['io/exportLottie.ts', 327],
-  ['main.ts', 522],
   ['timeline/graph.ts', 395],
 ]);
 

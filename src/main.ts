@@ -1,34 +1,23 @@
 import {
-  state, notify, subscribe, activeClip, serializeDoc, deserializeDoc, EditorMode,
-  selectPart, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder,
-  setSnapEnabled, setFreezeMode, setCleanPreview, selectAllParts, partById, newBlankDoc,
-  markClean,
+  state, notify, subscribe, activeClip, serializeDoc, deserializeDoc,
+  selectPart, partById, newBlankDoc, markClean,
 } from './core/model';
 import { importSvg } from './io/importSvg';
 import {
-  buildCanvas, renderPose, resetView, reorderCanvas, cancelBonePlacement, endBoneChain, stepOutFocus,
-  hasSelectedNode, deleteSelectedNodes, nudgeSelectedNodes, nudgeSelectedParts,
-  zoomBy, selectAllNodes, enterGroupsFor, clearGroupEntry, resetInteractionState,
-  resetSkinRenderWarnings,
+  buildCanvas, renderPose, resetView, cancelBonePlacement,
+  enterGroupsFor, clearGroupEntry, resetInteractionState, resetSkinRenderWarnings,
 } from './view';
-import { checkpoint } from './core/history';
-import {
-  buildLayersPanel, buildInspector, buildCanvasTools, flipAction, groupAction, ungroupAction,
-} from './panels';
-import {
-  buildTimeline, render as renderTimeline, togglePlay,
-  copySelectedKeys, pasteKeysAtPlayhead, deleteSelectedKeys, nudgeSelectedKeys,
-  hasKeySelection, clearKeySelection,
-} from './timeline/timeline';
+import { buildLayersPanel, buildInspector, buildCanvasTools } from './panels';
+import { buildTimeline, render as renderTimeline, clearKeySelection } from './timeline/timeline';
 import { exportLottie } from './io/exportLottie';
 import { exportRiv } from './io/riv';
-import { smHandleEscape, smHandleDelete, stopPreview } from './panels/smPanel';
-import { aiHandleEscape } from './panels/ai';
+import { stopPreview } from './panels/smPanel';
 import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './core/history';
-import { toggleHelp, closeHelp, isHelpOpen } from './ui/help';
-import { dialog, isDialogOpen, closeActiveDialog } from './ui/dialogs';
-import { showContextMenu, isMenuOpen, closeMenu } from './ui/contextMenu';
-import { canDuplicateSelection, duplicateSelectedParts, deleteSelectedParts, buildPartContextMenu } from './ui/actions';
+import { toggleHelp } from './ui/help';
+import { installShortcuts, setEditorMode, saveProject } from './ui/shortcuts';
+import { dialog } from './ui/dialogs';
+import { showContextMenu } from './ui/contextMenu';
+import { buildPartContextMenu } from './ui/actions';
 import { download } from './ui/download';
 import { exportPngFlow, exportSvgFlow, canExportImage } from './ui/imageExport';
 
@@ -143,20 +132,8 @@ document.getElementById('btn-sample')!.onclick = async () => {
 };
 
 // ---- Project save / autosave ----
+// saveProject (the toolbar Save button and Ctrl+S share it) lives in ./ui/shortcuts now.
 
-/** Download the project as .rig.json — the toolbar Save button and Ctrl+S share this.
- *  Shows a filename dialog (default = the doc name) before downloading. */
-async function saveProject(): Promise<void> {
-  if (!state.doc) {
-    await dialog.alert('Nothing to save yet — import an SVG first.');
-    return;
-  }
-  const filename = await dialog.prompt('Save project as', `${state.doc.name}.rig.json`);
-  if (!filename) return;
-  download(filename, serializeDoc(state.doc), 'application/json');
-  markClean(); // the download completed — nothing left unsaved
-  notify();
-}
 document.getElementById('btn-save')!.onclick = () => { void saveProject(); };
 
 let autosaveTimer = 0;
@@ -236,16 +213,7 @@ function syncExportImageButtons(): void {
 
 const setupBtn = document.getElementById('btn-mode-setup') as HTMLButtonElement;
 const animateBtn = document.getElementById('btn-mode-animate') as HTMLButtonElement;
-
-export function setEditorMode(mode: EditorMode): void {
-  if (state.editorMode === mode) return;
-  state.editorMode = mode;
-  state.playing = false;
-  if (mode === 'animate') state.mode = 'rig'; // node editing is Setup-only
-  if (mode === 'setup') clearKeySelection();
-  notify();
-  renderPose();
-}
+// setEditorMode (Tab's action too) lives in ./ui/shortcuts now.
 
 setupBtn.onclick = () => setEditorMode('setup');
 animateBtn.onclick = () => setEditorMode('animate');
@@ -306,311 +274,10 @@ document.addEventListener('rig-history-changed', () => {
 });
 
 // ---- Keyboard shortcuts ----
-
-document.addEventListener('keydown', (ev) => {
-  const target = ev.target as HTMLElement;
-
-  // A context menu or dialog owns Escape first — this must win over every other tier
-  // below, INCLUDING the input-focus guard right after it, so Escape closes a dialog
-  // even while its own text field has focus (mirrors the help-overlay precedence, one
-  // level higher since a dialog can itself contain an input).
-  if (ev.key === 'Escape' && (isMenuOpen() || isDialogOpen())) {
-    ev.preventDefault();
-    closeMenu();
-    closeActiveDialog();
-    return;
-  }
-  // While a menu or dialog is open, no other shortcut should leak through to the app
-  // underneath (e.g. Ctrl+S while the save-filename dialog itself is showing).
-  if (isMenuOpen() || isDialogOpen()) return;
-
-  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
-
-  // Help overlay owns Escape while it's open — this must win over every other Escape
-  // tier below (bone placement / node exit / selection clear) so closing it never also
-  // fires one of those.
-  if (isHelpOpen() && ev.key === 'Escape') {
-    ev.preventDefault();
-    closeHelp();
-    return;
-  }
-
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'z') {
-    ev.preventDefault();
-    if (ev.shiftKey) redo();
-    else undo();
-    return;
-  }
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'y') {
-    ev.preventDefault();
-    redo();
-    return;
-  }
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 's') {
-    ev.preventDefault(); // never let the browser's save-page dialog open
-    void saveProject();
-    return;
-  }
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'o') {
-    ev.preventDefault();
-    fileInput.click();
-    return;
-  }
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'a') {
-    ev.preventDefault();
-    // Node-editing mode selects nodes; Setup/Animate select every part (same
-    // multi-selection mechanism Shift+click extends) — never keyframes.
-    if (state.editorMode === 'setup' && state.mode === 'nodes') selectAllNodes();
-    else selectAllParts();
-    notify();
-    renderPose();
-    return;
-  }
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'd') {
-    if (canDuplicateSelection()) {
-      ev.preventDefault();
-      duplicateSelectedParts();
-    }
-    return;
-  }
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'g') {
-    ev.preventDefault();
-    if (ev.shiftKey) ungroupAction();
-    else groupAction();
-    return;
-  }
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'c') {
-    if (state.editorMode === 'animate' && hasKeySelection()) {
-      ev.preventDefault();
-      copySelectedKeys();
-    }
-    return;
-  }
-  if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'v') {
-    if (state.editorMode === 'animate') {
-      ev.preventDefault();
-      pasteKeysAtPlayhead();
-    }
-    return;
-  }
-  if (ev.key === 'Delete' || ev.key === 'Backspace') {
-    // State-machine editor owns Delete while the logic view is on screen (removes the
-    // selected transition/state before any keyframe/node/part handling below).
-    if (smHandleDelete()) {
-      ev.preventDefault();
-      return;
-    }
-    if (state.editorMode === 'animate' && hasKeySelection()) {
-      ev.preventDefault();
-      deleteSelectedKeys();
-      return;
-    }
-    // Node mode: delete the selected path nodes.
-    if (state.editorMode === 'setup' && state.mode === 'nodes' && hasSelectedNode()) {
-      ev.preventDefault();
-      checkpoint();
-      deleteSelectedNodes();
-      notify();
-      return;
-    }
-    // Setup pose mode: delete the selected layers (children re-adopt grandparents;
-    // fully undoable). Node-editing mode with nothing selected falls through to here
-    // too, so the mode check stays explicit rather than folding into canDeleteSelection().
-    if (
-      state.editorMode === 'setup' && state.mode === 'rig' &&
-      state.selectedPartIds.length > 0
-    ) {
-      ev.preventDefault();
-      deleteSelectedParts();
-    }
-    return;
-  }
-  if (ev.key === 'Tab') {
-    ev.preventDefault();
-    setEditorMode(state.editorMode === 'setup' ? 'animate' : 'setup');
-    return;
-  }
-  if (ev.key === 'PageUp' || ev.key === 'PageDown') {
-    // Step the entered path (within its part) or the selected part through the
-    // draw order: PageUp = bring forward (up the layer list), PageDown = send back.
-    const delta = ev.key === 'PageUp' ? 1 : -1;
-    if (!canMoveSelectedInDrawOrder(delta)) return;
-    ev.preventDefault();
-    checkpoint();
-    moveSelectedInDrawOrder(delta);
-    reorderCanvas();
-    notify();
-    return;
-  }
-  // Enter finishes an in-progress pen-tool bone chain (mirrors Escape / double-click):
-  // keep every committed bone and run the single chain auto-bind. Falls through when no
-  // chain is active so Enter keeps whatever default behavior it otherwise has.
-  if (ev.key === 'Enter' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-    if (endBoneChain()) {
-      ev.preventDefault();
-      notify();
-      return;
-    }
-  }
-  if (ev.key === 'Escape') {
-    // Freeze mode exits first (its own early tier) — Escape drops out of origin editing
-    // before anything else, so a stray Escape can't cancel a bone placement or step out
-    // of a group while the user only meant to leave freeze.
-    if (state.freezeMode) {
-      ev.preventDefault();
-      setFreezeMode(false);
-      notify();
-      renderPose();
-      return;
-    }
-    // AI preview next: Escape discards an active preview-before-apply candidate
-    // (doc untouched) without also deselecting or stepping out of anything.
-    if (aiHandleEscape()) {
-      ev.preventDefault();
-      return;
-    }
-    // State-machine editor next: cancel an armed transition or stop a running preview.
-    if (smHandleEscape()) {
-      ev.preventDefault();
-      return;
-    }
-    // Finish an in-progress bone chain first (keeps committed bones + auto-binds once),
-    // then step out one drill-down level at a time (entered path → deselect → pop the
-    // innermost entered group) — Inkscape parity.
-    if (endBoneChain()) {
-      notify();
-      return;
-    }
-    stepOutFocus();
-    notify();
-    renderPose();
-    return;
-  }
-  // Help overlay toggle: '?' (Shift+/ on US layouts — browsers already report the
-  // shifted character in ev.key) and F1.
-  if (ev.key === '?' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-    ev.preventDefault();
-    toggleHelp();
-    return;
-  }
-  if (ev.key === 'F1') {
-    ev.preventDefault();
-    toggleHelp();
-    return;
-  }
-  // Clean-preview toggle (C, Animate only): hides all editor chrome to watch the
-  // final animation product. Guarded like the tool keys.
-  if (
-    ev.key.toLowerCase() === 'c' && !ev.ctrlKey && !ev.metaKey && !ev.altKey &&
-    !ev.shiftKey && state.editorMode === 'animate'
-  ) {
-    ev.preventDefault();
-    setCleanPreview(!state.cleanPreview);
-    notify();
-    renderPose();
-    return;
-  }
-  // Snapping toggle (%): Inkscape's binding. On US layouts % is Shift+5, so match the
-  // resulting character and allow Shift (only ctrl/meta/alt are excluded, per the tool
-  // block's guarded pattern).
-  if (ev.key === '%' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-    ev.preventDefault();
-    setSnapEnabled(!state.snapEnabled);
-    notify();
-    renderPose();
-    return;
-  }
-  // Freeze (origin-editing) mode toggle (Y). Guarded against ctrl/meta/alt like the tool
-  // keys, so Ctrl+Y (redo, handled above) and browser shortcuts pass through untouched.
-  if (ev.key.toLowerCase() === 'y' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-    ev.preventDefault();
-    setFreezeMode(!state.freezeMode);
-    notify();
-    renderPose();
-    return;
-  }
-  // Tools: V select, T translate, R rotate, I inverse kinematics.
-  if (!ev.ctrlKey && !ev.metaKey && !ev.altKey && !ev.shiftKey) {
-    const tool = ({ v: 'select', t: 'translate', r: 'rotate', i: 'ik' } as const)[
-      ev.key.toLowerCase() as 'v' | 't' | 'r' | 'i'
-    ];
-    if (tool) {
-      state.tool = tool;
-      notify();
-      renderPose();
-      return;
-    }
-  }
-  // Flips moved to Shift+H / Shift+V (plain V/T/R/I are tools now).
-  if (ev.shiftKey && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-    const axis = ev.key.toLowerCase();
-    if ((axis === 'h' || axis === 'v') && state.editorMode === 'setup') {
-      flipAction(axis);
-      return;
-    }
-  }
-  // Zoom in/out ~1.25x, centered on the canvas (guarded the same way as F/Space below —
-  // Ctrl+=/Ctrl+- are the browser's own page-zoom shortcuts and must pass through).
-  if ((ev.key === '+' || ev.key === '=') && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-    ev.preventDefault();
-    zoomBy(1.25);
-    return;
-  }
-  if (ev.key === '-' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-    ev.preventDefault();
-    zoomBy(1 / 1.25);
-    return;
-  }
-  // Guarded against ctrl/meta/alt (mirrors the V/T/R/I tool block's pattern) so
-  // Ctrl+F doesn't ALSO fit the view while the browser's find bar opens.
-  if (ev.key.toLowerCase() === 'f' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-    resetView();
-    renderPose();
-    return;
-  }
-  if (ev.key === ' ' && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
-    ev.preventDefault();
-    togglePlay();
-    return;
-  }
-  if (ev.key.startsWith('Arrow')) {
-    // Node mode: arrows nudge the selected nodes in document units.
-    if (state.editorMode === 'setup' && state.mode === 'nodes' && hasSelectedNode()) {
-      ev.preventDefault();
-      const step = ev.shiftKey ? 5 : 0.5;
-      const dx = ev.key === 'ArrowLeft' ? -step : ev.key === 'ArrowRight' ? step : 0;
-      const dy = ev.key === 'ArrowUp' ? -step : ev.key === 'ArrowDown' ? step : 0;
-      checkpoint();
-      nudgeSelectedNodes(dx, dy);
-      return;
-    }
-    // Setup pose mode: arrows nudge the selected parts, 2 screen px per press
-    // (Shift = 20) so the step follows the zoom level. Animate keeps arrows for
-    // keyframe nudge / playhead scrub below.
-    if (
-      state.editorMode === 'setup' && state.mode === 'rig' &&
-      state.selectedPartIds.length > 0
-    ) {
-      ev.preventDefault();
-      const px = ev.shiftKey ? 20 : 2;
-      const dx = ev.key === 'ArrowLeft' ? -px : ev.key === 'ArrowRight' ? px : 0;
-      const dy = ev.key === 'ArrowUp' ? -px : ev.key === 'ArrowDown' ? px : 0;
-      checkpoint();
-      if (nudgeSelectedParts(dx, dy)) notify();
-      return;
-    }
-    if (ev.key !== 'ArrowLeft' && ev.key !== 'ArrowRight') return;
-    const clip = activeClip();
-    if (!clip || state.editorMode !== 'animate') return;
-    ev.preventDefault();
-    const step = (ev.shiftKey ? 100 : 10) * (ev.key === 'ArrowLeft' ? -1 : 1);
-    // With keyframes selected the arrows nudge them; otherwise they step the playhead.
-    if (nudgeSelectedKeys(step)) return;
-    state.currentTime = Math.min(clip.duration, Math.max(0, state.currentTime + step));
-    renderPose();
-    renderTimeline();
-  }
-});
+// The whole keydown handler (registry + the two Delete/Escape priority cascades + the
+// early ownership guards) lives in ./ui/shortcuts (Pattern-driven redesign pass) — this
+// is main.ts's entire keyboard wiring.
+installShortcuts();
 
 // Re-render panels on every state change; the canvas pose is updated separately (and
 // far more often) by renderPose().
