@@ -35,7 +35,12 @@ export const PIVOT_PIPELINE: GesturePipeline = {
     // part's pivot — is freeze-gated: visible but INERT outside freeze so a stray press
     // never re-anchors it (the accidental-origin-drag complaint). Swallow the press as a
     // hard no-op (no drag, no selection change) rather than fall through to a body drag.
-    const parentBone = part.kind === 'bone' && part.parentId
+    // UNIFIED SKELETON: an `attachedRoot` bone is the root of its OWN sub-chain even
+    // though its parentId reaches into another (cross-chain) bone — its origin is a
+    // deliberately LOOSE attach link, not the parent's shared tip (CLAUDE.md "Attached
+    // roots") — so it is NEVER a child joint, despite having a bone parent. Keep this
+    // exemption in lockstep with the identical check in move() below.
+    const parentBone = part.kind === 'bone' && part.parentId && !part.attachedRoot
       ? state.doc?.parts.find((pp) => pp.id === part.parentId && pp.kind === 'bone')
       : null;
     const isChildJoint = !!parentBone;
@@ -72,7 +77,8 @@ export const PIVOT_PIPELINE: GesturePipeline = {
         ctx.snapMarker = rootToUser(match.point);
       }
     }
-    const parentBone = part.kind === 'bone' && part.parentId
+    // Same attachedRoot exemption as claim() above — keep the two in lockstep.
+    const parentBone = part.kind === 'bone' && part.parentId && !part.attachedRoot
       ? state.doc?.parts.find((pp) => pp.id === part.parentId && pp.kind === 'bone')
       : null;
     if (part.kind === 'bone' && parentBone) {
@@ -84,14 +90,27 @@ export const PIVOT_PIPELINE: GesturePipeline = {
       if (state.freezeMode) refreshBindForChain(parentBone.id, t);
       renderPose();
     } else if (part.kind === 'bone') {
-      // ROOT bone origin (reached only in freeze): translate the whole chain so every shared
-      // joint stays connected, then refresh the bind so the art stays put. Approximate for a
-      // chain baked with rest rotation (translateBoneChain), but the anchors stay connected.
+      // ROOT bone origin (reached only in freeze, incl. an attachedRoot — it IS a chain
+      // root per boneChain's rootOf rule). A plain root translates the whole chain by
+      // shifting pivot+tip together (translateBoneChain) — approximate for a chain baked
+      // with rest rotation, but the anchors stay connected. An ATTACHED root instead keeps
+      // its pivot UNCHANGED and moves its LOOSE offset — rest.tx/ty in the parent frame,
+      // the same fields view/rigOpsAttach.ts's world-preserving attach fold writes — which
+      // ordinary ancestor-chain pose composition then carries to the whole attached
+      // sub-chain EXACTLY for free (translate commutes through the chain's own rotate, so
+      // every descendant shifts by the identical root-space vector — no separate carry
+      // step, and the cross-chain PARENT, which this bone's pose never composes upward
+      // into, is untouched).
       const cur = effectivePivot(part, t);
       const localDelta = applyMat(
         linearOnly(invertMat(chainMatOf(part, t))), sx - cur.x, sy - cur.y,
       );
-      translateBoneChain(state.doc!.parts, part.id, round3(localDelta.x), round3(localDelta.y));
+      if (part.attachedRoot) {
+        part.rest.tx = round3(part.rest.tx + localDelta.x);
+        part.rest.ty = round3(part.rest.ty + localDelta.y);
+      } else {
+        translateBoneChain(state.doc!.parts, part.id, round3(localDelta.x), round3(localDelta.y));
+      }
       if (state.freezeMode) refreshBindForChain(part.id, t);
       renderPose();
     } else {

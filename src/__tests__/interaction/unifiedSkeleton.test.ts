@@ -22,7 +22,7 @@ import { selectPart as modelSelectPart, notify, RigPart } from '../../core/model
 import { renderPose, zoomBy } from '../../view';
 import {
   bootRig, resetRig, state, partByLabel, partGroupEl, svgEl, medialPoints, placeBoneChain,
-  simulateDragDrop, clientCenterOf, expectClose, repaint, overlayEl, gestureDrag,
+  simulateDragDrop, clientCenterOf, expectClose, repaint, overlayEl, gestureDrag, pressKey,
 } from './harness';
 
 beforeAll(bootRig);
@@ -354,6 +354,87 @@ describe('scenario US5 — the no-gap invariant is scoped: enforced within a cha
     const gapY = armRoot.pivot.y + armRoot.rest.ty - spine2.boneTip!.y;
     expect(Math.hypot(gapX, gapY), 'the attach link has a real offset, not a glued joint')
       .toBeGreaterThan(0.5);
+  });
+});
+
+describe('scenario US6 — freeze origin drag on an ATTACHED ROOT translates it, not the cross-chain parent', () => {
+  it("freeze ON: dragging the arm root's origin marker moves the arm root's loose offset, rides its own sub-chain along for free, leaves the spine bone byte-untouched, and holds the bound art static", () => {
+    const { spine2, armRoot, armTip, limb } = setupAttachedRig();
+    expect(armRoot.attachedRoot).toBe(true); // precondition
+
+    modelSelectPart(armRoot.id);
+    notify();
+    pressKey('y'); // freeze ON
+    repaint();
+    expect(state.freezeMode).toBe(true);
+
+    const spine2RotBefore = spine2.rest.rotate;
+    const spine2TipBefore = { ...spine2.boneTip! };
+    const spine2PivotBefore = { ...spine2.pivot };
+    const armRootPivotBefore = { ...armRoot.pivot };
+    const armRootTxBefore = armRoot.rest.tx;
+    const armRootTyBefore = armRoot.rest.ty;
+    const armTipPivotBefore = { ...armTip.pivot };
+    const armTipBoneTipBefore = { ...armTip.boneTip! };
+    const originBefore = pivotHandleCenter(armRoot.id);
+    const artBefore = renderScreenSamples(LIMB);
+    const bodyBefore = renderScreenSamples(SPINE);
+
+    gestureDrag(originBefore, { x: originBefore.x + 40, y: originBefore.y - 25 }, { steps: 10 });
+
+    // --- the attached root itself moved: its loose offset (rest.tx/ty), NOT its pivot —
+    // the same fields view/rigOpsAttach.ts's world-preserving attach fold writes ---
+    expect(armRoot.pivot, 'pivot stays the UNCHANGED local anchor (never the write target)')
+      .toEqual(armRootPivotBefore);
+    const rootOffsetMoved = Math.hypot(
+      armRoot.rest.tx - armRootTxBefore, armRoot.rest.ty - armRootTyBefore,
+    );
+    expect(rootOffsetMoved, "the loose offset (rest.tx/ty) actually changed").toBeGreaterThan(0.5);
+    const originAfter = pivotHandleCenter(armRoot.id);
+    const screenMoved = Math.hypot(originAfter.x - originBefore.x, originAfter.y - originBefore.y);
+    expect(screenMoved, 'the origin marker chased the pointer').toBeGreaterThan(10);
+
+    // --- the CROSS-CHAIN PARENT (spine2) is byte-untouched: the core regression check.
+    // Before the fix, this drag misclassified as a shared CHILD joint and called
+    // aimBoneAtTip(spine2, pointer, t), rotating spine2 toward wherever the mouse landed. ---
+    expect(spine2.rest.rotate, 'spine2 rotation byte-untouched').toBe(spine2RotBefore);
+    expect(spine2.boneTip, 'spine2 tip byte-untouched').toEqual(spine2TipBefore);
+    expect(spine2.pivot, 'spine2 pivot byte-untouched').toEqual(spine2PivotBefore);
+
+    // --- the attached sub-chain rides along automatically through ordinary ancestor-chain
+    // pose composition — armTip's OWN stored fields are untouched (no separate carry step,
+    // unlike translateBoneChain's per-bone shift); afterEach's assertNoGap (chain-internal,
+    // attachedRoot-exempt) independently pins that armTip still tracks armRoot's tip. ---
+    expect(armTip.pivot, "armTip's own local storage is untouched — it rides via composition")
+      .toEqual(armTipPivotBefore);
+    expect(armTip.boneTip).toEqual(armTipBoneTipBefore);
+
+    // --- bound art held per freeze semantics: byte-stable while the rig is edited against it ---
+    const artAfter = renderScreenSamples(LIMB);
+    expect(maxDrift(artBefore, artAfter), 'the bound arm art is HELD static during the freeze drag')
+      .toBeLessThan(0.01);
+    // The spine's own bound art (body) never even enters this gesture's refreshBindForChain
+    // scope (boneChain from armRoot's id stops at the attach boundary) — untouched too.
+    const bodyAfter = renderScreenSamples(SPINE);
+    expect(maxDrift(bodyBefore, bodyAfter), "the spine's own bound art is untouched too")
+      .toBeLessThan(0.01);
+    expect(limb.skin, 'the arm stays bound').toBeTruthy();
+  });
+});
+
+describe("scenario US7 — outside freeze, an attached root's origin marker is inert", () => {
+  it('a press-drag on the arm root\'s origin marker outside freeze is a byte-level no-op', () => {
+    const { armRoot } = setupAttachedRig();
+    modelSelectPart(armRoot.id);
+    notify();
+    repaint();
+    expect(state.freezeMode, 'freeze OFF (default)').toBe(false);
+
+    const preDoc = JSON.stringify(state.doc);
+    const from = pivotHandleCenter(armRoot.id);
+    gestureDrag(from, { x: from.x + 40, y: from.y - 25 }, { steps: 10 });
+
+    expect(JSON.stringify(state.doc), 'byte-level no-op outside freeze').toBe(preDoc);
   });
 });
 

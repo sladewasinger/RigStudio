@@ -171,7 +171,10 @@ export function renderOverlay(): void {
     const cross = document.createElementNS(SVG_NS, 'g');
     // A CHILD bone's origin is the shared joint with its parent's tip — draggable in BOTH
     // modes (not freeze-gated), so it carries the `joint` class to keep its move cursor.
-    const isChildJoint = setup && part.kind === 'bone' && !!part.parentId
+    // UNIFIED SKELETON: an `attachedRoot` bone is never a child joint (its origin is a
+    // deliberately LOOSE cross-chain link, not the parent's tip) — mirrors pivot.ts's
+    // identical exemption, so the cursor affordance matches the actual gesture gating.
+    const isChildJoint = setup && part.kind === 'bone' && !!part.parentId && !part.attachedRoot
       && doc.parts.some((pp) => pp.id === part.parentId && pp.kind === 'bone');
     cross.setAttribute(
       'class',

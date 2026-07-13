@@ -77,7 +77,11 @@ export function captureFreezeBaselineIfNeeded(wasActive: boolean, d: DragState):
 function frozenReshapedBoneIds(d: DragState): string[] {
   if (d.kind === 'boneTip' && d.active) return d.part.kind === 'bone' ? [d.part.id] : [];
   if (d.kind === 'pivot' && d.active && d.part.kind === 'bone') {
-    const parent = d.part.parentId
+    // Mirrors pivot.ts's isChildJoint exemption: an attachedRoot bone reshapes ITSELF
+    // (its own sub-chain), never its cross-chain parent, so it must resolve to its own
+    // id here too — otherwise the gesture-end weight refresh would rebuild the wrong
+    // (cross-chain parent's) chain.
+    const parent = d.part.parentId && !d.part.attachedRoot
       ? state.doc?.parts.find((p) => p.id === d.part.parentId && p.kind === 'bone')
       : null;
     return [parent?.id ?? d.part.id];
