@@ -616,6 +616,32 @@ Node scale would — scale stays blocked on skinned parts.
   Combined with the queued ai/prompts.ts extraction (audit rank 2) so frozen
   claude.ts sheds its ceiling first.
 
+## AUTONOMOUS RUN (user directive 2026-07-12: "get through as much of the
+## roadmap as possible without my input — defer + document decisions")
+
+Execution order: bug wave → layers + AI branch integrations → arc fix +
+polish guard → skinned-drags wave → shortcuts registry (parallel worktree) →
+ergonomics wave → context-menu polish → node editor items 1/2/4 (+3 with the
+documented design) → shared pan/zoom module → .riv export items (keyed-z draw
+order via DrawTarget/DrawRules, opacity keys, full hidden-part exclusion —
+verified against the @rive-app/canvas harness) → H2 MCP server → Category B →
+D1 (File System Access + PWA). Every wave: full gates + roadmap tick.
+
+**DEFERRED FOR AUSTIN (decisions his to make — nothing below gets built):**
+- D2 (Tauri desktop): requires installing the Rust/Tauri toolchain on this
+  machine — not doing unattended. D1 proceeds (browser-native APIs only).
+- Lottie: frozen per earlier ruling (may be deleted); the .riv-only export
+  wave proceeds; ALL Lottie questions deferred.
+- Node editor: seam-node merge ships with the roadmap's documented design
+  (single visual node, explicit "open path" to split) — REVIEW IT; the
+  design-sweep extras (insert-preview ghost, dblclick-insert, hover
+  affordances) are proposals only, not built.
+- Group-like scale semantics: art-with-children gets group handle sets per
+  the queued wave; if the "own paths + descendants both scale" behavior feels
+  wrong in testing, it's one predicate-site change — flag it.
+- H2 MCP tool AUTH/packaging: built as a local stdio npm package per the
+  spec; publishing/naming decisions deferred.
+
 ## Editing ergonomics wave (user-requested 2026-07-12 — runs right after the
 ## layers-branch integration; items 2–3 build on the integrated layers.ts)
 
