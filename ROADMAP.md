@@ -616,6 +616,23 @@ Node scale would — scale stays blocked on skinned parts.
   Combined with the queued ai/prompts.ts extraction (audit rank 2) so frozen
   claude.ts sheds its ceiling first.
 
+## Editing ergonomics wave (user-requested 2026-07-12 — runs right after the
+## layers-branch integration; items 2–3 build on the integrated layers.ts)
+
+- [ ] **Keyframe selection drives part selection** — clicking a keyframe in the
+  Animate timeline selects the track's TARGET part (layers highlights it +
+  auto-expands ancestors, inspector shows it — "extremely hard to see what I'm
+  editing" with unnamed bones otherwise). Multi-key/marquee selection selects
+  the union of target parts (multi-selection exists). Tracks targeting the
+  synthetic `root` skip part selection. Key retime drags don't re-fire
+  selection churn beyond the initial click.
+- [ ] **Layers hover tooltips** — part and path rows carry `title` = the full
+  label, so truncated names reveal on hover.
+- [ ] **Layers panel horizontally resizable** — a draggable splitter on the
+  layers/canvas boundary with persisted width (localStorage, like the
+  timeline's height splitter in timeline/tlState.ts — same pattern, same
+  persistence discipline: editor pref, never doc state), min/max clamped.
+
 ## Node editor revamp (user-requested 2026-07-12 — "needs a pretty decent
 ## polish pass"; design pass first, then implement; reproduce-first on the bugs)
 
