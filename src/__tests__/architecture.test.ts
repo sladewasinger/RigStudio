@@ -23,7 +23,6 @@ const NEW_FILE_MAX = 300;
  *  became free — documentation-heavy files are the goal, not a violation. */
 const GRANDFATHERED = new Map<string, number>([
   ['ai/claude.ts', 489],
-  ['core/model.ts', 1089],
   ['geometry/paths.ts', 434],
   ['io/exportLottie.ts', 327],
   ['main.ts', 522],

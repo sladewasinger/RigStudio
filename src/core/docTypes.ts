@@ -1,0 +1,230 @@
+/**
+ * Document model and application state for Rig Studio.
+ *
+ * A RigDoc is an imported SVG reorganized for rigging: each named top-level group
+ * becomes a RigPart with a pivot point (the joint), verbatim baked transforms, and its
+ * drawable paths. Parts may be parented to one another (parentId) so limbs chain.
+ * Animation lives in Clips: named timelines of per-channel keyframes. Each part also
+ * carries a rest pose — offsets edited in Setup mode that keyframes add on top of.
+ */
+
+import { Mat } from '../geometry/transforms';
+import { StateMachine } from './smTypes';
+
+export interface Vec2 {
+  x: number;
+  y: number;
+}
+
+export interface RigPath {
+  id: string;
+  /** Display name from the SVG leaf's inkscape:label (or id) — shown in the layers tree. */
+  label: string;
+  /** Normalized absolute path data (all shapes are converted to paths on import). */
+  d: string;
+  /**
+   * Per-node type flags, one char per drawing command (Z excluded), Inkscape's
+   * sodipodi:nodetypes convention: 'c' corner/cusp, 's' smooth, 'z' symmetric.
+   * Null = untyped (handle drags fall back to collinearity detection).
+   */
+  nodeTypes?: string | null;
+  fill: string | null;
+  fillOpacity: number;
+  stroke: string | null;
+  strokeWidth: number;
+  strokeOpacity: number;
+  /** Verbatim SVG transform accumulated from ancestors between the part group and this path. */
+  transform: string;
+}
+
+/** Where a part's pivot should land once geometry is measurable (resolved by the canvas). */
+export type PivotHint =
+  /** Offset from the part's rendered bbox center, in document units (+y down). */
+  { kind: 'centerOffset'; dx: number; dy: number };
+
+/**
+ * The character's rest pose, edited in Setup mode. A channel with keyframes ignores
+ * these (keyed values are ABSOLUTE); a channel without keyframes displays its rest
+ * value. Scale is Setup-only (no scale keyframes on parts) and is applied along the
+ * artwork's own axes around the joint, so resizing never moves the pivot.
+ */
+export interface RestPose {
+  rotate: number;
+  tx: number;
+  ty: number;
+  sx: number;
+  sy: number;
+  /** Skew angles in degrees (Inkscape's rotate-mode side handles), innermost with scale. */
+  kx: number;
+  ky: number;
+  /**
+   * 0..1, applied to the part's own drawn geometry only (does NOT propagate to children —
+   * same rule as rest scale/skew). This is the KEYABLE channel that maps to a real Rive/
+   * Lottie runtime feature (layer/node opacity) — see the 'opacity' Channel doc below.
+   */
+  opacity: number;
+}
+
+/**
+ * What a part IS: 'art' draws paths; 'bone' is a partless joint (a diamond glyph on
+ * canvas) for building multi-joint chains; 'group' is a partless container created by
+ * Ctrl+G that its children ride on. Bones and groups still pose/animate like any part.
+ */
+export type PartKind = 'art' | 'bone' | 'group';
+
+/** One bone a skinned part is bound to, captured at bind time (rest space). */
+export interface SkinBone {
+  id: string;
+  /** Inverse of the bone's rest world matrix — per-frame delta = current · this. */
+  restWorldInv: Mat;
+  /** The bone's rest segment (origin → tip) in doc space, for distance weights. */
+  bindSeg: { p: Vec2; q: Vec2 };
+}
+
+/**
+ * A manual per-node weight override (Bones 2.0 refinement mode). A node keyed by this
+ * blends bone `a` at weight (1−t) with bone `b` at weight `t` — i.e. an origin↔tip
+ * lerp when `a` and `b` share a joint (a's tip == b's origin). `b === null` means 100%
+ * bone `a`. Both ids reference the part's own `skin.bones`; dangling refs are pruned by
+ * normalizeDoc. Overrides win over auto weights per node in the LBS render.
+ */
+export interface SkinOverride {
+  a: string;
+  b: string | null;
+  t: number;
+}
+
+export interface RigPart {
+  id: string;
+  label: string;
+  kind: PartKind;
+  /** Verbatim SVG transform of the part's group — the authored rest placement. */
+  transform: string;
+  /** Joint location in root (document) coordinates. Animated rotation spins around it. */
+  pivot: Vec2;
+  /** Pending pivot placement that needs layout to resolve; cleared once applied. */
+  pivotHint?: PivotHint | null;
+  /** Bones only: the far end of the bone, in the same frame as the pivot. */
+  boneTip?: Vec2 | null;
+  rest: RestPose;
+  /** Another part's id to inherit motion from (bone hierarchy), or null. */
+  parentId: string | null;
+  /**
+   * Linear-blend skinning binding (art parts): geometry deforms by these bones
+   * instead of riding a parent chain. Bind bakes static transforms into path data,
+   * zeroes rest, and clears parentId; weights derive from bindSeg distances at
+   * runtime. Exporters render skinned parts rigidly (documented limitation).
+   *
+   * `overrides` are manual per-node refinements: `overrides[pathId][cmdIndex]` pins
+   * that node's weight (see SkinOverride). Keyed by the path COMMAND index (post-bind
+   * geometry is all M/L/C/Z, so a command index === its node); structural node edits
+   * shift those indexes, so they drop the affected path's overrides.
+   */
+  skin?: { bones: SkinBone[]; overrides?: Record<string, Record<string, SkinOverride>> } | null;
+  paths: RigPath[];
+  /**
+   * Layers-panel visibility (the eye icon). EDITOR-ONLY, doc data but NEVER keyable and
+   * NEVER animated — "Keyable channels must map to Rive runtime features" (CLAUDE.md),
+   * and there is no Rive/Lottie runtime property for "this layer disappears at frame N"
+   * short of a full opacity/visibility keyframe, which is what the `opacity` Channel is
+   * for. Toggling this never touches a clip's tracks in either editor mode. Cascades DOWN
+   * the parent chain at render/export time (`isEffectivelyHidden`) rather than being
+   * copied onto descendants, since the doc is a flat part list, not nested DOM/JSON.
+   * Absent/false = visible (the default for every part that predates this field).
+   */
+  hidden?: boolean;
+}
+
+/**
+ * Animatable channels. Parts support rotate/tx/ty/opacity (+ the keyable draw-order `z`
+ * offset); the root figure also supports scale.
+ *
+ * `z` is special: it is a STACKING OFFSET, not a transform. It never enters a part's
+ * rendered matrix — render.ts sorts parts by (effective z ascending, doc.parts index
+ * ascending) to decide paint order. Its rest value is a fixed 0 (there is no RestPose.z),
+ * so an unkeyed doc renders in pure doc.parts order exactly as before. Keyed z is ABSOLUTE
+ * like every channel but SAMPLED STEPPED (hold the latest key at-or-before t; easing/bezier
+ * ignored — a stacking rank is discrete, not blendable). See sampleKeyList's `stepped` arg.
+ *
+ * `opacity` is a normal CONTINUOUS channel (0..1, eases like rotate/tx/ty — no stepped
+ * flag) backed by `RestPose.opacity`. It is the keyable half of the Layers-panel eye: the
+ * eye toggle (`RigPart.hidden`) is editor-only and never becomes a track, but fading a
+ * part in/out over time is a real Rive/Lottie runtime feature, so it gets a real channel.
+ */
+export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy' | 'z' | 'opacity';
+
+export type Easing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
+
+export const EASINGS: Easing[] = ['linear', 'easeIn', 'easeOut', 'easeInOut'];
+
+export interface Keyframe {
+  time: number; // ms
+  value: number;
+  easing: Easing; // easing of the segment arriving at this keyframe
+  /**
+   * Custom cubic-bezier for the ARRIVING segment (CSS-style x1,y1,x2,y2 with x in
+   * 0..1), set by the curve editor. Overrides `easing` when present.
+   */
+  bezier?: [number, number, number, number] | null;
+}
+
+export interface Track {
+  /** A part id, or 'root' for the whole-figure group. */
+  target: string;
+  channel: Channel;
+  keyframes: Keyframe[];
+}
+
+export interface Clip {
+  name: string;
+  duration: number; // ms
+  /**
+   * Loop the clip. Governs the state-machine evaluator (`stateMachine.ts`'s
+   * `clip.loop !== false`) and the .riv export's LinearAnimation loopValue. Default
+   * true (absent = looping); only an explicit `false` clamps at the clip's end. This is
+   * DOC data (serialized, undoable) — unlike the timeline's ping-pong toggle, which is
+   * an app-state playback preference. The timeline's own scrub/playback preview always
+   * loops regardless of this flag (that's transport behavior, separate from what the
+   * SM evaluator and exporter do). Moved here from `SMState.loop` (v2.12) to match
+   * Rive, where looping is a property of the LinearAnimation, not the state that plays it.
+   */
+  loop?: boolean;
+  tracks: Track[];
+}
+
+/**
+ * Optional page frame ("canvas size"), independent of the imported SVG's viewBox.
+ * When enabled it is drawn as a page rectangle behind the artwork and both exporters
+ * use it as their reference frame (Artboard/composition width+height, and origin
+ * offset) instead of viewBox. Disabled or absent = today's viewBox-only behavior.
+ */
+export interface Artboard {
+  enabled: boolean;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface RigDoc {
+  name: string;
+  viewBox: { x: number; y: number; w: number; h: number };
+  parts: RigPart[];
+  /** Pivot for root-level scale (e.g. squash-and-stretch around the ground). */
+  rootPivot: Vec2;
+  clips: Clip[];
+  /** Rive-style interactive graphs over the clips. Optional (absent on older docs). */
+  stateMachines?: StateMachine[];
+  /** Optional page frame; absent on older docs and on freshly-imported SVGs. */
+  artboard?: Artboard;
+}
+
+export const CHANNEL_DEFAULTS: Record<Channel, number> = {
+  rotate: 0,
+  tx: 0,
+  ty: 0,
+  sx: 1,
+  sy: 1,
+  z: 0, // stacking OFFSET rest value; 0 = authored (doc.parts) draw order
+  opacity: 1, // fully opaque; used for the synthetic 'root' target (no RestPose there)
+};
