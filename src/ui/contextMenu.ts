@@ -1,14 +1,40 @@
 /**
- * Positioned right-click context menu — shared by the Layers panel (layer rows) and the
- * canvas (artwork hit-testing), each of which builds its own item list and calls
- * `showContextMenu`. Only one menu is open at a time; opening a second closes the first.
+ * Positioned right-click context menu — shared by the Layers panel (layer/path rows) and
+ * the canvas (artwork/path hit-testing), each of which builds its own item list and calls
+ * `showContextMenu`. Only one menu is open at a time; opening a second closes the first
+ * ("Move to part…" reuses this for its destination picker, opened ON TOP of the menu it
+ * was clicked from — the same one-at-a-time rule closes the first automatically).
  *
  * Closes on Escape, a click/pointerdown anywhere outside the menu, or scrolling any
  * ancestor (capture-phase 'scroll' — scrollable panels like #layers don't bubble their
  * scroll events, so this is the only way to catch it generically). Does NOT import
  * './ui.css' itself — dialogs.ts already pulls it in, and every page that can open a
  * context menu also has main.ts (which imports dialogs.ts) on the page.
+ *
+ * SUPPRESSION CHOKEPOINT (Context-menu polish, 2026-07-13): a single capture-phase
+ * `contextmenu` listener on `document`, installed as a MODULE SIDE EFFECT below, is the
+ * ONLY place `preventDefault()` is called for the native browser menu. Capture-phase on
+ * `document` fires before any element's own `contextmenu` handler (capture travels
+ * document → target, target/bubble phases come after), so canvas/layer-row/path-row
+ * listeners built on top of `showContextMenu` never need to (and must not) call
+ * `preventDefault()` themselves — this is the one door. Where no in-app menu claims the
+ * event, nothing else runs, so the native menu simply never appears (rather than a plain
+ * blank space where it used to). EXCEPTION: text-entry elements (input/textarea/
+ * contenteditable — the AI prompt box, the API-key field, layer/path inline-rename
+ * inputs, every ui/dialogs.ts field) are left alone, so right-click copy/paste keeps
+ * working there.
  */
+function isTextEntry(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return true;
+  return el.isContentEditable === true;
+}
+
+document.addEventListener('contextmenu', (ev) => {
+  if (isTextEntry(ev.target)) return;
+  ev.preventDefault();
+}, true);
 
 export interface ContextMenuItem {
   label: string;

@@ -12,6 +12,7 @@ import { renderPose, enterGroupsFor } from '../view';
 import { checkpoint } from '../core/history';
 import { showContextMenu } from '../ui/contextMenu';
 import { buildPartContextMenu } from '../ui/actions';
+import { buildPathContextMenu } from '../ui/pathActions';
 import { icon } from './icons';
 import {
   wireDropTarget, wirePartRowDrag, wirePartRowDrop, wirePathRowDrag, wirePathRowDrop,
@@ -188,7 +189,8 @@ function partNode(part: RigPart): HTMLElement {
     beginInlineRename(row, name, part);
   };
   row.addEventListener('contextmenu', (ev) => {
-    ev.preventDefault();
+    // Native-menu suppression is the ui/contextMenu.ts chokepoint's job now (capture-
+    // phase on document, fires before this bubble-phase handler even runs).
     if (!state.selectedPartIds.includes(part.id)) {
       selectPart(part.id);
       enterGroupsFor(part.id);
@@ -235,6 +237,18 @@ function partNode(part: RigPart): HTMLElement {
         ev.stopPropagation();
         beginInlineRename(pathRow, pathName, path);
       };
+      pathRow.addEventListener('contextmenu', (ev) => {
+        // See the part row's contextmenu handler above — suppression is the chokepoint's
+        // job, not this listener's.
+        selectPart(part.id);
+        state.selectedPathId = path.id;
+        notify();
+        renderPose();
+        showContextMenu(
+          buildPathContextMenu(part, path, ev.clientX, ev.clientY, () => beginInlineRename(pathRow, pathName, path)),
+          ev.clientX, ev.clientY,
+        );
+      });
       wirePathRowDrag(pathRow, part, path);
       wirePathRowDrop(pathRow, part, path);
       pathLi.appendChild(pathRow);

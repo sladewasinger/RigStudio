@@ -1,11 +1,12 @@
 import {
   state, notify, subscribe, activeClip, serializeDoc, deserializeDoc,
-  selectPart, partById, newBlankDoc, markClean,
+  selectPart, partById, newBlankDoc, markClean, RigPart,
 } from './core/model';
 import { importSvg } from './io/importSvg';
 import {
   buildCanvas, renderPose, resetView, cancelBonePlacement,
   enterGroupsFor, clearGroupEntry, resetInteractionState, resetSkinRenderWarnings,
+  artworkUnderPointer,
 } from './view';
 import { buildLayersPanel, buildInspector, buildCanvasTools } from './panels';
 import { buildTimeline, render as renderTimeline, clearKeySelection } from './timeline/timeline';
@@ -18,6 +19,7 @@ import { installShortcuts, setEditorMode, saveProject } from './ui/shortcuts';
 import { dialog } from './ui/dialogs';
 import { showContextMenu } from './ui/contextMenu';
 import { buildPartContextMenu } from './ui/actions';
+import { buildPathContextMenu } from './ui/pathActions';
 import { download } from './ui/download';
 import { exportPngFlow, exportSvgFlow, canExportImage } from './ui/imageExport';
 
@@ -240,13 +242,44 @@ function hitPartIdAt(clientX: number, clientY: number): string | null {
   return null;
 }
 
+/**
+ * A right-click resolves to a PATH context (not just the part) exactly where a
+ * double-click would already drill down to a path: the part is already the primary
+ * selection (`enterGroupsFor` already opened its ancestor groups the first time it was
+ * picked, whether via this same handler, a Layers row, or a canvas dblclick — see
+ * `focus.ts`'s `artworkUnderPointer`/dblclick drill logic, reused rather than
+ * re-implemented), so a right-click on the SAME already-entered part's fill scopes to
+ * that path; a right-click on a not-yet-selected part falls through to the part menu
+ * below (which selects it — a second right-click there then reaches the path).
+ */
+function pathContextAt(ev: MouseEvent): { part: RigPart; pathId: string } | null {
+  if (state.editorMode !== 'setup') return null;
+  const hit = artworkUnderPointer(ev);
+  const pathId = hit?.pathEl?.dataset.pathId;
+  if (!hit || !pathId || state.selectedPartId !== hit.part.id) return null;
+  return { part: hit.part, pathId };
+}
+
 // Capture phase per the assignment's spec; contextmenu only fires on a real right-click,
 // so this can never interfere with the interaction-test suite's synthetic pointer
-// gestures (which only dispatch pointerdown/move/up and click/dblclick).
+// gestures (which only dispatch pointerdown/move/up and click/dblclick). Native-menu
+// suppression is the ui/contextMenu.ts chokepoint's job — this listener only decides
+// WHICH in-app menu (if any) to show.
 canvasEl.addEventListener('contextmenu', (ev) => {
-  ev.preventDefault();
+  const pathHit = pathContextAt(ev);
+  if (pathHit) {
+    const path = pathHit.part.paths.find((p) => p.id === pathHit.pathId);
+    if (path) {
+      selectPart(pathHit.part.id);
+      state.selectedPathId = pathHit.pathId;
+      notify();
+      renderPose();
+      showContextMenu(buildPathContextMenu(pathHit.part, path, ev.clientX, ev.clientY), ev.clientX, ev.clientY);
+      return;
+    }
+  }
   const partId = hitPartIdAt(ev.clientX, ev.clientY);
-  if (!partId) return; // blank canvas — suppress the browser menu, no app menu
+  if (!partId) return; // blank canvas — the chokepoint already suppressed the native menu
   const part = partById(partId);
   if (!part) return;
   if (!state.selectedPartIds.includes(partId)) {

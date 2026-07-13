@@ -486,6 +486,21 @@ export function moveMouse(x: number, y: number): void {
 }
 
 /**
+ * A right-click at a client point: dispatches a genuine 'contextmenu' MouseEvent at the
+ * TRUE hit target (`hitAt` — elementFromPoint, same discipline as every other gesture
+ * helper here) and returns whether its default was prevented — the Context-menu polish
+ * wave's core assertion (native menu suppressed vs. left alone over text entry).
+ */
+export function rightClick(x: number, y: number, mods: Mods = {}): boolean {
+  const ev = new MouseEvent('contextmenu', {
+    bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2,
+    ctrlKey: !!mods.ctrlKey, shiftKey: !!mods.shiftKey, altKey: !!mods.altKey, metaKey: !!mods.metaKey,
+  });
+  hitAt(x, y).dispatchEvent(ev);
+  return ev.defaultPrevented;
+}
+
+/**
  * A realistic double-click: click, click (re-resolving the hit target between them —
  * overlays appear after the first selects), then a dblclick. The app's dblclick handler
  * re-resolves artwork via elementsFromPoint, so the dblclick dispatches at the svg.

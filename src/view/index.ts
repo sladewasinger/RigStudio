@@ -20,8 +20,11 @@
 
 export { buildCanvas } from './canvas';
 export { partRootBoxes } from './pose';
-export { clearGroupEntry, enterGroupsFor, stepOutFocus, resetInteractionState } from './focus';
+export {
+  clearGroupEntry, enterGroupsFor, stepOutFocus, resetInteractionState, artworkUnderPointer,
+} from './focus';
 export { renderPose, setPoseSampler, resetSkinRenderWarnings } from './render';
+export { invalidateSkinCache } from './skinRender';
 export {
   updatePathAttrs, reorderCanvas, registerPart, unregisterPart, syncPartPathDom,
 } from './partDom';
