@@ -422,8 +422,22 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
     ONLY in freeze. Inspector bone fields (rotation/length/position) route through the
     same rule (`rebindFrozenChain`). Everything happens under the ONE gesture checkpoint,
     so a freeze reshape + its bind refresh is a single undo.
+- **Attached roots (unified skeleton, Phase 1 — user feature 2026-07-12).** A chain's
+  ROOT bone may be attached to a bone of ANOTHER chain (drag bone→bone in Layers):
+  `RigPart.attachedRoot: true`, a "loose" child whose origin need NOT sit at the
+  parent's tip (its offset lives in rest.tx/ty in the parent frame). The attach is
+  WORLD-PRESERVING (`view/rigOpsAttach.ts` folds invert(chainMat_new)·W into rest —
+  render-neutral, bind data untouched); pose composition flows through parentId as
+  always, so the parent chain carries the attached chain and its deformed art (the
+  spine-drives-the-arms rig). `boneChain` STOPS at attached roots at the source
+  (`rootOf`) — auto-bind and the no-gap invariant are per-contiguous-chain — and IK
+  chain resolution stops there too (solving ACROSS attachments is a deferred Phase-2
+  decision). Both carry-child-origin helpers skip attached children (a parent LENGTH
+  edit must not snap the loose offset onto the new tip). A dashed screen-constant
+  tip→origin link renders the coupling. `normalizeDoc` prunes the flag when the
+  parent isn't a bone. Pinned by `interaction/unifiedSkeleton.test.ts`.
 - **Connected-chain invariant.** `|child origin − parent tip| == 0` after ANY gesture,
-  in either mode. The selected bone's tip handle renders AFTER the glyph loop so a child
+  in either mode — WITHIN a chain; attached-root links are exempt (see above). The selected bone's tip handle renders AFTER the glyph loop so a child
   glyph on the shared joint can't occlude it. Interaction-tested (`bones.test.ts` B14
   no-free-translation, `freeze.test.ts` F2; an `afterEach(assertNoGap)` re-checks it
   after every scenario in both files).

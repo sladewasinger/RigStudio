@@ -602,7 +602,8 @@ The LBS math already follows bone WORLD transforms, so connecting the chains
 (arm root bone becomes a child of the spine bone) makes everything compose —
 the feature is making that attachment first-class and safe.
 
-- [ ] **Phase 1 — attach via Layers drag** (the deliverable): dragging a chain's
+- [x] **Phase 1 — attach via Layers drag** (064c521; follow-up: freeze
+  origin-drag on an attached root, in flight): dragging a chain's
   ROOT bone onto a bone of ANOTHER chain parents it WORLD-PRESERVING (fold the
   chain-frame delta into the root's rest, the foldLostArtPoseIntoBoneRest
   precedent — zero visual jump, bind data untouched). The new link is an
