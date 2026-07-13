@@ -523,7 +523,8 @@ Category B — DONE 2026-07-13 (918dd3e + eb79af2) except recent-files:
 - [x] **Quick-save vs Save As** — filename remembered per doc name; Ctrl+Shift+S
   Save As; found+fixed: save/selectAll bindings never checked shift. Browser
   filename-memory only; real overwrite lands with D1 file handles.
-- [ ] **Recent files** menu — DEFERRED into D1 (its storage layer owns it).
+- [x] **Recent files** menu — landed WITH D1 (91ac929): localStorage ring +
+  IndexedDB handle persistence, Open… dropdown.
 - [x] **Invert selection (Ctrl+I) / Select None (Ctrl+Shift+A)** via the registry.
 - [x] **Empty-state call-to-action** — CTAs proxy-click the real toolbar buttons
   so every existing guard applies.
@@ -704,6 +705,9 @@ gates + roadmap tick.
   pixel readback is impossible headless.
 - Take-pill hash re-pin (dbac402): canonical order changed the bytes; verified
   visually via render-frames; the Dosey checkout's riv+rig.json were rewritten.
+- D1 real-disk round trip (91ac929): open a real .rig.json via the OS picker,
+  Ctrl+S, confirm the file on disk changed, Save As, check the recents
+  dropdown + the installed-PWA flow — only a human can drive the OS dialogs.
 
 **DEFERRED FOR AUSTIN (decisions his to make — nothing below gets built):**
 - Unified skeleton Phase 2: whether IK solves ACROSS attachments (grab a hand,
@@ -907,11 +911,13 @@ concept seed.
 ## Desktop / real file access (planned with Austin 2026-07-11 — after A & H;
 ## Category B also queued after A & H per user decision)
 
-- [ ] **D1. File System Access API + PWA (browser, no packaging)** — behind a
+- [x] **D1. File System Access API + PWA (browser, no packaging)** (91ac929) — behind a
   small storage interface (open/save/saveAs/recents): Chromium's
   showSaveFilePicker gives writable in-place Save (no more download-per-save);
   persisted IndexedDB file handles make RECENT FILES real (subsumes the
   Category-B item — don't build it twice); PWA manifest for installability.
+  Interaction coverage round-trips through OPFS handles (the OS picker is
+  undrivable by automation) — the REAL-DISK round trip is on the review list.
   Feature-detected; Firefox/Safari keep the download flow. Small (~day) —
   benefits the deployed Pages app immediately; may slot earlier if desired.
 - [ ] **D2. Tauri desktop wrapper (NOT Electron — performance)** — native

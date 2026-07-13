@@ -130,6 +130,7 @@ from the console; `window.__smPanel` drives the state-machine editor determinist
 | `panels/smPanel.ts` | **Pure re-export facade** over `src/panels/sm/` — the state-machine editor UI (the timeline's `🔀 logic` view). Modules: `sm/state.ts` (shared session ctx + rerender hook), `sm/graphCamera.ts` (state-box geometry, per-machine pan/zoom viewport), `sm/graphInteract.ts` (drag-to-move, click-click transition arming, create/delete gestures), `sm/graph.ts` (graph bar + node/edge drawing; positions persist on `SMState.x/y`), `sm/preview.ts` (▶ preview engine: SMInstance + rAF driving the canvas via view's `setPoseSampler`, capture-phase pointer listeners mapping canvas hits ancestor-inclusive to listener actions, `window.__smPanel` debug hook with deterministic `tick(dtMs)`), `sm/props.ts` (right column: state/transition property editors incl. conditions/duration/exit-time), `sm/header.ts` (machine CRUD + preview button), `sm/globals.ts` (left column: inputs with live preview controls, listeners editor), `sm/panel.ts` (`buildSMPanel` orchestration + Delete/Escape hooks) |
 | `ai/claude.ts` | Anthropic SDK calls (`claude-opus-4-8`): `animateWithClaude` (adaptive thinking, structured outputs guaranteeing a valid clip JSON, parent-aware system prompt, optional base64 pose snapshot for vision grounding) and `critiqueWithClaude` (plain-text animation review) |
 | `headless/index.ts` | **Pure re-export facade** — the DOM-free surface for scripts/agents (H1): all of `core/model`, `core/stateMachine`'s evaluator, both exporters, and `importSvgHeadless` (scoped jsdom `DOMParser`; the importer itself is untouched). `headless/cli.ts` + `bin.mjs` drive the `rig-studio` CLI (`import`/`validate`/`export-riv`/`render-frames` in `cliCommands.ts`); `headless/composePose.ts` builds a posed standalone SVG through the shared `geometry/pose.ts` kernel (z-sorted draw order, sampled opacity, hidden excluded, artboard frame; SKINNED PARTS RIGID like both exporters — stated in CLI output) and `headless/renderFrames.ts` rasterizes frames via `@resvg/resvg-js` (default times = the A3 cluster algorithm from `core/filmstripTimes.ts`). A module-graph test (`headlessBoundary.test.ts`) enforces that nothing here transitively imports `view/`/`panels/`/`timeline/`/`ui/`; `main.ts` never imports `headless/`, so jsdom/resvg stay out of the Vite bundle. NOTE: several core functions (`applyRigChanges`, the setKeyframe family) read/write the `state` singleton — headless scripts set `state.doc = doc` first (composePose does this scoped + restored) |
+| `io/storage/index.ts` | **D1: the ProjectStorage facade** — real file access behind an interface so D2 can swap backends: `fileSystemAccess.ts` (Chromium pickers, in-place writes through the held `state.projectFileHandle` — true quick-save), `downloadFallback.ts` (the pre-D1 download/file-input flow), `recents.ts` (localStorage ring) + `handleStore.ts` (IndexedDB handle persistence, defensive permission re-request), `setProjectStorageForTest` seam. Save precedence: live handle > picker > filename memory > localStorage autosave (crash net). PWA: `public/manifest.webmanifest` + Pip icons (rendered by `scripts/genPwaIcons.ts`, committed) + `public/sw.js` (cache-first app shell, PROD-only registration via `src/pwa.ts` — the dev server and suites never see it) |
 | `mcp/server.ts` | **H2: the local stdio MCP server** (`npm run mcp` / the `rig-studio-mcp` bin) — strictly a wrapper over the headless surface, under the same boundary rule (headlessBoundary.test.ts covers `src/mcp/`). 12 tools (import_svg, load/save_project, list_parts, analyze_rig, add_bones, apply_clip, add_state_machine, render_filmstrip, export_riv, export_lottie, validate) over in-memory named doc SESSIONS: `sessions.ts` swaps the WHOLE AppState in/out around every tool body (the composePose scoped-swap pattern; safe because stdio is single-threaded) and runs `normalizeDoc` after each mutation. `apply_clip` speaks the SAME structured clip schema + `clampRawClip` path as the in-app assistant ("one brain, two mouths"). NOTE: `applyClip.ts`/`bindHeadless.ts` are documented hand-synced ports of `panels/ai/apply.ts`/`view/rigOpsBind.ts` (cross-boundary imports forbidden) — keep them in sync until the queued shared-pure-core extraction; `bindHeadless.ts` is a sanctioned nodeTypes writer in the chokepoint allowlist |
 | `main.ts` | Bootstrapping, toolbar (open SVG/project, sample, save project, undo/redo, Lottie/Rive/PNG/SVG export, Edit/Animate toggle, `?` help), autosave to `localStorage`, and one `installShortcuts()` call. THE KEYBOARD SYSTEM lives in `src/ui/`: `shortcuts.ts` (the dispatch engine — 4 early ownership guards, then first-match over the registry), `shortcutBindings.ts` + `shortcutBindingsTools.ts` (the REGISTRY — every binding co-locates its `match`/`run` with its help metadata, so the overlay row cannot drift; incl. `B` = arm bone-chain placement, Setup-gated), `shortcutCascades.ts` (`DELETE_HANDLERS`/`ESCAPE_HANDLERS` — explicit Chain-of-Responsibility arrays, first `run()` returning true wins, per-tier why-comments), `shortcutActions.ts` (actions shared with toolbar buttons). Letter/F/Space keys fire only without ctrl/meta/alt; input-focus blocks everything |
 
@@ -539,6 +540,39 @@ harness (`src/__tests__/interaction/harness.ts` — use its helpers rather than
 hand-rolling gestures) and enforced by `npm run test:interaction`.
 
 ## Status
+
+### The autonomous run (2026-07-12→13, user away) — implemented and verified
+
+Executed per the user's directive ("get through as much of the roadmap as
+possible without my input — defer + document decisions") and the run plan +
+decision ledger in ROADMAP.md. ~20 waves, each fully gated (build, unit,
+interaction, take-pill hash) and committed with its own doc tick. Final
+gates: **687 unit / 33 files, 280 interaction / 36 files**, build clean.
+Landed, in order: gesture-pipeline redesign (view/interactions/ CoR priority
+table) + nodeEditing chokepoint; skinned-part rotate/translate ruling; the
+shortcuts registry (main.ts 522→243, generated help, B key); editing
+ergonomics (key→part selection, tooltips, layers splitter); unified skeleton
+Phase 1 (cross-chain bone attachment, world-preserving, + both follow-up
+classification fixes); layer-order-IS-z (canonical doc.parts order — SEVEN
+real divergences fixed; take-pill hash re-pinned 3754fc45 after visual
+verification via headless render-frames); context menus (native suppression,
+path menus, extract-path op); node editor revamp items 1–4 (segment-point
+insert, two-handle symmetric, unified seam glyph [review-flagged], type
+highlight); shared pan/zoom kernel (geometry/viewRect.ts — the last audit
+reorganization); .riv completions (keyed-z via DrawRules/DrawTarget, keyed
+opacity via KeyFrameColor — deliberately NOT Node.opacity, which cascades
+unlike the editor's — full hidden-subtree exclusion, + fixed the pure-doc
+bug where headless exports never cascaded hidden); H2 MCP server (12 stdio
+tools, sessions, one clip schema with the in-app assistant); Category B
+(search/fps/quick-save/invert/empty states); D1 (ProjectStorage interface:
+File System Access in-place saves, recents w/ IndexedDB handles, PWA
+manifest+icons+prod-only SW). Latent bugs found & fixed along the way: the
+bend pipeline's implicit-Z split never dropped overrides; arc-expansion
+nodeTypes desync at bind time; core isEffectivelyHidden reading state.doc;
+shift-unchecked save/selectAll bindings; applyNodeOp never notifying;
+un-normalized MCP session docs. Grandfather list: 3 entries (paths 434,
+exportLottie 327 [frozen], graph 387), from 15. AUSTIN: read ROADMAP.md's
+"AUSTIN'S REVIEW LIST" + "DEFERRED FOR AUSTIN" ledgers first.
 
 ### Sixteenth wave (AI Animate System v2: A0–A6) — implemented and verified
 
