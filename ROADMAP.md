@@ -507,7 +507,8 @@ gates 492 unit / 19 files, 159 interaction / 24 files, build clean.
 2026-07-11 — user decision: Pip stays as the permanent public demo sample.
 girl_example.svg remains a nested-import test fixture only.)
 
-- [ ] **Extract path → own part** — a context-menu op wrapping a path in its own
+- [x] **Extract path → own part** (8203345, in the context-menu wave — pure
+  reuse of addNullPart + movePathToPart) — a context-menu op wrapping a path in its own
   part with frame compensation (geometry stays put), so imported single-path
   details (e.g. a body's shadow path) become independently animatable/reorderable
   across parts. (Follow-on to the path-row select/reorder fix; cross-part path
@@ -759,12 +760,14 @@ gates + roadmap tick.
 
 ## Context-menu polish (user-requested 2026-07-12)
 
-- [ ] **Suppress the native browser context menu app-wide** — a document-level
+- [x] **Suppress the native browser context menu app-wide** (8203345) — a document-level
   `contextmenu` preventDefault: where no in-app menu applies, NO menu appears
   (never the browser's). EXCEPTION: text-entry elements (inputs/textareas —
   the API-key field, rename editors, prompt box) keep the native menu, since
   suppressing it there kills right-click copy/paste.
-- [ ] **Right-click menus on PATHS, not just parts** — path rows in the Layers
+- [x] **Right-click menus on PATHS, not just parts** (8203345 — incl. the
+  extract-path op, absorbing the standalone roadmap item; skinned-part path
+  deletion refused per the chokepoint rule) — path rows in the Layers
   panel and paths on canvas (entered-part/node-editing contexts) get an in-app
   context menu: rename (once the layers wave lands), delete path, raise/lower
   within the part, move to part… (the new cross-part move as a menu action),
