@@ -95,8 +95,9 @@ export function renderOverlay(): void {
   renderPivotGhosts(doc, t, size, holder);
   renderBoneLines(doc, t, size, holder);
 
-  // Highlight the "entered" path, if any (Setup path selection).
-  if (setup && state.selectedPathId) {
+  // Highlight the "entered" path, if any — Edit and Animate alike (user ruling
+  // 2026-07-13: path selection is navigation, not posing, so it isn't Setup-gated).
+  if (state.selectedPathId) {
     const part = selectedPart();
     const g = part ? ctx.partGroups.get(part.id) : null;
     const path = part?.paths.find((p) => p.id === state.selectedPathId);

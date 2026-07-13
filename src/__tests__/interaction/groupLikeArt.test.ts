@@ -17,12 +17,13 @@
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { canUndo, undo } from '../../core/history';
 import { isGroupLike, selectPart } from '../../core/model';
+import { groupAction } from '../../panels';
 import { partRootBoxes, unbindSelectedSkin, enterGroupsFor } from '../../view';
 import {
   bootRig, resetRig, state, partByLabel, clientPointOnPart, gestureDrag, click,
   fullDblClick, pressKey, overlayEl, overlayCount, expectClose, docToClient,
   clientCenterOf, selectByLabel, repaint, screenScale, pathElById, rawToClient,
-  placeBoneChain, notify,
+  placeBoneChain, notify, setEditorMode,
 } from './harness';
 
 beforeAll(bootRig);
@@ -345,3 +346,188 @@ describe('scenario GL4 — a bone chain under an art part does NOT make it group
     expect(state.selectedPartId).toBe(bone.id);
   });
 });
+
+/** `#inspector`'s section headings, same probe `keySelection.test.ts` uses. */
+function inspectorHeadings(): string[] {
+  return Array.from(document.querySelectorAll('#inspector h3')).map((h) => h.textContent ?? '');
+}
+
+/**
+ * scenario GL5 — user-reported regression (2026-07-13): "I double click on an eye, and
+ * everything fades except for the face. Good. Then I double click on an eye again to
+ * drilldown into the eyes group, but nothing happens." Root cause: the dblclick ladder's
+ * deepest-level branch (enter the part + select the path under the cursor) carried a
+ * `state.editorMode !== 'setup'` early return — a leftover from before drill-down was
+ * generalized to art-with-children, back when "enters a part" implicitly meant "enters
+ * node-editing". PRE-FIX in Animate: the second dblclick on the eye silently no-ops —
+ * `state.selectedPathId` stays `null` and `state.selectedPartId` stays `null` (still
+ * inside the dived `face`, nothing selected) — confirmed by reverting the dblclick.ts
+ * fix and re-running this scenario (recorded in the wave's commit message).
+ *
+ * Design ruling (2026-07-13, "parts/groups should act the same, Inkscape-like"): drill-
+ * down and path SELECTION are IDENTICAL in Edit and Animate — it is navigation/
+ * inspection (Layers row highlight, canvas dashed outline, inspector object section),
+ * never a new keyable surface. Only node EDITING itself (state.mode 'nodes', Setup-only)
+ * stays gated. This scenario duplicates GL2's ladder verbatim per mode via
+ * `describe.each` (mode is the only variable) so Edit's already-passing behavior and
+ * Animate's fixed behavior are pinned by the exact same assertions.
+ */
+describe.each(['setup', 'animate'] as const)(
+  'scenario GL5 — %s: dblclick drills face -> eyes -> eyes\' path scope, Escape walks back out',
+  (mode) => {
+    it(`the user's exact recipe: dblclick eye, dblclick eye again enters path scope (${mode})`, () => {
+      setEditorMode(mode);
+      const face = partByLabel('face');
+      const eyes = partByLabel('eyes');
+
+      // Click the eyes → lands on the closed group-like ancestor, face (unaffected by
+      // editorMode — the artwork pipeline's group substitution never gated on it).
+      let p = centerPointOnPath('eyes');
+      click(p.x, p.y);
+      expect(state.selectedPartId).toBe(face.id);
+
+      // Double-click DIVES into face, selecting NOTHING — "everything fades except the
+      // face. Good" from the report.
+      p = centerPointOnPath('eyes');
+      fullDblClick(p.x, p.y);
+      expect(state.selectedPartId).toBeNull();
+      expect(overlayCount('.select-box')).toBe(0);
+
+      // The next single click selects eyes directly (face is now entered).
+      p = centerPointOnPath('eyes');
+      click(p.x, p.y);
+      expect(state.selectedPartId).toBe(eyes.id);
+      expect(state.selectedPathId).toBeNull();
+
+      // THE REPORTED DEAD SPOT: double-click on eyes again must enter PATH scope —
+      // eyes has no child parts of its own, so the next drill level is the classic
+      // "enter the part, select the path under the cursor" behavior.
+      p = centerPointOnPath('eyes');
+      fullDblClick(p.x, p.y);
+      expect(state.selectedPartId, 'still on eyes, now path-scoped').toBe(eyes.id);
+      const pathIds = eyes.paths.map((pp) => pp.id);
+      expect(pathIds, 'a real path id was selected').toContain(state.selectedPathId);
+      expect(
+        eyes.paths.find((pp) => pp.id === state.selectedPathId)?.label,
+        'the clicked path is one of the two eye ellipses',
+      ).toMatch(/eye/);
+
+      // Sane, mode-agnostic feedback for the entered path: Layers row highlight (already
+      // mode-agnostic pre-fix), the canvas dashed outline, and the inspector's object
+      // section — all three now render regardless of editorMode.
+      expect(overlayCount('.path-highlight'), 'canvas dashed path outline').toBe(1);
+      expect(
+        inspectorHeadings().some((h) => h.startsWith('object:')),
+        'inspector grows an "object:" section for the entered path',
+      ).toBe(true);
+
+      // Escape tier 1: leave the entered path (part stays selected).
+      pressKey('Escape');
+      expect(state.selectedPathId).toBeNull();
+      expect(state.selectedPartId).toBe(eyes.id);
+
+      // Escape tier 2: deselect, but stay inside face (one level at a time).
+      pressKey('Escape');
+      expect(state.selectedPartId).toBeNull();
+
+      // Escape tier 3: pop face. Clicking the eyes now lands on face again — proving the
+      // whole dive is symmetric, in either mode.
+      pressKey('Escape');
+      p = centerPointOnPath('eyes');
+      click(p.x, p.y);
+      expect(state.selectedPartId).toBe(face.id);
+    });
+  },
+);
+
+/**
+ * scenario GL6 — a THREE-deep group-like ladder: a genuine `kind: 'group'` null wrapping
+ * `face` (itself group-like: art-with-children, per GL1) which in turn parents the plain
+ * leaf art `eyes`. Verifies the ladder generalizes past one group-like level — EACH
+ * dblclick steps exactly one level toward the clicked leaf, whatever mix of `kind:
+ * 'group'` and art-with-children ancestors sits in between — and that Escape unwinds the
+ * same three levels symmetrically. Fabricated (mirrors selection-focus.test.ts scenario
+ * 10's nested-group technique) since no bundled fixture nests a real group around an
+ * art-with-children part.
+ */
+describe.each(['setup', 'animate'] as const)(
+  'scenario GL6 — %s: a 3-deep ladder (group -> art-with-children -> plain art)',
+  (mode) => {
+    it(`each dblclick dives exactly one level; a final dblclick enters eyes' path scope (${mode})`, () => {
+      // Build the fixture in Setup — grouping is a structural rig edit (groupAction is
+      // itself Setup-gated, unrelated to this ladder fix) — THEN switch to the mode
+      // under test for the actual drill-down gestures below.
+      selectByLabel('face');
+      const p2 = clientPointOnPart('right_leg');
+      click(p2.x, p2.y, { shiftKey: true });
+      groupAction();
+      const group = state.doc!.parts.find((pt) => pt.kind === 'group')!;
+      const face = partByLabel('face');
+      const eyes = partByLabel('eyes');
+      expect(face.parentId, 'face now hangs under the new group').toBe(group.id);
+      expect(eyes.parentId, "face's own child link is untouched by the grouping").toBe(face.id);
+
+      setEditorMode(mode);
+      selectPart(null);
+
+      // Level 1: click eyes → substitutes to the OUTERMOST closed group-like ancestor
+      // (the new group), same rule scenario 10 pins for nested plain groups.
+      let p = centerPointOnPath('eyes');
+      click(p.x, p.y);
+      expect(state.selectedPartId).toBe(group.id);
+
+      // Dive 1: enters the group only — face is NOT yet entered.
+      p = centerPointOnPath('eyes');
+      fullDblClick(p.x, p.y);
+      expect(state.selectedPartId).toBeNull();
+
+      // Level 2: click now substitutes to face (the next un-entered group-like ancestor).
+      p = centerPointOnPath('eyes');
+      click(p.x, p.y);
+      expect(state.selectedPartId).toBe(face.id);
+
+      // Dive 2: enters face. Both group-like ancestors are now entered.
+      p = centerPointOnPath('eyes');
+      fullDblClick(p.x, p.y);
+      expect(state.selectedPartId).toBeNull();
+
+      // Level 3 (deepest — no un-entered group-like ancestor left): click selects the
+      // leaf eyes directly.
+      p = centerPointOnPath('eyes');
+      click(p.x, p.y);
+      expect(state.selectedPartId).toBe(eyes.id);
+
+      // Dive 3: the final dblclick has nowhere left to descend as a GROUP, so it enters
+      // PATH scope on eyes instead — exactly GL5's assertion, now reached through two
+      // group-like levels instead of one.
+      p = centerPointOnPath('eyes');
+      fullDblClick(p.x, p.y);
+      expect(state.selectedPartId).toBe(eyes.id);
+      expect(eyes.paths.map((pp) => pp.id)).toContain(state.selectedPathId);
+
+      // Escape unwinds the same three levels one at a time: path -> deselect -> pop
+      // face -> deselect -> pop group. Every step is a real gesture (Escape/click, no
+      // state.* backdoors) — a click on eyes after each pop proves which level is
+      // active, mirroring GL2/scenario 9's round-trip check.
+      pressKey('Escape'); // leave the path
+      expect(state.selectedPathId).toBeNull();
+      expect(state.selectedPartId).toBe(eyes.id);
+
+      pressKey('Escape'); // deselect eyes, stay inside face+group
+      expect(state.selectedPartId).toBeNull();
+
+      pressKey('Escape'); // pop face — group stays entered
+      p = centerPointOnPath('eyes');
+      click(p.x, p.y);
+      expect(state.selectedPartId, 'face is no longer entered — click substitutes to it again').toBe(face.id);
+
+      pressKey('Escape'); // deselect face
+      expect(state.selectedPartId).toBeNull();
+
+      pressKey('Escape'); // pop the group — nothing entered anymore
+      p = centerPointOnPath('eyes');
+      click(p.x, p.y);
+      expect(state.selectedPartId, 'group is no longer entered — click substitutes all the way back to it').toBe(group.id);
+    });
+  },
+);

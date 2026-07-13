@@ -62,8 +62,12 @@ export function wireDblClick(svg: SVGSVGElement): void {
       return;
     }
     // Deepest level (no un-entered group ancestor): enter the part and select the path
-    // under the cursor (Setup only) — path/node scope.
-    if (state.editorMode !== 'setup') return;
+    // under the cursor. Drill-down/path SELECTION is identical in Edit and Animate (user
+    // ruling 2026-07-13, "parts/groups should act the same, Inkscape-like") — it's
+    // navigation/inspection (Layers row highlight, inspector object section), never a new
+    // keyable surface. What stays Setup-only is node EDITING itself (state.mode 'nodes',
+    // the node-handle chrome/ops) — this branch only ever sets selectedPathId, never
+    // state.mode, so node editing stays unreachable in Animate regardless.
     const pathId = pathEl?.dataset?.pathId;
     if (!pathId) return;
     selectPart(part.id);

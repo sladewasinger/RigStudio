@@ -3,7 +3,12 @@ import { renderPose, updatePathAttrs, partRootBoxes } from '../../view';
 import { checkpoint } from '../../core/history';
 import { numberField, colorField } from './shared';
 
-/** Style editor for the "entered" path (fill/stroke), Setup mode only. */
+/**
+ * Style editor for the "entered" path (fill/stroke). Shown in BOTH Edit and Animate
+ * (user ruling 2026-07-13): every field here is static paint data — never a keyframe
+ * channel — so editing it in Animate is exactly as safe/permanent as in Edit; only
+ * node EDITING (the node-handle chrome/ops, a separate section) stays Setup-only.
+ */
 export function buildPathSection(el: HTMLElement): void {
   const sel = selectedPath();
   if (!sel) return;

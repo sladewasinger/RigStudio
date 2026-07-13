@@ -62,7 +62,10 @@ export function buildInspector(el: HTMLElement): void {
 
     if (setup) buildStackingRow(el, part);
     if (part.skin) buildSkinSection(el, part);
-    if (setup) buildPathSection(el);
+    // Not Setup-gated (user ruling 2026-07-13): a dblclick-entered path is navigation, not
+    // posing, in either mode — buildPathSection's fields (fill/stroke/opacities/width) are
+    // all static paint data, never a keyable channel, so there is nothing to protect here.
+    buildPathSection(el);
     if (setup && state.mode === 'nodes') buildNodeOpsSection(el);
     if (setup && state.mode === 'rig') buildAlignSection(el);
 
