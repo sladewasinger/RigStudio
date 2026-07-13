@@ -54,12 +54,47 @@ npm run pages      # build github pages folder (make sure to commit and push)
 
 Press `?` in the app for the complete keyboard-shortcut reference.
 
+## Headless & agents
+
+- **CLI**: `npx tsx src/headless/cli.ts <import|validate|export-riv|render-frames>` —
+  import an SVG, validate/round-trip a project, export a playable `.riv`, or render
+  PNG frames of a clip, all without the browser.
+- **MCP server**: `npm run mcp` (stdio) — 12 tools so any MCP client (Claude Code,
+  Claude Desktop, …) can build rigs, drop bones, apply animation clips (the same
+  structured schema the in-app AI assistant uses), and export — end to end, headless.
+  One-off animations (demos, app assets) should be authored THIS way by an agent
+  session, not committed as maintained scripts in this repo.
+
 ## Documentation
 
 - [CLAUDE.md](CLAUDE.md) — architecture, invariants ("conventions that must hold"),
   and the verified status log.
-- [ROADMAP.md](ROADMAP.md) — feature history (v1–v2.9), committed next steps, and
-  the future list.
+- [ROADMAP.md](ROADMAP.md) — status dashboard (review list, deferred decisions,
+  what's next) and the full feature history.
+- [docs/ORCHESTRATOR_PLAYBOOK.md](docs/ORCHESTRATOR_PLAYBOOK.md) +
+  [docs/PROJECT_PROCESS.md](docs/PROJECT_PROCESS.md) — the AI-orchestrated
+  development process (see below).
+
+## Replicating the development process (new machine / new project)
+
+This repo is built by an AI session acting as ORCHESTRATOR — delegating to
+subagents, auditing everything, gating every change. The process is fully
+portable because it lives in the repo, not in any machine's memory:
+
+1. Clone; `npm install`; sanity-check the gates:
+   `npm run build && npm test && npm run test:interaction`
+   (the unit suite includes the structural enforcement tests — size ratchet,
+   nodeTypes chokepoint, headless boundary, golden `.riv` byte-identity — so the
+   discipline travels with the clone).
+2. Start a Claude Code session in the repo and open with the kickoff prompt from
+   [docs/ORCHESTRATOR_PLAYBOOK.md](docs/ORCHESTRATOR_PLAYBOOK.md), plus:
+   *"Read docs/ORCHESTRATOR_PLAYBOOK.md and docs/PROJECT_PROCESS.md and follow
+   them."* (`CLAUDE.md` auto-loads and also points there.)
+3. Point it at [ROADMAP.md](ROADMAP.md) — the status dashboard says what's next,
+   what's awaiting review, and which decisions are reserved for a human.
+
+For a NEW project, copy the playbook, write a fresh `PROJECT_PROCESS.md` from its
+template ideas (gates, ports, machine quirks), and seed the session the same way.
 
 ## Semantics (the short version)
 

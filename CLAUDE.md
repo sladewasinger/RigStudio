@@ -557,7 +557,7 @@ hand-rolling gestures) and enforced by `npm run test:interaction`.
 Executed per the user's directive ("get through as much of the roadmap as
 possible without my input — defer + document decisions") and the run plan +
 decision ledger in ROADMAP.md. ~20 waves, each fully gated (build, unit,
-interaction, take-pill hash) and committed with its own doc tick. Final
+interaction, byte-identity export hash) and committed with its own doc tick. Final
 gates: **687 unit / 33 files, 280 interaction / 36 files**, build clean.
 Landed, in order: gesture-pipeline redesign (view/interactions/ CoR priority
 table) + nodeEditing chokepoint; skinned-part rotate/translate ruling; the
@@ -565,7 +565,7 @@ shortcuts registry (main.ts 522→243, generated help, B key); editing
 ergonomics (key→part selection, tooltips, layers splitter); unified skeleton
 Phase 1 (cross-chain bone attachment, world-preserving, + both follow-up
 classification fixes); layer-order-IS-z (canonical doc.parts order — SEVEN
-real divergences fixed; take-pill hash re-pinned 3754fc45 after visual
+real divergences fixed; the export byte-identity hash re-pinned after visual
 verification via headless render-frames); context menus (native suppression,
 path menus, extract-path op); node editor revamp items 1–4 (segment-point
 insert, two-handle symmetric, unified seam glyph [review-flagged], type
@@ -634,23 +634,24 @@ Next per user sequencing: the two bone-feel fixes (freeze origin-drag on
 unselected bones; grab-point-relative IK), then the architecture refactor pass
 (burn the ratchet grandfather list), then H1/H2 headless, then Category B, D1/D2.
 
-### Headless export pipeline + first Android-runtime playback verification (2026-07-12)
+### First Android-runtime playback verification (2026-07-12)
 
-`scripts/exportPipTakePill.ts` (commit 3e799d8) authors a complete animation with no
-GUI: importSvg → programmatic part/clip assembly → exportRiv, run via
-`npm run export:take-pill`. Two verification firsts for the .riv encoder:
+A GUI-less pipeline (importSvg → programmatic part/clip assembly → exportRiv)
+produced two verification firsts for the .riv encoder:
 
 - **Official web runtime**: the exported file renders pixel-verified in
-  `@rive-app/canvas` (scrubbed frame-by-frame; `out/preview.html` is the harness,
-  including a rAF shim for throttled embedded panes).
-- **rive-android 11.1.2 on a real device**: the same file plays correctly inside the
-  Dosey app (user-confirmed on-device, 2026-07-12) — the first rig-studio export ever
-  run on the Android runtime; all previously shipped .rivs there came from the Rive
-  editor (different header fileId).
+  `@rive-app/canvas` (scrubbed frame-by-frame).
+- **rive-android 11.1.2 on a real device**: the same file plays correctly on-device
+  (user-confirmed, 2026-07-12) — the first rig-studio export ever run on the Android
+  runtime; all previously shipped .rivs there came from the Rive editor (different
+  header fileId).
 
 The wave also fixed a real exporter gap: per-part sx/sy keyed channels were silently
-dropped (only root could key scale); output is byte-identical for docs that never key
-part scale.
+dropped (only root could key scale). The one-off pipeline script itself was DELETED
+2026-07-13 (user decision — agent-authored animations now go through the H1 CLI / H2
+MCP, never a maintained script); its byte-identity role moved into the unit suite as
+`src/__tests__/goldenRiv.test.ts` (an in-repo deterministic golden doc + pinned
+SHA-256, no machine-specific paths).
 
 ### Fifteenth wave (v2.13: bones-as-hierarchy program) — implemented and verified
 

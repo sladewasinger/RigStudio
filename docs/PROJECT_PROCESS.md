@@ -10,17 +10,15 @@ HOW work runs, not what the code is.
 ```sh
 npm run build             # tsc --noEmit + vite build — must be clean
 npm test                  # unit project (node) — includes the size-ratchet test
+                          # AND the golden .riv byte-identity gate
+                          # (src/__tests__/goldenRiv.test.ts: a deterministic
+                          # in-repo doc must export to the exact pinned SHA-256;
+                          # refactors leave it untouched, feature waves that
+                          # legitimately change export bytes RE-PIN it in the
+                          # same commit with justification AFTER verifying the
+                          # visual result — headless render-frames is the
+                          # precedent for that verification)
 npm run test:interaction  # headless-Chromium real-gesture suite (~3 s)
-npm run export:take-pill  # headless end-to-end; then hash the output:
-#   out/pip_take_pill.riv SHA-256 must equal
-#   3754fc453a80f04c575f6ddbecba7e99a67d7fd4be8e2e0e932fe6aa5004d6f1
-#   for any wave that claims byte-identical export behavior (refactors).
-#   Feature waves that legitimately change export bytes re-pin the hash in
-#   their commit message. (Re-pinned 2026-07-13 by the layer-order wave:
-#   normalizeDoc now canonicalizes part order and the take-pill fixture was
-#   itself non-canonical — the reorder was verified VISUALLY via headless
-#   render-frames: pill in-hand, in FRONT of the face at the 356ms crossing,
-#   swallowed at the mouth. Prior pin: 4351052e...02dc47.)
 ```
 
 Current expected counts live in git history (each wave's commit message
@@ -99,13 +97,10 @@ check before it counts.
 - Start a fresh machine's session with the playbook's kickoff prompt PLUS:
   "Read docs/ORCHESTRATOR_PLAYBOOK.md and docs/PROJECT_PROCESS.md and follow
   them."
-- **KNOWN machine-specific landmines**: `scripts/exportPipTakePill.ts`
-  hardcodes absolute paths into the Dosey checkout
-  (`C:/Users/Austin/AndroidStudioProjects/Dosey/...`) — on a machine without
-  that checkout, `npm run export:take-pill` (and therefore the hash gate)
-  FAILS; adjust the paths or make the Dosey writes conditional before relying
-  on the gate there. Port habits (the user's own dev server on 5173) and
-  PowerShell-version quirks may also differ per machine.
+- **KNOWN machine-specific landmines**: port habits (the user's own dev
+  server on 5173) and PowerShell-version quirks may differ per machine. The
+  byte-identity gate is fully repo-contained (goldenRiv.test.ts) and runs
+  anywhere `npm test` does.
 - The preview window can start with a 0×0 viewport (elementFromPoint returns
   null, rects degenerate): resize with explicit width/height and reload
   before live-testing.

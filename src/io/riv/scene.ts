@@ -56,8 +56,8 @@ import {
  * (core/partHierarchy.ts's `partById`), which is correct for the live editor (state.doc
  * IS the doc being edited) but WRONG for this exporter: `exportRiv` is a pure function of
  * its `doc` PARAMETER and its real callers do not all install it as `state.doc` first —
- * `headless/cliCommands.ts` and `scripts/exportPipTakePill.ts` call `exportRiv(doc)`
- * directly (only `main.ts`'s toolbar button happens to pass `state.doc` itself). Computed
+ * `headless/cliCommands.ts` and the MCP tools call `exportRiv(doc)` directly (only
+ * `main.ts`'s toolbar button happens to pass `state.doc` itself). Computed
  * ONCE per export and threaded through scene.ts/animation.ts/drawRules.ts as a plain id
  * Set so every hidden-part check in this package agrees, regardless of global state.
  */

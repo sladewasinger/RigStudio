@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Browser-based 2D SVG rigging and animation editor that exports Jetpack Compose rig code",
+  "description": "Browser-based 2D SVG rigging and animation editor that exports Rive .riv and Lottie JSON",
   "bin": {
     "rig-studio": "src/headless/bin.mjs",
     "rig-studio-mcp": "src/mcp/bin.mjs"
@@ -14,7 +14,6 @@
     "preview": "vite preview",
     "test": "vitest run --project unit",
     "test:interaction": "vitest run --project interaction",
-    "export:take-pill": "vitest run --config scripts/exportPipTakePill.config.ts",
     "rig": "tsx src/headless/cli.ts",
     "mcp": "tsx src/mcp/server.ts",
     "pages": "vite build --outDir dist --base=/RigStudio/"

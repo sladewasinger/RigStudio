@@ -6,11 +6,10 @@
  * module constructs a throwaway jsdom window and installs its `DOMParser` onto
  * `globalThis` for the duration of the call only, restoring whatever was there before.
  *
- * This mirrors `scripts/exportPipTakePill.ts`'s `ensureDomParser`, but scoped rather
- * than a permanent process-wide polyfill: `importSvgHeadless` may be called repeatedly
- * inside a longer-lived process (an agent's shell session), not just a one-shot script,
- * so leaving a stray global mutation around — or clobbering a real DOMParser a host
- * process already set up — would be an avoidable side effect.
+ * SCOPED, never a permanent process-wide polyfill: `importSvgHeadless` may be called
+ * repeatedly inside a longer-lived process (an agent's shell session, the MCP server),
+ * not just a one-shot script, so leaving a stray global mutation around — or clobbering
+ * a real DOMParser a host process already set up — would be an avoidable side effect.
  */
 import { JSDOM } from 'jsdom';
 import { RigDoc } from '../core/model';
