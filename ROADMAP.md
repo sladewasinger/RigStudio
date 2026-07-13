@@ -559,8 +559,17 @@ precedent, zero behavior change, gated on the full suites:
 - [x] **timeline/ internals** (f4bc4b0) → tlState/transport/lanes/keyProps/panel
   behind a 7-line facade (graph.ts untouched); parallel worktree, rebased with
   the stepped-z easing hunk ported.
-- [ ] **view/overlay.ts** (chrome families), **view/rigOps.ts**
-  (placement/bind/freeze clusters) as smaller follow-ups.
+- [x] **view/overlay.ts + view/rigOps.ts** (d6343dc) — overlay → orchestration
+  (290 lines) + overlayHandles/overlayBones/overlayNodes; rigOps → 17-line
+  re-export over rigOpsPlacement/rigOpsBind/rigOpsEdit/rigOpsNodeBinding.
+  Both grandfather entries removed; take-pill .riv byte-identical.
+
+**Refactor pass COMPLETE (2026-07-12):** every planned split landed — io/riv/,
+core/ (9 modules), panels/ai/ (A4), panels/sm/, inspectorSections/, timeline
+internals, overlay + rigOps clusters. Grandfather list is down to the two
+documented exceptions (view/interactions.ts, view/nodeEditing.ts) plus six
+small pinned files (ai/claude 489, main 522, paths 434, graph 395, layers 347,
+exportLottie 327) that no wave is scheduled to split — they simply may not grow.
 - [x] **Size-ratchet test** (`architecture.test.ts`) landed 2026-07-11 —
   CODE-line counts (comments/blanks free per user ruling), grandfathered
   ceilings shrink-only, new files fail >300, stale-entry honesty check.
