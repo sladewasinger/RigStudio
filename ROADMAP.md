@@ -636,6 +636,13 @@ CLAUDE.md convention: "Think in named patterns, not conventions").
      proved broken twice — both drifts fixed in 4ed4127); main.ts exits the
      grandfather list. Risk note: only 2 of ~30 bindings are tested through
      the real dispatcher — the wave needs a full manual binding pass.
+     ALSO IN THIS WAVE (user request 2026-07-12): (a) verify EVERY help-overlay
+     row is a real, correct binding while building the registry; (b) rows that
+     document mouse/tool gestures rather than keys (e.g. "Bone tool
+     (canvas-tools ⌂)") move to a clearly separated gestures section, never
+     mixed in as pseudo-shortcuts; (c) give the bone tool a REAL key — `B`
+     arms bone-chain placement (guarded like the other tool keys V/T/R/I,
+     no ctrl/meta/alt), registered + documented via the registry itself.
   2. **ai/claude.ts — REORGANIZE**: extract the prompt constants + clip schema
      to an `ai/prompts.ts` leaf (finishing the pattern threads.ts/
      profileBlock.ts already established); claude.ts becomes pure orchestration
