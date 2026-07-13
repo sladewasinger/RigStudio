@@ -12,13 +12,18 @@
  *
  * Pan/zoom: the plot's pixel viewBox (0 0 width HEIGHT) never changes — instead a
  * per-track "view rect" (visible time/value window) is panned/zoomed and remapped
- * into the fixed PAD-inset drawing rectangle, mirroring smPanel.ts's graph pan/zoom
- * (wheel = zoom at cursor, middle-drag = pan, clamped multiplicative zoom, session
- * state keyed per track, never persisted/checkpointed).
+ * into the fixed PAD-inset drawing rectangle. The recenter/clamp/pan algebra and the
+ * per-track session cache reuse `geometry/viewRect.ts` (shared with smPanel's graph
+ * pan/zoom — see that module's header for what's shared and why); this editor's own
+ * DOM wiring stays here because its value axis is y-flipped (increasing value means
+ * decreasing pixel y) and its zoom clamps each axis independently, unlike the SM graph.
  */
 
 import { Easing, Keyframe, Track, sampleKeyList } from '../core/model';
 import { checkpoint } from '../core/history';
+import {
+  ViewRect, clampZoomSpan, recenterAxis, panAxis, getFittedViewRect, refitViewRect,
+} from '../geometry/viewRect';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const HEIGHT = 220;
@@ -93,13 +98,9 @@ export function niceStep(span: number, maxTicks: number): number {
   return pow * 10;
 }
 
-// ---- Pan/zoom view state (session-only, keyed per track, mirrors smPanel.ts) ----
-
-interface ViewRect { t0: number; tSpan: number; v0: number; vSpan: number }
+// ---- Pan/zoom view state (session-only, keyed per track) ----
 
 const graphViewRects = new Map<string, ViewRect>();
-const GRAPH_ZOOM_MIN = 0.2; // matches smPanel's graph 0.2x-5x range, relative to fit
-const GRAPH_ZOOM_MAX = 5;
 
 function trackKey(track: Track): string {
   return `${track.target}::${track.channel}`;
@@ -107,22 +108,16 @@ function trackKey(track: Track): string {
 
 function fitViewRect(track: Track, duration: number): ViewRect {
   const { min, max } = plotValueRange(track);
-  return { t0: 0, tSpan: Math.max(1, duration), v0: min, vSpan: Math.max(1e-6, max - min) };
+  return { x: 0, y: min, w: Math.max(1, duration), h: Math.max(1e-6, max - min) };
 }
 
 /** This track's current view rect, fitting it once the first time it's shown. */
 function getViewRect(track: Track, duration: number): ViewRect {
-  const key = trackKey(track);
-  let vr = graphViewRects.get(key);
-  if (!vr) {
-    vr = fitViewRect(track, duration);
-    graphViewRects.set(key, vr);
-  }
-  return vr;
+  return getFittedViewRect(graphViewRects, trackKey(track), () => fitViewRect(track, duration));
 }
 
 function fitView(track: Track, duration: number): void {
-  graphViewRects.set(trackKey(track), fitViewRect(track, duration));
+  refitViewRect(graphViewRects, trackKey(track), () => fitViewRect(track, duration));
 }
 
 /** Time/value ↔ pixel mapping for the CURRENT view rect, within the fixed PAD-inset
@@ -141,8 +136,8 @@ interface Plot {
 function makePlot(width: number, vr: ViewRect): Plot {
   const plotW = width - PAD.left - PAD.right;
   const plotH = HEIGHT - PAD.top - PAD.bottom;
-  const t0 = vr.t0, t1 = vr.t0 + vr.tSpan;
-  const v0 = vr.v0, v1 = vr.v0 + vr.vSpan;
+  const t0 = vr.x, t1 = vr.x + vr.w;
+  const v0 = vr.y, v1 = vr.y + vr.h;
   return {
     width, plotW, plotH, t0, t1, v0, v1,
     xOf: (t) => PAD.left + ((t - t0) / (t1 - t0)) * plotW,
@@ -155,24 +150,28 @@ function makePlot(width: number, vr: ViewRect): Plot {
 /**
  * Core view-rect zoom: scale around the graph-space point (px,py) — in the FIXED
  * pixel viewBox, same space svgPoint() returns — by `factor` (>1 zooms in), clamped
- * to 0.2x-5x of the fit span on each axis independently.
+ * to 0.2x-5x of the fit span on each axis independently (t and v are different units,
+ * so — unlike the SM graph's aspect-preserving zoom — one axis can hit its clamp
+ * without affecting the other). The value axis recenters on its HIGH edge (v1, i.e.
+ * the smallest pixel y) rather than its low edge, since increasing value means
+ * decreasing pixel y; the low edge (vr.y) is derived back out afterward.
  */
 function zoomViewRect(vr: ViewRect, fit: ViewRect, plot: Plot, px: number, py: number, factor: number): void {
-  const minT = fit.tSpan / GRAPH_ZOOM_MAX, maxT = fit.tSpan / GRAPH_ZOOM_MIN;
-  const minV = fit.vSpan / GRAPH_ZOOM_MAX, maxV = fit.vSpan / GRAPH_ZOOM_MIN;
   const dataT = plot.tOf(px);
   const dataV = plot.vOf(py);
-  const newTSpan = Math.min(maxT, Math.max(minT, vr.tSpan / factor));
-  const newVSpan = Math.min(maxV, Math.max(minV, vr.vSpan / factor));
-  const v1Old = vr.v0 + vr.vSpan;
-  const v1New = dataV + (v1Old - dataV) * (newVSpan / vr.vSpan);
-  vr.t0 = dataT - (dataT - vr.t0) * (newTSpan / vr.tSpan);
-  vr.v0 = v1New - newVSpan;
-  vr.tSpan = newTSpan;
-  vr.vSpan = newVSpan;
+  const newW = clampZoomSpan(vr.w / factor, fit.w);
+  const newH = clampZoomSpan(vr.h / factor, fit.h);
+  const v1Old = vr.y + vr.h;
+  const v1New = recenterAxis(dataV, v1Old, vr.h, newH);
+  vr.x = recenterAxis(dataT, vr.x, vr.w, newW);
+  vr.y = v1New - newH;
+  vr.w = newW;
+  vr.h = newH;
 }
 
-/** Middle-button drag pan (navigation, not editing — no checkpoints). */
+/** Middle-button drag pan (navigation, not editing — no checkpoints). The value axis
+ *  pans with a FLIPPED sign (dragging down should reveal lower values, i.e. increase
+ *  v0) since it is y-flipped relative to pixel space — see zoomViewRect. */
 function startPan(svg: SVGSVGElement, track: Track, duration: number, ev: PointerEvent, paint: () => void): void {
   const vr = getViewRect(track, duration);
   const width = Math.max(320, svg.clientWidth || 800);
@@ -186,8 +185,8 @@ function startPan(svg: SVGSVGElement, track: Track, duration: number, ev: Pointe
   const move = (e: PointerEvent) => {
     const dxPx = (e.clientX - startClient.x) / scale;
     const dyPx = (e.clientY - startClient.y) / scale;
-    vr.t0 = startRect.t0 - (dxPx / plot.plotW) * startRect.tSpan;
-    vr.v0 = startRect.v0 + (dyPx / plot.plotH) * startRect.vSpan;
+    vr.x = panAxis(startRect.x, (dxPx / plot.plotW) * startRect.w);
+    vr.y = panAxis(startRect.y, (dyPx / plot.plotH) * startRect.h, 1);
     paint();
   };
   const up = () => {

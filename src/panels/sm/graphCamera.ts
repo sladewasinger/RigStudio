@@ -1,15 +1,19 @@
 /**
  * Graph geometry + camera: state-box sizing, SVG element helpers, screen↔graph-space
  * coordinate conversion, and per-machine pan/zoom session view state (NOT persisted, NOT
- * reset by rebuilds). Mirrors `view/camera.ts`'s pattern for the main canvas (wheel = zoom
- * at cursor, middle-drag = pan, clamped multiplicative zoom, no undo checkpoints) but keyed
- * per machine id in a module-level map, since the panel rebuilds on every notify() and each
- * machine should remember its own scroll position across machine switches and logic-view
- * toggles. Sits below `./graph` (state/transition drawing + interaction); nothing here
- * depends on it.
+ * reset by rebuilds), keyed per machine id in a module-level map since the panel rebuilds
+ * on every notify() and each machine should remember its own scroll position across
+ * machine switches and logic-view toggles. The recenter/clamp/pan algebra and the per-
+ * entity cache pattern live in `geometry/viewRect.ts` (shared with the timeline curve
+ * editor's near-identical pan/zoom — see that module's header for why it's shared only
+ * that far and not further, and why `view/camera.ts`'s main-canvas pan/zoom is excluded).
+ * Sits below `./graph` (state/transition drawing + interaction); nothing here depends on it.
  */
 
 import { StateMachine, SMState } from '../../core/model';
+import {
+  ViewRect, clampZoomSpan, recenterAxis, panAxis, getFittedViewRect, refitViewRect,
+} from '../../geometry/viewRect';
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -24,12 +28,8 @@ export function stateBox(st: SMState): { x: number; y: number; w: number; h: num
   return { x: st.x ?? 0, y: st.y ?? 0, w, h };
 }
 
-interface GraphViewRect { x: number; y: number; w: number; h: number }
-
-const graphViewRects = new Map<string, GraphViewRect>();
+const graphViewRects = new Map<string, ViewRect>();
 const GRAPH_FIT_PAD = 48;
-const GRAPH_ZOOM_MIN = 0.2; // matches CLAUDE.md's 0.2x-5x range, relative to the fit view
-const GRAPH_ZOOM_MAX = 5;
 
 /** Bounding box of every state's box, in graph space. */
 function graphContentBounds(sm: StateMachine): { minX: number; minY: number; maxX: number; maxY: number } {
@@ -47,7 +47,7 @@ function graphContentBounds(sm: StateMachine): { minX: number; minY: number; max
 
 /** The viewBox rect that frames every state box with padding — what the ⌂ button
  * restores and what a machine gets the first time it's ever shown. */
-function fitGraphRect(sm: StateMachine): GraphViewRect {
+function fitGraphRect(sm: StateMachine): ViewRect {
   const b = graphContentBounds(sm);
   return {
     x: b.minX - GRAPH_FIT_PAD,
@@ -64,42 +64,36 @@ export function forgetGraphView(machineId: string): void {
 }
 
 /** This machine's current view rect, fitting it once the first time it's shown. */
-export function getGraphViewRect(sm: StateMachine): GraphViewRect {
-  let vr = graphViewRects.get(sm.id);
-  if (!vr) {
-    vr = fitGraphRect(sm);
-    graphViewRects.set(sm.id, vr);
-  }
-  return vr;
+export function getGraphViewRect(sm: StateMachine): ViewRect {
+  return getFittedViewRect(graphViewRects, sm.id, () => fitGraphRect(sm));
 }
 
-export function applyGraphViewRect(svg: SVGSVGElement, vr: GraphViewRect): void {
+export function applyGraphViewRect(svg: SVGSVGElement, vr: ViewRect): void {
   svg.setAttribute('viewBox', `${vr.x} ${vr.y} ${vr.w} ${vr.h}`);
 }
 
 /** ⌂ button + first-show: recenter/refit on every current state box. */
 export function fitGraph(svg: SVGSVGElement, sm: StateMachine): void {
-  const vr = fitGraphRect(sm);
-  graphViewRects.set(sm.id, vr);
-  applyGraphViewRect(svg, vr);
+  applyGraphViewRect(svg, refitViewRect(graphViewRects, sm.id, () => fitGraphRect(sm)));
 }
 
 /**
  * Core viewBox zoom: scale around the graph-space point (px,py) by `factor` (>1 zooms
  * in), clamped to 0.2x-5x of the content-fit width — the same shape as view.ts's
  * zoomAround, but relative to this graph's own content bbox instead of doc.viewBox.
+ * Width is the clamped axis; height is derived from the SAME applied ratio so zoom
+ * stays aspect-preserving (unlike the curve editor's independent per-axis clamp).
  */
 function zoomGraphAround(svg: SVGSVGElement, sm: StateMachine, px: number, py: number, factor: number): void {
   const vr = getGraphViewRect(sm);
   const fitW = fitGraphRect(sm).w;
-  const minW = fitW / GRAPH_ZOOM_MAX;
-  const maxW = fitW / GRAPH_ZOOM_MIN;
-  const newW = Math.min(maxW, Math.max(minW, vr.w / factor));
+  const newW = clampZoomSpan(vr.w / factor, fitW);
   const applied = vr.w / newW;
-  vr.x = px - (px - vr.x) / applied;
-  vr.y = py - (py - vr.y) / applied;
+  const newH = vr.h / applied;
+  vr.x = recenterAxis(px, vr.x, vr.w, newW);
+  vr.y = recenterAxis(py, vr.y, vr.h, newH);
   vr.w = newW;
-  vr.h = vr.h / applied;
+  vr.h = newH;
   applyGraphViewRect(svg, vr);
 }
 
@@ -114,8 +108,8 @@ function startGraphPan(svg: SVGSVGElement, sm: StateMachine, ev: PointerEvent): 
   const move = (e: PointerEvent) => {
     const ctm = svg.getScreenCTM();
     const scale = ctm ? Math.hypot(ctm.a, ctm.b) : 1;
-    vr.x = startRect.x - (e.clientX - startClient.x) / scale;
-    vr.y = startRect.y - (e.clientY - startClient.y) / scale;
+    vr.x = panAxis(startRect.x, (e.clientX - startClient.x) / scale);
+    vr.y = panAxis(startRect.y, (e.clientY - startClient.y) / scale);
     applyGraphViewRect(svg, vr);
   };
   const up = () => {
