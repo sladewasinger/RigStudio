@@ -729,18 +729,22 @@ gates + roadmap tick.
 ## Node editor revamp (user-requested 2026-07-12 — "needs a pretty decent
 ## polish pass"; design pass first, then implement; reproduce-first on the bugs)
 
-- [ ] **Alt+click ON a segment inserts a node THERE** — today insert requires
+- [x] **Alt+click ON a segment inserts a node THERE** (61ea081; the old
+  node-relative midpoint insert retired outright) — today insert requires
   selecting a node and Alt+clicking, splitting an adjacent segment at its
   midpoint ("a random segment adjacent"). Reuse the bend pipeline's geometric
   `segmentHit` (segment index + parameter t under the cursor) so Alt+click on
   any segment splits at exactly the clicked point (de Casteljau at t). Keep
   the old gesture working during transition or retire it deliberately.
-- [ ] **Symmetric/smooth nodes always get BOTH handles** — the type ops only
+- [x] **Symmetric/smooth nodes always get BOTH handles** (61ea081) — the type ops only
   mirror EXISTING handles; a node whose neighbor segment is a line (L) ends up
   "symmetric" with one arm. The op must synthesize the missing handle by
   converting the adjacent L→C (the bend's "handles grow" conversion, applied
   at type-set time). Symmetric = equal lengths both sides, always.
-- [ ] **Closing-seam stacked nodes** (the user's "new node underneath") —
+- [x] **Closing-seam stacked nodes** (61ea081 — SHIPPED WITH A REVIEW FLAG for
+  Austin: UI-only unification, primary glyph = the M side, pair splits only
+  via del-seg which now works one-click on the merged glyph; data model
+  untouched) (the user's "new node underneath") —
   bending the implicit closing segment splices an explicit closing cubic whose
   endpoint coincides with the path's FIRST node (by design: shape stays
   closed, zero-length Z). The DATA is coherent; the UI presents two stacked,
@@ -748,7 +752,8 @@ gates + roadmap tick.
   seam as ONE node (drag moves both coincident points; the pair splits only
   via an explicit "open path" op). Needs design care around nodeTypes and
   overrides indexing — route through the chokepoint.
-- [ ] **Type-button state highlight** — selecting node(s) subtly highlights the
+- [x] **Type-button state highlight** (61ea081; also found+fixed applyNodeOp
+  never notifying — stale inspector) — selecting node(s) subtly highlights the
   matching smooth/symmetric/corner button in the inspector node-ops section
   (mixed selection = no highlight or an indeterminate state), independent of
   the node glyph shapes. (Glyphs already encode type: diamond/square/circle.)
