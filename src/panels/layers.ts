@@ -1,20 +1,24 @@
 /**
  * Layers panel: a folder-style tree — parts nest under their parent part (bone
  * hierarchy) and each part folds open to show the SVG objects (paths) inside it. Drag
- * a part onto another to parent it; drop it on the "un-parent" strip to detach.
- * Double-click renames (names carry through into exported files).
+ * a part onto another to parent it; drop it on the "un-parent" strip to detach; drag a
+ * path onto a sibling to reorder or onto another part to move it there (render-neutral).
+ * Double-click renames (names carry through into exported files). This module owns tree
+ * building + inline rename; ALL drag-and-drop wiring lives in layersDragAndDrop.ts.
  */
 
-import {
-  state, notify, selectedPart, selectPart, setParent, movePartRelativeTo,
-  ancestorChain, moveSelectedInDrawOrder, RigPart, RigPath,
-} from '../core/model';
-import { renderPose, reorderCanvas, enterGroupsFor, syncPartPathDom } from '../view';
+import { state, notify, selectedPart, selectPart, ancestorChain, RigPart } from '../core/model';
+import { renderPose, enterGroupsFor } from '../view';
 import { checkpoint } from '../core/history';
-import { dialog } from '../ui/dialogs';
 import { showContextMenu } from '../ui/contextMenu';
 import { buildPartContextMenu } from '../ui/actions';
 import { icon } from './icons';
+import {
+  wireDropTarget, wirePartRowDrag, wirePartRowDrop, wirePathRowDrag, wirePathRowDrop,
+} from './layersDragAndDrop';
+
+/** layersDragAndDrop opens folders through this (the `expanded` set stays module-local). */
+const expandPart = (partId: string): void => { expanded.add(partId); };
 
 // ---- Layers tree ----
 
@@ -65,14 +69,15 @@ export function buildLayersPanel(el: HTMLElement): void {
   const unparent = document.createElement('div');
   unparent.className = 'unparent-zone';
   unparent.textContent = '⤒ drop a part here to un-parent it';
-  wireDropTarget(unparent, null);
+  wireDropTarget(unparent, null, expandPart);
   el.appendChild(unparent);
 
   const hint = document.createElement('p');
   hint.className = 'hint';
   hint.textContent =
     'Click ▸ to fold parts open. Drag one part onto another to parent it (limbs chain). ' +
-    'Drag a path onto its siblings to reorder paint order within the part. Double-click renames.';
+    'Drag a path onto its siblings to reorder paint order, or onto another part to move ' +
+    'it there (the artwork stays put). Double-click renames.';
   el.appendChild(hint);
 }
 
@@ -189,13 +194,10 @@ function partNode(part: RigPart): HTMLElement {
     showContextMenu(buildPartContextMenu(part), ev.clientX, ev.clientY);
   });
 
-  // Drag to reorder (top/bottom edge = above/below) or to parent (middle).
-  row.draggable = true;
-  row.addEventListener('dragstart', (ev) => {
-    ev.dataTransfer?.setData('text/rig-part', part.id);
-    if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
-  });
-  wirePartRowDrop(row, part);
+  // Drag to reorder (top/bottom edge = above/below) or to parent (middle); the row also
+  // receives PATH drops (move a path into this part) — see layersDragAndDrop.ts.
+  wirePartRowDrag(row, part);
+  wirePartRowDrop(row, part, expandPart);
 
   li.appendChild(row);
 
@@ -226,14 +228,7 @@ function partNode(part: RigPart): HTMLElement {
         ev.stopPropagation();
         beginInlineRename(pathRow, pathName, path);
       };
-      pathRow.draggable = true;
-      pathRow.addEventListener('dragstart', (ev) => {
-        ev.stopPropagation();
-        draggingPath = { partId: part.id, pathId: path.id };
-        ev.dataTransfer?.setData('text/rig-path', path.id);
-        if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move';
-      });
-      pathRow.addEventListener('dragend', () => { draggingPath = null; });
+      wirePathRowDrag(pathRow, part, path);
       wirePathRowDrop(pathRow, part, path);
       pathLi.appendChild(pathRow);
       kids.appendChild(pathLi);
@@ -283,175 +278,4 @@ function beginInlineRename(row: HTMLElement, labelEl: HTMLElement, target: { lab
     else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
   });
   input.addEventListener('blur', commit);
-}
-
-/** Accept part drags; newParentId null = detach. */
-function wireDropTarget(el: HTMLElement, newParentId: string | null): void {
-  el.addEventListener('dragover', (ev) => {
-    if (!ev.dataTransfer?.types.includes('text/rig-part')) return;
-    ev.preventDefault();
-    el.classList.add('drop-target');
-  });
-  el.addEventListener('dragleave', () => el.classList.remove('drop-target'));
-  el.addEventListener('drop', (ev) => {
-    ev.preventDefault();
-    el.classList.remove('drop-target');
-    const childId = ev.dataTransfer?.getData('text/rig-part');
-    if (!childId || childId === newParentId) return;
-    checkpoint();
-    if (!setParent(childId, newParentId)) {
-      void dialog.alert('Cannot parent a part to its own descendant.');
-      return;
-    }
-    if (newParentId) expanded.add(newParentId);
-    notify();
-    renderPose();
-  });
-}
-
-const DROP_CLASSES = ['drop-target', 'drop-above', 'drop-below'];
-
-/** Which drop action the pointer position means: near the edges reorders, middle parents. */
-function dropZoneOf(ev: DragEvent, el: HTMLElement): 'above' | 'into' | 'below' {
-  const r = el.getBoundingClientRect();
-  const f = (ev.clientY - r.top) / r.height;
-  if (f < 0.25) return 'above';
-  if (f > 0.75) return 'below';
-  return 'into';
-}
-
-/**
- * Part rows accept three drops: top edge = draw just above this part, bottom edge =
- * just below (both adopt this part's parent — sibling insertion), middle = parent
- * the dragged part into this one.
- */
-function wirePartRowDrop(row: HTMLElement, part: RigPart): void {
-  row.addEventListener('dragover', (ev) => {
-    if (!ev.dataTransfer?.types.includes('text/rig-part')) return;
-    ev.preventDefault();
-    const zone = dropZoneOf(ev, row);
-    row.classList.toggle('drop-target', zone === 'into');
-    row.classList.toggle('drop-above', zone === 'above');
-    row.classList.toggle('drop-below', zone === 'below');
-  });
-  row.addEventListener('dragleave', () => row.classList.remove(...DROP_CLASSES));
-  row.addEventListener('drop', (ev) => {
-    ev.preventDefault();
-    const zone = dropZoneOf(ev, row);
-    row.classList.remove(...DROP_CLASSES);
-    const draggedId = ev.dataTransfer?.getData('text/rig-part');
-    if (!draggedId || draggedId === part.id) return;
-    checkpoint();
-    const ok = zone === 'into'
-      ? setParent(draggedId, part.id)
-      : movePartRelativeTo(draggedId, part.id, zone);
-    if (!ok) {
-      void dialog.alert('That drop would create a parenting cycle.');
-      return;
-    }
-    if (zone === 'into') expanded.add(part.id);
-    reorderCanvas();
-    notify();
-  });
-}
-
-// ---- Path reordering (drag within a part's own paths) ----
-
-/**
- * The path currently mid-drag, tracked in-module. `dataTransfer.getData` is only readable
- * on 'drop' (browsers protect it during dragover/dragenter), but the drop feedback and the
- * same-part gate both need to know the source RIGHT AWAY as the pointer crosses rows — so
- * dragstart stashes it here and every path row's dragover/drop reads it back. dragend always
- * fires (success, cancel, or drop-elsewhere) so this can't get stuck set.
- */
-let draggingPath: { partId: string; pathId: string } | null = null;
-
-/** Paths don't nest, so there's no "into" zone — just above/below, split at the row's midline. */
-function pathDropZoneOf(ev: DragEvent, el: HTMLElement): 'above' | 'below' {
-  const r = el.getBoundingClientRect();
-  return (ev.clientY - r.top) / r.height < 0.5 ? 'above' : 'below';
-}
-
-/**
- * The `part.paths` (model-order) index the dragged path should land at for a drop at `zone`
- * relative to `refPathId`, computed in the ON-SCREEN list order the tree actually renders
- * (`[...part.paths].reverse()` — row 0 = last in the array = topmost/drawn-last, mirroring
- * the parts tree's own topmost-first convention). Pure; returns -1 if either id is missing.
- */
-function pathDropTargetIndex(
-  part: RigPart, draggedId: string, refPathId: string, zone: 'above' | 'below',
-): number {
-  const visual = [...part.paths].reverse();
-  const n = visual.length;
-  const srcV = visual.findIndex((p) => p.id === draggedId);
-  const refV = visual.findIndex((p) => p.id === refPathId);
-  if (srcV < 0 || refV < 0) return -1;
-  const withoutSrc = visual.filter((_, i) => i !== srcV);
-  let insertV = withoutSrc.findIndex((p) => p.id === refPathId);
-  if (zone === 'below') insertV += 1;
-  return n - 1 - insertV;
-}
-
-/**
- * Move `pathId` to `targetIndex` within `part.paths` by reusing the EXACT adjacent-swap
- * mutation PageUp/PageDown drives on an entered path (`moveSelectedInDrawOrder`), one step
- * at a time — a drag reorder ends up byte-identical to pressing that key N times rather than
- * a second array-splice mutation. Temporarily borrows the entered-path selection to drive
- * it (that function reads `state.selectedPartId`/`selectedPathId`), then restores whatever
- * was selected before the drag — a reorder drag doesn't change selection, matching
- * `wirePartRowDrop`'s reorder branch above.
- */
-function movePathTo(part: RigPart, pathId: string, targetIndex: number): boolean {
-  const from = part.paths.findIndex((p) => p.id === pathId);
-  if (from < 0 || targetIndex < 0 || targetIndex >= part.paths.length) return false;
-  const prevPartId = state.selectedPartId;
-  const prevPathId = state.selectedPathId;
-  state.selectedPartId = part.id;
-  state.selectedPathId = pathId;
-  const step = targetIndex > from ? 1 : -1;
-  let i = from;
-  let ok = true;
-  while (i !== targetIndex) {
-    if (!moveSelectedInDrawOrder(step)) { ok = false; break; }
-    i += step;
-  }
-  state.selectedPartId = prevPartId;
-  state.selectedPathId = prevPathId;
-  return ok;
-}
-
-/**
- * Path rows accept drops from another path row of the SAME part only. Paths live baked
- * into their part's frame, so a cross-part move would teleport geometry (a future "extract
- * path to part" op is the real answer — out of scope here). A cross-part hover never claims
- * the dragover (no preventDefault), so the browser shows its native "can't drop here" cursor
- * and no 'drop' event fires at all — the rejection is a structural non-event, not a branch
- * that could accidentally mutate.
- */
-function wirePathRowDrop(row: HTMLElement, part: RigPart, path: RigPath): void {
-  row.addEventListener('dragover', (ev) => {
-    if (!ev.dataTransfer?.types.includes('text/rig-path')) return;
-    if (!draggingPath || draggingPath.partId !== part.id || draggingPath.pathId === path.id) return;
-    ev.preventDefault();
-    const zone = pathDropZoneOf(ev, row);
-    row.classList.toggle('drop-above', zone === 'above');
-    row.classList.toggle('drop-below', zone === 'below');
-  });
-  row.addEventListener('dragleave', () => row.classList.remove('drop-above', 'drop-below'));
-  row.addEventListener('drop', (ev) => {
-    ev.preventDefault();
-    row.classList.remove('drop-above', 'drop-below');
-    const dragged = draggingPath;
-    draggingPath = null;
-    if (!dragged || dragged.partId !== part.id || dragged.pathId === path.id) return;
-    const zone = pathDropZoneOf(ev, row);
-    const from = part.paths.findIndex((p) => p.id === dragged.pathId);
-    const targetIndex = pathDropTargetIndex(part, dragged.pathId, path.id, zone);
-    if (targetIndex < 0 || targetIndex === from) return; // no-op drop: nothing to checkpoint
-    checkpoint();
-    if (!movePathTo(part, dragged.pathId, targetIndex)) return;
-    syncPartPathDom(part);
-    renderPose();
-    notify();
-  });
 }

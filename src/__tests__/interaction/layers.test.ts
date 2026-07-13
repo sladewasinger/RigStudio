@@ -1,5 +1,9 @@
 /**
- * Interaction tests for two Layers-panel path-row bugs, both scoped to `panels/layers.ts`.
+ * Interaction tests for Layers-panel path-row behaviors: selection styling, SAME-part
+ * paint-order reordering (drag), and inline path RENAME. The drag wiring itself lives in
+ * `panels/layersDragAndDrop.ts` (split out of layers.ts); CROSS-part path moves — which
+ * REPLACED the old reject-outright behavior once `view/rigOpsEdit.ts`'s render-neutral
+ * `movePathToPart` existed — are pinned in `layersPathMove.test.ts`, not here.
  *
  * (1) Selection styling: clicking a PATH row selects it (`selectPart` + `selectedPathId` —
  * unchanged, load-bearing semantics for the inspector/node scoping) but used to ALSO fully
@@ -8,25 +12,25 @@
  * it) is the selection target; a part that merely CONTAINS the selected path gets the same
  * muted `.in-selection` affordance multi-selected parts already use.
  *
- * (2) Path rows were not draggable. They now accept drops from SIBLING path rows of the
- * SAME part (reordering `part.paths`, which is that part's own paint order) and reject drops
- * from any other part's path list outright — paths are baked into their part's frame, so a
- * cross-part move would teleport geometry. The reorder reuses the exact adjacent-swap
- * mutation PageUp/PageDown already drives on an entered path (`moveSelectedInDrawOrder` in
- * core/model.ts), walked one step at a time to the drop target.
+ * (2) Same-part reordering: path rows accept drops from SIBLING path rows of the SAME part
+ * (reordering `part.paths`, which is that part's own paint order). The reorder reuses the
+ * exact adjacent-swap mutation PageUp/PageDown already drives on an entered path
+ * (`moveSelectedInDrawOrder` in core/model.ts), walked one step at a time to the drop
+ * target. This behavior is byte-identical before/after the layersDragAndDrop split AND
+ * before/after cross-part moves were added.
  *
- * Fixture note: PIP_MASTER.svg's outer "body" group directly contains a "shadow" path AND a
- * nested group also labeled "body" (its own part, containing white_pill_body/bottom_half_red/
- * outline) — this is the user's exact reported screenshot shape, and doubles as the natural
- * cross-part rejection case: dragging the outer body's own "shadow" onto the nested body
- * part's "white_pill_body" must be a no-op. The same-part reorder scenario instead uses
- * left_leg (paths: leg, shadow — no nesting), the simplest part with two own paths.
+ * (3) Inline path rename (user report "I also can't rename paths?" — it works; this pins
+ * it): a REAL double-click gesture on a path row swaps its name for an input, Enter
+ * commits `path.label` under one checkpoint, the row text follows, one undo restores. The
+ * clicks re-resolve the row via elementFromPoint between events because the first click's
+ * notify() rebuilds the whole panel (the harness double-click convention).
+ *
+ * Fixture note: the same-part reorder scenario uses left_leg (paths: leg, shadow — no
+ * nesting), the simplest part with two own paths; rename uses the outer body's shadow.
  *
  * Mutation guard (manually verified while writing this file, not left in the tree):
  * commenting out `movePathTo`'s call inside `wirePathRowDrop`'s drop handler makes the
- * same-part reorder scenario fail on the `part.paths` order assertion; commenting out the
- * `dragged.partId !== part.id` guard makes the cross-part rejection scenario fail on the
- * "paths unchanged" assertions.
+ * same-part reorder scenario fail on the `part.paths` order assertion.
  */
 
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
@@ -34,6 +38,7 @@ import { undo, canUndo } from '../../core/history';
 import { selectPart as modelSelectPart } from '../../core/model';
 import {
   bootRig, resetRig, state, setEditorMode, notify, partByLabel, partGroupEl, simulateDragDrop,
+  clientCenterOf,
 } from './harness';
 
 beforeAll(bootRig);
@@ -45,11 +50,6 @@ beforeEach(resetRig);
 function outerBody() {
   const found = state.doc!.parts.find((part) => part.label === 'body' && !part.parentId);
   if (!found) throw new Error('no root-level "body" part');
-  return found;
-}
-function innerBody() {
-  const found = state.doc!.parts.find((part) => part.label === 'body' && !!part.parentId);
-  if (!found) throw new Error('no nested "body" part');
   return found;
 }
 function leftLeg() {
@@ -136,38 +136,71 @@ describe('scenario — dragging a path row reorders paint order within its own p
   });
 });
 
-describe('scenario — dropping a path onto a DIFFERENT part is rejected with zero mutation', () => {
-  it('the user\'s exact case: outer body\'s shadow dragged onto the nested body\'s white_pill_body does nothing', () => {
+describe('scenario — double-click renames a path inline (real gesture)', () => {
+  it('dblclick opens the editor, Enter commits label + row text under one checkpoint, undo restores', () => {
     setEditorMode('setup');
     const body = outerBody();
-    const inner = innerBody();
     ensureExpanded(body.id);
-    ensureExpanded(inner.id);
-
     const shadow = body.paths.find((p) => p.label === 'shadow')!;
-    const whitePill = inner.paths.find((p) => p.label === 'white_pill_body')!;
-    const bodyPathsBefore = body.paths.map((p) => p.id);
-    const innerPathsBefore = inner.paths.map((p) => p.id);
     expect(canUndo()).toBe(false);
 
-    simulateDragDrop(pathRow(shadow.id), pathRow(whitePill.id));
+    // Full double-click on the row's NAME, re-resolving the hit target between events —
+    // each click's handler notify()s and rebuilds the panel, detaching the previous row.
+    const pt = clientCenterOf(pathRow(shadow.id).querySelector('.layer-name')!);
+    const fire = (type: string, detail: number) => {
+      const target = document.elementFromPoint(pt.x, pt.y)!;
+      target.dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, clientX: pt.x, clientY: pt.y, detail,
+      }));
+    };
+    fire('mousedown', 1); fire('mouseup', 1); fire('click', 1);
+    fire('mousedown', 2); fire('mouseup', 2); fire('click', 2);
+    fire('dblclick', 2);
 
-    expect(outerBody().paths.map((p) => p.id), 'outer body paths unchanged').toEqual(bodyPathsBefore);
-    expect(innerBody().paths.map((p) => p.id), 'nested body paths unchanged').toEqual(innerPathsBefore);
-    expect(canUndo(), 'no checkpoint was pushed — the drop was a structural non-event').toBe(false);
+    const input = pathRow(shadow.id).querySelector<HTMLInputElement>('input.layer-rename-input');
+    expect(input, 'inline rename editor appeared in the row').toBeTruthy();
+    expect(input!.value, 'pre-filled with the current label').toBe('shadow');
+
+    input!.value = 'ground_shadow';
+    input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+
+    expect(outerBody().paths.find((p) => p.id === shadow.id)!.label, 'doc label committed').toBe('ground_shadow');
+    expect(
+      pathRow(shadow.id).querySelector('.layer-name')!.textContent,
+      'row text follows after the rebuild',
+    ).toBe('ground_shadow');
+    expect(canUndo(), 'exactly one checkpoint').toBe(true);
+
+    undo();
+    expect(
+      state.doc!.parts.find((p) => p.id === body.id)!.paths.find((p) => p.id === shadow.id)!.label,
+      'undo restores the old label',
+    ).toBe('shadow');
   });
 
-  it('dropping a path onto a PART row (not a path row) also does nothing', () => {
+  it('Escape cancels without a checkpoint or a label change', () => {
     setEditorMode('setup');
     const body = outerBody();
-    const inner = innerBody();
     ensureExpanded(body.id);
     const shadow = body.paths.find((p) => p.label === 'shadow')!;
-    const bodyPathsBefore = body.paths.map((p) => p.id);
 
-    simulateDragDrop(pathRow(shadow.id), partRow(inner.id));
+    const pt = clientCenterOf(pathRow(shadow.id).querySelector('.layer-name')!);
+    const fire = (type: string, detail: number) => {
+      const target = document.elementFromPoint(pt.x, pt.y)!;
+      target.dispatchEvent(new MouseEvent(type, {
+        bubbles: true, cancelable: true, clientX: pt.x, clientY: pt.y, detail,
+      }));
+    };
+    fire('mousedown', 1); fire('mouseup', 1); fire('click', 1);
+    fire('mousedown', 2); fire('mouseup', 2); fire('click', 2);
+    fire('dblclick', 2);
 
-    expect(outerBody().paths.map((p) => p.id)).toEqual(bodyPathsBefore);
-    expect(canUndo()).toBe(false);
+    const input = pathRow(shadow.id).querySelector<HTMLInputElement>('input.layer-rename-input')!;
+    input.value = 'discarded';
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+    expect(outerBody().paths.find((p) => p.id === shadow.id)!.label).toBe('shadow');
+    expect(pathRow(shadow.id).querySelector('.layer-name')!.textContent).toBe('shadow');
+    expect(canUndo(), 'no checkpoint for a canceled rename').toBe(false);
   });
 });

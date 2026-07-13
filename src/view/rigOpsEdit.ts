@@ -1,6 +1,7 @@
 /**
  * Rig-edit operations: Setup-mode flips, arrow-key part nudge, align/distribute
- * application, distributed group-scale, and bone reshaping (aim-at-tip + child-origin
+ * application, distributed group-scale, cross-part path moves (the Layers panel's
+ * drag-a-path-into-another-part gesture), and bone reshaping (aim-at-tip + child-origin
  * carry — the freeze/non-freeze pose model's actual reshape math; the freeze-mode BIND
  * refresh that keeps art static during a freeze reshape lives in rigOpsBind.ts). Split
  * out of rigOps.ts (CLAUDE.md "Small, focused files"); shares its layer (may reach
@@ -10,12 +11,13 @@
 import {
   state, selectedParts, setKeyframe, channelValue, ancestorChain, RigPart,
 } from '../core/model';
-import { applyMat, invertMat, matrixOfTransform } from '../geometry/transforms';
+import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
 import { ctx, linearOnly, round1, round2, round3, wrapToPi } from './context';
 import {
   poseTime, groupTransformOf, chainMatOf, effectivePivot, effectiveTip, fullPoseTransform,
   ownTranslateOf, groupDescendants,
 } from './pose';
+import { syncPartPathDom } from './partDom';
 import { renderPose } from './render';
 
 // ---- Vector-editing operations (Setup mode) ----
@@ -160,6 +162,73 @@ export function applyRootDeltas(deltas: Map<string, { dx: number; dy: number }>)
     part.rest.ty = round1(part.rest.ty + local.y);
   }
   renderPose();
+}
+
+// ---- Cross-part path move (the Layers panel's drag-a-path-into-another-part gesture) ----
+
+/**
+ * Why a path move can be REFUSED, as the human-readable reason, or null when allowed —
+ * the CHOKEPOINT both halves of the drag gesture share: the Layers dragover shows the
+ * reason (row title) and withholds the drop-zone highlight, the drop guards on it, and
+ * `movePathToPart` re-checks it so no future caller can bypass the invariant. Skinned
+ * parts are frozen out on BOTH sides: their geometry is bind-baked to ROOT space and
+ * their weights/overrides are keyed by path command indexes against that baked data —
+ * a path arriving or leaving would corrupt the binding. Bones carry no artwork.
+ */
+export function pathMoveRefusal(src: RigPart, dest: RigPart): string | null {
+  if (src.skin) return 'Cannot move a path out of a skinned part (its geometry is bind-baked to its bones).';
+  if (dest.skin) return 'Cannot move a path into a skinned part (its geometry is bind-baked to its bones).';
+  if (dest.kind === 'bone') return 'Bones carry no artwork — drop onto an art part or group.';
+  return null;
+}
+
+const nearIdentity = (m: Mat): boolean =>
+  Math.abs(m.a - 1) < 1e-12 && Math.abs(m.d - 1) < 1e-12 &&
+  Math.abs(m.b) < 1e-12 && Math.abs(m.c) < 1e-12 &&
+  Math.abs(m.e) < 1e-12 && Math.abs(m.f) < 1e-12;
+
+/**
+ * Move one path (the whole RigPath object — paints, nodeTypes, id all travel untouched)
+ * from `src.paths` into `dest.paths` at `destIndex` (model order; default appends last =
+ * topmost within the part), RENDER-NEUTRALLY: a path renders as
+ * `renderMat(part) · path.transform` where renderMat is the part's full REST render
+ * matrix (ancestor rest ownPose chain + own rest pose + baked `transform` + the innermost
+ * rest scale/skew slot — `groupTransformOf(part, null)`, the shared geometry/pose.ts
+ * kernel), so the move rebakes
+ *   newPathTransform = inv(destRenderMat) · srcRenderMat · oldPathTransform
+ * and the rendered geometry stays byte-stable (< 0.01 px, interaction-tested). The
+ * matrices are composed at t = null: REST frames on both sides, mirroring every other
+ * structural Setup edit. A near-identity reframe (src and dest share a frame) keeps the
+ * original transform string byte-identical instead of laundering it through floats.
+ * `path.d` is never rewritten — node indexes (and with them any FUTURE skin overrides)
+ * survive, unlike a bake. A `group` destination becomes kind 'art' (the import invariant:
+ * kind 'art' iff a part has direct paths); an art source emptied of its last path keeps
+ * its kind (matches delete-path behavior elsewhere). Syncs both parts' path DOM in place
+ * (no canvas rebuild) and repaints; the CALLER owns the checkpoint (one per drop).
+ */
+export function movePathToPart(
+  src: RigPart, dest: RigPart, pathId: string, destIndex?: number,
+): boolean {
+  if (src.id === dest.id || pathMoveRefusal(src, dest) !== null) return false;
+  const from = src.paths.findIndex((p) => p.id === pathId);
+  if (from < 0) return false;
+  const srcRender = matrixOfTransform(groupTransformOf(src, null));
+  const destRender = matrixOfTransform(groupTransformOf(dest, null));
+  const reframe = multiply(invertMat(destRender), srcRender);
+  const [path] = src.paths.splice(from, 1);
+  if (!nearIdentity(reframe)) {
+    const m = multiply(reframe, matrixOfTransform(path.transform));
+    path.transform = `matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
+  }
+  const at = destIndex === undefined
+    ? dest.paths.length
+    : Math.max(0, Math.min(destIndex, dest.paths.length));
+  dest.paths.splice(at, 0, path);
+  if (dest.kind === 'group') dest.kind = 'art';
+  syncPartPathDom(src);
+  syncPartPathDom(dest);
+  renderPose();
+  return true;
 }
 
 // ---- Bone reshaping (the freeze / non-freeze pose model) ----

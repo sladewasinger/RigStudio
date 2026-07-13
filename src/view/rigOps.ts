@@ -15,7 +15,7 @@
 
 export {
   flipSelected, groupScaleMembers, applyGroupScale, nudgeSelectedParts, applyRootDeltas,
-  aimBoneAtTip, carryChildOrigins,
+  movePathToPart, pathMoveRefusal, aimBoneAtTip, carryChildOrigins,
 } from './rigOpsEdit';
 export type { GroupScaleMember } from './rigOpsEdit';
 
