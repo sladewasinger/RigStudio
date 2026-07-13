@@ -26,7 +26,6 @@ const GRANDFATHERED = new Map<string, number>([
   ['core/model.ts', 1089],
   ['geometry/paths.ts', 434],
   ['io/exportLottie.ts', 327],
-  ['io/exportRiv.ts', 660],
   ['main.ts', 522],
   ['panels/inspector.ts', 867],
   ['panels/layers.ts', 347],

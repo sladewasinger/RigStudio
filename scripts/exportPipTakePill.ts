@@ -36,7 +36,7 @@ import {
   serializeDoc,
 } from '../src/core/model';
 import { importSvg } from '../src/io/importSvg';
-import { exportRiv } from '../src/io/exportRiv';
+import { exportRiv } from '../src/io/riv';
 import { Mat, applyMat, matrixOfTransform, multiply } from '../src/geometry/transforms';
 import { parsePath } from '../src/geometry/paths';
 

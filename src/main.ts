@@ -21,7 +21,7 @@ import {
   hasKeySelection, clearKeySelection,
 } from './timeline/timeline';
 import { exportLottie } from './io/exportLottie';
-import { exportRiv } from './io/exportRiv';
+import { exportRiv } from './io/riv';
 import { smHandleEscape, smHandleDelete, stopPreview } from './panels/smPanel';
 import { aiHandleEscape } from './panels/ai';
 import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './core/history';
