@@ -1,9 +1,15 @@
 /**
  * Artwork body press: select (with group-aware substitution + Shift/Ctrl multi-select),
- * then translate/rotate/IK the pose — or, for a skinned part, IK-only (its geometry
- * follows its bones, not a group transform). This is the deepest DOM-driven row: it
+ * then translate/rotate/IK the pose. A skinned part takes the SAME translate/rotate
+ * drags as any other part (user ruling 2026-07-12, "Allow rotate+translate" — CLAUDE.md
+ * "Skinned-part UX"): its bones are parented under it, so its rotate/tx/ty carry the
+ * whole chain and the LBS-deformed art follows, matching .riv playback exactly. IK stays
+ * its OWN entry gesture (grab-point-relative FABRIK over the bone chain) rather than
+ * falling into translate/rotate; scale/skew stay blocked (never propagate to children in
+ * the editor, unlike a Rive Node) — see the `!part.skin` gates in overlayHandles.ts and
+ * the disabled sx/sy/kx/ky inspector fields. This is the deepest DOM-driven row: it
  * fires for ANY element carrying data-part-id (art, bone glyph, group glyph alike), so
- * the skinned-art and bone-glyph-IK special cases live INLINE here rather than as
+ * the skinned-art-IK and bone-glyph-IK special cases live INLINE here rather than as
  * separate priority-table rows — they share this press's group-substitution + selection
  * side effect, which must run exactly once regardless of which sub-case ultimately
  * applies (splitting them into independent claim()s would either duplicate that effect
@@ -72,12 +78,14 @@ export const ARTWORK_PIPELINE: GesturePipeline = {
       // it: the child-bone-tears-from-parent gap the user reported can't happen.
       if (part.kind === 'bone' && action === 'translate') action = 'rotate';
 
-      // Skinned art deforms through its BONES, not a group transform, so translate/
-      // rotate/scale drags are meaningless on it (and would be lies). The one pose
-      // gesture it supports is IK: dragging the art bends the bone chain that deforms
-      // it (drag near the chain end → the limb folds, art follows live). Any other
-      // click just (re)selects; we still repaint so the selection box + "skinned" hint
-      // show immediately instead of staying stale until the next pan/zoom.
+      // Skinned art deforms through its BONES for shape, but its own rotate/tx/ty
+      // genuinely carry the whole chain (the bones are parented under it), so a body
+      // drag legitimately swings/slides the whole limb — the SAME translate/rotate
+      // construction below handles it, no special case needed. IK stays its own entry
+      // gesture: dragging the art bends the bone chain that deforms it (drag near the
+      // chain end → the limb folds, art follows live), so it's checked FIRST and never
+      // falls into translate/rotate. Scale is still blocked (no handles render for a
+      // skinned part — overlayHandles.ts — so a scale drag can never be claimed here).
       if (part.skin) {
         // Deepest-in-chain bone is the effector: FABRIK solves the whole chain root→that
         // bone, driving the ACTUAL grabbed point to the pointer (grab-point-relative —
@@ -87,9 +95,6 @@ export const ARTWORK_PIPELINE: GesturePipeline = {
           renderPose();
           return 'handled';
         }
-        notify();
-        renderPose(); // selection box + skinned hint appear without a pan/zoom
-        return 'handled';
       }
 
       // A motionless body click on the already-primary part cycles the handle set

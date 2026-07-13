@@ -76,8 +76,9 @@ export const GESTURE_PIPELINES: readonly GesturePipeline[] = [
   //    else rubber-band a node marquee. Never reached outside node-editing mode.
   NODE_BEND_MARQUEE_PIPELINE,
   // 10. Artwork body press: select (+ group substitution/multi-select) then translate/
-  //     rotate/IK-pose, or IK-only for skinned art. The last DOM-driven row — every row
-  //     above is a more specific hit target that must win first.
+  //     rotate/IK-pose — since the 2026-07-12 ruling this includes SKINNED art
+  //     (rotate/translate carry its bone chain; IK stays its own sub-branch). The last
+  //     DOM-driven row — every row above is a more specific hit target that must win first.
   ARTWORK_PIPELINE,
   // 11. Blank canvas (or a click-through fall from dimmed artwork): the universal
   //     fallback when nothing else claimed the press. Always last.

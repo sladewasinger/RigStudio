@@ -1,9 +1,11 @@
 /**
  * Interaction tests for Bones 2.0 (P4, then the "broken in real use" overhaul):
  * auto-bind TARGETING (only the right art, geometrically), RENDER-NEUTRAL bind, child
- * bones as connected joints, skinned-part UX (fresh overlay + no lying handles), IK on
- * the skinned art, and per-node overrides. Full realistic gestures via the harness
- * (elementFromPoint hit targets, intermediate pointermoves, real overlay handles).
+ * bones as connected joints, skinned-part UX (fresh overlay; scale/skew stay blocked but
+ * rotate/translate now carry the whole bone chain — user ruling 2026-07-12, "Allow
+ * rotate+translate", covered in full by `skinnedPose.test.ts`), IK on the skinned art,
+ * and per-node overrides. Full realistic gestures via the harness (elementFromPoint hit
+ * targets, intermediate pointermoves, real overlay handles).
  *
  * RE-SPEC NOTE: bones are now placed down each limb's MEDIAL axis (`medialPoints`) not
  * its bounding-box centre line. The old `axisPoints` walked the bbox centre, which
@@ -309,22 +311,29 @@ describe('scenario B7 — bind is RENDER-NEUTRAL (art must not move a pixel)', (
 });
 
 describe('scenario B8 — skinned-part overlay is fresh + explains itself', () => {
-  it('clicking a skinned part shows a selection box + hint immediately, with NO lying handles', () => {
+  it('clicking a skinned part shows a selection box + hint immediately, with only the passive first-click corners', () => {
     placeChain(LIMB, 2);
     expect(partByLabel(LIMB).skin, 'limb skinned').toBeTruthy();
 
-    // Click the skinned art with the select tool (a real hit-target click). The bug:
-    // the overlay stayed stale (no box) until a pan/zoom forced a repaint, because a
-    // skinned part starts no drag, so pointerup's end() never repainted.
+    // Click the skinned art with the select tool (a real hit-target click). RE-SPEC (user
+    // ruling 2026-07-12, "Allow rotate+translate"): a skinned part used to start NO drag
+    // at all, so pointerup's end() never repainted and the overlay stayed stale until a
+    // pan/zoom forced one. It now returns a real translate DragState on the first click —
+    // exactly like any other part — so the general pointerup repaint covers it; this
+    // scenario just pins that a SINGLE click still shows the box/hint immediately, and
+    // that the first click is the passive translate/scale-mode state (0 scale, 0 rotate
+    // handles — scale is blocked on skin, rotate only goes live on the SECOND click; see
+    // scenario SP3 in skinnedPose.test.ts for that toggle and the actual rotate/translate
+    // drags).
     state.tool = 'select';
     const p = clientPointOnPart(LIMB);
     click(p.x, p.y);
 
     expect(state.selectedPartId, 'skinned part selected').toBe(partByLabel(LIMB).id);
     expect(overlayCount('.select-box'), 'selection box present WITHOUT a pan/zoom').toBeGreaterThan(0);
-    expect(overlayCount('.skin-hint'), 'a "skinned — pose with its bones" hint is shown').toBe(1);
-    expect(overlayCount('.scale-handle'), 'no scale handles (they would be lies)').toBe(0);
-    expect(overlayCount('.rotate-handle'), 'no rotate handles').toBe(0);
+    expect(overlayCount('.skin-hint'), 'the bone-deformed limits hint is shown').toBe(1);
+    expect(overlayCount('.scale-handle'), 'scale stays blocked on a skinned part').toBe(0);
+    expect(overlayCount('.rotate-handle'), 'first click is translate mode — rotate corners appear on the second').toBe(0);
   });
 });
 

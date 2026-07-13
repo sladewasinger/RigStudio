@@ -157,7 +157,7 @@ function addHandle(
 }
 
 /**
- * The node-editing equivalent of the `.skin-hint` "posed by its bones" label (item
+ * The node-editing equivalent of the `.skin-hint` "bone-deformed" label (item
  * v2.13 follow-up): while this part's deformation is suspended for node editing, say so
  * — the art on screen is its base/bind shape, not its current pose.
  */

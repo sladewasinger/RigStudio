@@ -19,9 +19,10 @@ export function buildSkinSection(el: HTMLElement, part: RigPart): void {
   const list = document.createElement('p');
   list.className = 'hint';
   const names = bones.length ? bones.map((b) => b.label).join(', ') : '(deleted bones)';
-  list.textContent = `Deformed by: ${names}. This part has no scale/rotate ` +
-    'handles; pose its bones (or drag it with the IK tool to bend the chain) and the ' +
-    'artwork follows with auto weights. Exports render bound parts rigidly.';
+  list.textContent = `Deformed by: ${names}. Rotate/translate move the whole limb ` +
+    '(the bones ride along); bend at the joints with the IK tool or by posing the ' +
+    'bones. Scale/skew and the SHAPE come from the bones, so those handles stay off. ' +
+    'Exports render bound parts rigidly.';
   el.appendChild(list);
 
   const actions = document.createElement('div');
