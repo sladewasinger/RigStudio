@@ -622,11 +622,15 @@ CLAUDE.md convention: "Think in named patterns, not conventions").
   deviations: skinnedArt/boneGlyph are sub-cases inside artwork's claim (they
   share its once-only selection side effect); node vs nodesBendMarquee split
   because pivot sits between them in the real cascade order.
-- [ ] **view/nodeEditing chokepoint + split**: make the lockstep invariant
-  (path commands ↔ nodeTypes string ↔ skin-override indexes) STRUCTURAL via one
-  `applyStructuralEdit(path, edit)` door every command-count-changing op must
-  pass through (does the nodeTypes splice + override drop itself); then split
-  the ops by family (drag math / structural wiring / one-shot type ops) safely.
+- [x] **view/nodeEditing chokepoint + split** (68f24fc): `applyStructuralEdit`
+  in `nodeEditing/structural.ts` is the one door (d/nodeTypes write + override
+  drop + cache invalidate + DOM sync + selection clear), enforced by
+  `nodeEditingChokepoint.test.ts`; family split dragMath/structural/typeOps
+  behind a facade. BONUS: found+fixed a real latent bug (the bend pipeline's
+  implicit-Z split never dropped overrides) and pinned the previously-unpinned
+  invariant with scenario B31 (mutation-verified). Flagged for later: the
+  bind bake's pathToCubics arc expansion is a latent nodeTypes desync on
+  literal-arc paths (task chip spawned).
 - [x] **Pattern audit over the six pinned files** (done 2026-07-12, read-only).
   Verdicts, ranked by payoff:
   1. **main.ts — REORGANIZE**: keydown handler (~60% of the file) → a binding
