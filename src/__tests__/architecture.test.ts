@@ -28,7 +28,6 @@ const GRANDFATHERED = new Map<string, number>([
   ['main.ts', 522],
   ['panels/layers.ts', 347],
   ['timeline/graph.ts', 395],
-  ['view/interactions.ts', 958],
   ['view/nodeEditing.ts', 560],
 ]);
 
