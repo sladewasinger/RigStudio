@@ -583,14 +583,21 @@ directly). Feasible because core/, geometry/, io/ are already DOM-free (the unit
 suite runs in Node); the user's scripts/ take-pill pipeline is the proof-of-
 concept seed.
 
-- [ ] **H1. `rig-studio-core` headless package + CLI** — expose model/normalize/
-  sampling/evaluator/exporters as a package entry; jsdom-assisted `rig import
-  art.svg`; `rig validate` (normalizeDoc + round-trip guarantees editor
-  compatibility by construction); `rig export-riv`; `rig render-frames --clip X`
-  (resvg/sharp rasterization — gives agents visual feedback; shares A3's
-  filmstrip renderer). Known caveat: geometric auto-bind uses DOM isPointInFill —
-  headless binding either implements a pure point-in-fill test or requires
-  explicit part targets (agents name parts anyway).
+- [~] **H1. `rig-studio-core` headless package + CLI** — wave H1a DONE (b2b0cb3):
+  `src/headless/index.ts` package entry (pure facade over the DOM-free
+  core/geometry/io surface + `importSvgHeadless` via scoped jsdom DOMParser,
+  importer untouched); CLI (`rig-studio` bin / `npx tsx src/headless/cli.ts`):
+  `rig import` (nested part tree summary + .rig.json), `rig validate`
+  (normalization drift + round-trip byte-stability, exit 0/1), `rig export-riv`.
+  Module-graph test enforces headless never reaches view/panels/timeline/ui.
+  REMAINING (H1b): `rig render-frames --clip X` — needs a HEADLESS POSE COMPOSER
+  (pose composition currently lives in view/pose.ts, DOM-adjacent) + resvg/sharp
+  rasterization; gives agents visual feedback, shares A3's filmstrip framing.
+  Known caveats carried forward: geometric auto-bind uses DOM isPointInFill
+  (headless binding = pure point-in-fill or explicit part targets), and much of
+  core/channels + applyRigChanges read/write the `state` singleton — headless
+  scripts set `state.doc = doc` first (H2's in-memory sessions will want a
+  save/restore or pure-doc variant).
 - [ ] **H2. `rig-studio-mcp` server** — LOCAL stdio transport (an npm package the
   AI client spawns on demand — no hosting, no ports; remote/HTTP hosting is an
   optional later tier). Strictly a wrapper over H1: needed for shell-less clients
