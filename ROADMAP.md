@@ -616,6 +616,38 @@ Node scale would — scale stays blocked on skinned parts.
   Combined with the queued ai/prompts.ts extraction (audit rank 2) so frozen
   claude.ts sheds its ceiling first.
 
+## Node editor revamp (user-requested 2026-07-12 — "needs a pretty decent
+## polish pass"; design pass first, then implement; reproduce-first on the bugs)
+
+- [ ] **Alt+click ON a segment inserts a node THERE** — today insert requires
+  selecting a node and Alt+clicking, splitting an adjacent segment at its
+  midpoint ("a random segment adjacent"). Reuse the bend pipeline's geometric
+  `segmentHit` (segment index + parameter t under the cursor) so Alt+click on
+  any segment splits at exactly the clicked point (de Casteljau at t). Keep
+  the old gesture working during transition or retire it deliberately.
+- [ ] **Symmetric/smooth nodes always get BOTH handles** — the type ops only
+  mirror EXISTING handles; a node whose neighbor segment is a line (L) ends up
+  "symmetric" with one arm. The op must synthesize the missing handle by
+  converting the adjacent L→C (the bend's "handles grow" conversion, applied
+  at type-set time). Symmetric = equal lengths both sides, always.
+- [ ] **Closing-seam stacked nodes** (the user's "new node underneath") —
+  bending the implicit closing segment splices an explicit closing cubic whose
+  endpoint coincides with the path's FIRST node (by design: shape stays
+  closed, zero-length Z). The DATA is coherent; the UI presents two stacked,
+  independently-draggable nodes. Fix at the editor level: render/hit-test the
+  seam as ONE node (drag moves both coincident points; the pair splits only
+  via an explicit "open path" op). Needs design care around nodeTypes and
+  overrides indexing — route through the chokepoint.
+- [ ] **Type-button state highlight** — selecting node(s) subtly highlights the
+  matching smooth/symmetric/corner button in the inspector node-ops section
+  (mixed selection = no highlight or an indeterminate state), independent of
+  the node glyph shapes. (Glyphs already encode type: diamond/square/circle.)
+- [ ] **Design sweep for the rest of the polish pass** — hover affordances on
+  segments/nodes, insert-preview ghost under Alt-hover, whether Inkscape's
+  double-click-on-path-inserts should exist alongside Alt+click, drag behavior
+  when both seam nodes are selected. Produce a short proposal for user
+  sign-off before implementing.
+
 ## Context-menu polish (user-requested 2026-07-12)
 
 - [ ] **Suppress the native browser context menu app-wide** — a document-level
