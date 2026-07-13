@@ -135,6 +135,36 @@ export function subpathStart(cmds: PathCmd[], i: number): { x: number; y: number
 }
 
 /**
+ * The OTHER command index of a coincident "closing seam" pair — a closed subpath's M
+ * and the last real command right before its Z, when that command's endpoint lands
+ * exactly on the M's point (CLAUDE.md item 3: the bend pipeline's implicit-Z split
+ * creates exactly this — see `nodesBendMarquee.ts`'s Z branch). Returns null off a seam.
+ * Symmetric: pass either index of the pair. The overlay (`overlayNodes.ts`) renders only
+ * the M side; selection (`node.ts` click, `nodesBendMarquee.ts` marquee) mirrors any
+ * select/toggle of one index onto its partner, so the pair rides `moveNode`'s existing
+ * multi-node same-delta drag as one unit with zero changes to the drag/nudge code itself.
+ */
+export function seamPartnerIndex(cmds: PathCmd[], cmdIndex: number): number | null {
+  const c = cmds[cmdIndex];
+  if (!c || c.cmd === 'Z') return null;
+  let mIdx = -1;
+  for (let k = cmdIndex; k >= 0; k--) { if (cmds[k].cmd === 'M') { mIdx = k; break; } }
+  if (mIdx < 0) return null;
+  let zIdx = -1;
+  for (let k = mIdx + 1; k < cmds.length; k++) {
+    if (cmds[k].cmd === 'M') break; // next subpath starts: this one has no Z
+    if (cmds[k].cmd === 'Z') { zIdx = k; break; }
+  }
+  const lastIdx = zIdx - 1;
+  if (zIdx < 0 || lastIdx <= mIdx) return null; // open subpath, or degenerate M-then-Z
+  if (cmdIndex !== mIdx && cmdIndex !== lastIdx) return null;
+  const m = cmds[mIdx] as { x: number; y: number };
+  const last = cmds[lastIdx] as { x: number; y: number };
+  if (Math.abs(m.x - last.x) > 1e-6 || Math.abs(m.y - last.y) > 1e-6) return null;
+  return cmdIndex === mIdx ? lastIdx : mIdx;
+}
+
+/**
  * The opposite control handle of the node a control point attaches to, when the two
  * handles are currently collinear-and-opposed (a smooth node) — dragging one then
  * mirrors the other's direction, preserving its length. Alt breaks the pairing.

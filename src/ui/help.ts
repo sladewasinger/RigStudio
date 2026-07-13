@@ -99,7 +99,7 @@ const MOUSE_AND_TOOLS_ROWS: ShortcutEntry[] = [
     description: 'Hide/show a part on the canvas (editor only — never keyed, never exported)',
     context: 'Mouse & tools',
   },
-  { keys: 'Alt+click a node', description: 'Insert a new node after it', context: 'Mouse & tools' },
+  { keys: 'Alt+click a segment', description: 'Insert a node at that exact point', context: 'Mouse & tools' },
   { keys: 'Ctrl+click a node', description: 'Delete that node', context: 'Mouse & tools' },
   {
     keys: 'Double-click',

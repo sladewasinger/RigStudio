@@ -29,8 +29,8 @@ export {
   updatePathAttrs, reorderCanvas, registerPart, unregisterPart, syncPartPathDom,
 } from './partDom';
 export {
-  hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, applyNodeOp,
-  deleteSelectedNodes, nudgeSelectedNodes, canDeleteSegment, canJoinNodes,
+  hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, selectedNodesType,
+  applyNodeOp, deleteSelectedNodes, nudgeSelectedNodes, canDeleteSegment, canJoinNodes,
   deleteSelectedSegment, joinSelectedNodes,
 } from './nodeEditing';
 export type { NodeOp } from './nodeEditing';

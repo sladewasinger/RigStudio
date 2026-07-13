@@ -67,7 +67,7 @@ export function buildInspector(el: HTMLElement): void {
     help.textContent = setup
       ? state.mode === 'rig'
         ? 'Edit: drags reshape the character (never keyed). Drag crosshair = set joint. Shift+drag = move.'
-        : 'Drag nodes to reshape. Alt+click a node = insert one after it. Ctrl+click = delete.'
+        : 'Drag nodes to reshape. Alt+click a segment = insert a node there. Ctrl+click a node = delete.'
       : 'Animate: drags record keyframes at the playhead. Ctrl = 15° snap. Shift+drag = move.';
     el.appendChild(help);
   } else {

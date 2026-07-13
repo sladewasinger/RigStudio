@@ -1,18 +1,21 @@
 /**
  * Node-editing mode's remaining ownership of the canvas: near the edited path's outline a
- * press BENDS that segment (lines auto-grow handles); everywhere else — blank space OR
- * artwork, faded parts are click-through anyway — it rubber-bands a node marquee. Canvas
- * clicks never switch parts here; Layers or Escape leave node mode. Two DragState kinds,
- * ordered as the old cascade tried them (bend hit-test first, marquee fallback).
+ * press BENDS that segment (lines auto-grow handles), or — Alt held (CLAUDE.md item 1) —
+ * INSERTS a node at the exact point pressed instead of bending; everywhere else — blank
+ * space OR artwork, faded parts are click-through anyway — it rubber-bands a node
+ * marquee. Canvas clicks never switch parts here; Layers or Escape leave node mode.
+ * Three DragState outcomes, ordered as the old cascade tried them (bend hit-test first —
+ * Alt turns a hit into an immediate insert instead of a drag — marquee fallback).
  */
 
 import { RigPath, state, selectedPart } from '../../../core/model';
 import { parsePath, serializePath, PathCmd } from '../../../geometry/paths';
+import { checkpoint } from '../../../core/history';
 import { ctx, DragState, nodeKey, parseNodeKey } from '../../context';
 import { pointerInPathSpace, handleSize } from '../../coords';
 import {
   nodeIndexOf, ensureNodeTypes, segmentStart, pointOnSegment, segmentHit, subpathStart,
-  applyMirrorConstraint, applyStructuralEdit,
+  applyMirrorConstraint, applyStructuralEdit, insertNodeOnSegment, seamPartnerIndex,
 } from '../../nodeEditing';
 import { renderOverlay } from '../../overlay';
 import { capturePointer } from '../lifecycle';
@@ -38,6 +41,17 @@ export const NODE_BEND_MARQUEE_PIPELINE: GesturePipeline = {
       }
     }
     if (bestBend) {
+      if (ev.altKey) {
+        // Alt+click ON a segment inserts a node exactly there (CLAUDE.md item 1) —
+        // the SAME segmentHit result the bend below would otherwise start a drag
+        // from, so "where you'd grab to bend" and "where Alt+click inserts" are
+        // always the identical point. No drag starts; a click is not a gesture.
+        checkpoint();
+        if (insertNodeOnSegment(part, bestBend.path, bestBend.cmdIndex, bestBend.t)) {
+          renderOverlay();
+        }
+        return 'handled';
+      }
       const d: DragState = {
         kind: 'bendSegment', part, pathId: bestBend.path.id,
         cmdIndex: bestBend.cmdIndex, t: bestBend.t,
@@ -147,12 +161,20 @@ export const NODE_BEND_MARQUEE_PIPELINE: GesturePipeline = {
     if (!drag.additive) ctx.selectedNodes.clear();
     const isClick = r.width < 3 && r.height < 3;
     if (!isClick && ctx.svg) {
+      const part = selectedPart();
       for (const h of ctx.svg.querySelectorAll<SVGCircleElement>('.node-handle')) {
         const hb = h.getBoundingClientRect();
         const cx = hb.left + hb.width / 2;
         const cy = hb.top + hb.height / 2;
         if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
-          ctx.selectedNodes.add(nodeKey(h.dataset.pathId!, Number(h.dataset.cmdIndex)));
+          const pathId = h.dataset.pathId!;
+          const cmdIndex = Number(h.dataset.cmdIndex);
+          ctx.selectedNodes.add(nodeKey(pathId, cmdIndex));
+          // A merged closing-seam glyph (CLAUDE.md item 3, only the primary side
+          // renders — see overlayNodes.ts) selects its hidden coincident partner too.
+          const path = part?.paths.find((p) => p.id === pathId);
+          const partner = path ? seamPartnerIndex(parsePath(path.d), cmdIndex) : null;
+          if (partner != null) ctx.selectedNodes.add(nodeKey(pathId, partner));
         }
       }
     }

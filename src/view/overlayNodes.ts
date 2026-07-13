@@ -8,8 +8,34 @@
 
 import { ctx, SVG_NS, nodeKey, parseNodeKey } from './context';
 import { state, RigPart } from '../core/model';
-import { parsePath } from '../geometry/paths';
+import { parsePath, PathCmd } from '../geometry/paths';
 import { handleSize } from './coords';
+
+/**
+ * A closing-seam shadow index (CLAUDE.md item 3): when the M starting a closed subpath
+ * coincides exactly with the last real command right before its Z (the bend pipeline's
+ * implicit-Z split creates exactly this — `nodesBendMarquee.ts`), that command is a
+ * visual DUPLICATE of the M — its own endpoint glyph is hidden so the pair reads as ONE
+ * node. Deliberately a local, render-only twin of `nodeEditing/dragMath.ts`'s
+ * `seamPartnerIndex` (same geometry, one direction only) rather than a shared import:
+ * `view/overlay*` sits BELOW `view/nodeEditing` in the layering DAG (CLAUDE.md "The
+ * src/view/ layering is binding"), so this module can't reach up into it. Selection and
+ * drag mirroring (`node.ts` / `nodesBendMarquee.ts`) use the real `seamPartnerIndex`.
+ */
+function seamShadowOf(cmds: PathCmd[], mIdx: number): number | null {
+  if (cmds[mIdx]?.cmd !== 'M') return null;
+  let zIdx = -1;
+  for (let k = mIdx + 1; k < cmds.length; k++) {
+    if (cmds[k].cmd === 'M') return null; // next subpath starts: this one has no Z
+    if (cmds[k].cmd === 'Z') { zIdx = k; break; }
+  }
+  const lastIdx = zIdx - 1;
+  if (zIdx < 0 || lastIdx <= mIdx) return null;
+  const m = cmds[mIdx] as { x: number; y: number };
+  const last = cmds[lastIdx] as { x: number; y: number };
+  if (Math.abs(m.x - last.x) > 1e-6 || Math.abs(m.y - last.y) > 1e-6) return null;
+  return lastIdx;
+}
 
 export function renderNodeHandles(part: RigPart): void {
   const g = ctx.partGroups.get(part.id)!;
@@ -30,6 +56,14 @@ export function renderNodeHandles(part: RigPart): void {
   for (const path of paths) {
     const cmds = parsePath(path.d);
     const types = path.nodeTypes ?? '';
+    // Closing-seam shadows (CLAUDE.md item 3): every M that coincides with its own
+    // subpath's last node before Z hides that LAST node's endpoint glyph below.
+    const seamHidden = new Set<number>();
+    cmds.forEach((c, idx) => {
+      if (c.cmd !== 'M') return;
+      const shadow = seamShadowOf(cmds, idx);
+      if (shadow != null) seamHidden.add(shadow);
+    });
     const holder = document.createElementNS(SVG_NS, 'g');
     // Same accumulated transform as the drawn path (root + part + path), so raw path
     // coordinates land exactly on the rendered artwork.
@@ -76,13 +110,15 @@ export function renderNodeHandles(part: RigPart): void {
           addHandle(holder, path.id, i, 'x2', c.x2, c.y2, size * 0.6, 'ctrl');
         }
       }
-      const isSelected = ctx.selectedNodes.has(nodeKey(path.id, i));
-      addHandle(
-        holder, path.id, i, 'x',
-        (c as { x: number }).x, (c as { y: number }).y,
-        size * (isSelected ? 1.05 : 0.8), 'node', isSelected,
-        types[nodeIdx], // persistent type tints the node
-      );
+      if (!seamHidden.has(i)) {
+        const isSelected = ctx.selectedNodes.has(nodeKey(path.id, i));
+        addHandle(
+          holder, path.id, i, 'x',
+          (c as { x: number }).x, (c as { y: number }).y,
+          size * (isSelected ? 1.05 : 0.8), 'node', isSelected,
+          types[nodeIdx], // persistent type tints the node
+        );
+      }
       prev = { x: (c as { x: number }).x, y: (c as { y: number }).y };
     });
     ctx.overlay!.appendChild(holder);

@@ -2,7 +2,7 @@
 import { state, notify, selectedPart, RigPart, chainBonesOfPart } from '../../core/model';
 import {
   hasSelectedNode, applyNodeOp, NodeOp, selectedNodeCount, primaryNodeType,
-  canJoinNodes, canDeleteSegment, joinSelectedNodes, deleteSelectedSegment,
+  selectedNodesType, canJoinNodes, canDeleteSegment, joinSelectedNodes, deleteSelectedSegment,
   bindSelectedNodesToBone,
 } from '../../view';
 import { checkpoint } from '../../core/history';
@@ -55,11 +55,17 @@ export function buildNodeOpsSection(el: HTMLElement): void {
   const grid = document.createElement('div');
   grid.className = 'align-grid';
   const enabled = hasSelectedNode();
+  // CLAUDE.md item 4: subtly highlight the button matching the WHOLE selection's
+  // current type (mixed/untyped selections highlight nothing) — `selectedNodesType()`
+  // already returns null for exactly that case, matching `OP_FLAG` in typeOps.ts.
+  const sharedType = selectedNodesType();
+  const TYPE_FLAG: Partial<Record<NodeOp, string>> = { smooth: 's', symmetric: 'z', retract: 'c' };
   const op = (text: string, title: string, nodeOp: NodeOp) => {
     const b = document.createElement('button');
     b.textContent = text;
     b.title = title;
     b.disabled = !enabled;
+    if (sharedType && TYPE_FLAG[nodeOp] === sharedType) b.classList.add('node-type-active');
     b.onclick = () => {
       checkpoint();
       applyNodeOp(nodeOp);

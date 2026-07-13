@@ -8,10 +8,12 @@
  * pipeline elsewhere also uses), `structural.ts` (the chokepoint plus insert/delete/
  * join/close/reverse wiring and eligibility predicates), `typeOps.ts` (the one-shot
  * inspector ops: smooth/symmetric/retract/toCurve/toLine, plus node-selection
- * introspection). This file re-exports exactly the surface those three, plus the one
- * external caller outside `view/nodeEditing/` (the bend pipeline in
- * `view/interactions/pipelines/nodesBendMarquee.ts`), consume — nothing outside this
- * package reaches a deep path.
+ * introspection). This file re-exports exactly the surface those three, plus the two
+ * external callers outside `view/nodeEditing/` (`view/interactions/pipelines/node.ts`
+ * and `nodesBendMarquee.ts` — node-click/bend/marquee gesture wiring, including the
+ * seam-pair lookup `seamPartnerIndex` both use to mirror selection onto a merged
+ * closing-seam glyph's coincident partner, CLAUDE.md item 3), consume — nothing outside
+ * this package reaches a deep path.
  *
  * THREE-WAY LOCKSTEP INVARIANT: any edit that changes a path's drawing-COMMAND COUNT
  * (Z excluded) must, together — (a) resplice `RigPath.nodeTypes` (one char per
@@ -27,13 +29,14 @@
 
 export {
   nodeIndexOf, ensureNodeTypes, segmentStart, pointOnSegment, segmentHit, subpathStart,
-  applyMirrorConstraint, moveNode, nudgeSelectedNodes,
+  applyMirrorConstraint, moveNode, nudgeSelectedNodes, seamPartnerIndex,
 } from './dragMath';
 export {
-  applyStructuralEdit, editNodeStructure, deleteSelectedNodes,
+  applyStructuralEdit, deleteNode, insertNodeOnSegment, deleteSelectedNodes,
   canDeleteSegment, canJoinNodes, deleteSelectedSegment, joinSelectedNodes,
 } from './structural';
 export {
-  hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, applyNodeOp,
+  hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, selectedNodesType,
+  applyNodeOp,
 } from './typeOps';
 export type { NodeOp } from './typeOps';

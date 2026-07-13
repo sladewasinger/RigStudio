@@ -1,9 +1,10 @@
 /**
  * THE chokepoint (`applyStructuralEdit`) plus every command-count-changing node op:
- * insert/delete a single node (Alt/Ctrl+click), multi-node delete, and the
- * join/delete-segment/close wiring around `geometry/paths.ts`'s pure subpath ops
- * (`deleteSegment`/`closePath`/`joinPaths`), with their eligibility predicates
- * (`canJoinNodes`/`canDeleteSegment`) for the inspector's button disabled-state.
+ * delete a single node (Ctrl+click), insert one at an exact clicked point on a segment
+ * (Alt+click — CLAUDE.md item 1), multi-node delete, and the join/delete-segment/close
+ * wiring around `geometry/paths.ts`'s pure subpath ops (`deleteSegment`/`closePath`/
+ * `joinPaths`), with their eligibility predicates (`canJoinNodes`/`canDeleteSegment`)
+ * for the inspector's button disabled-state.
  *
  * THREE-WAY LOCKSTEP INVARIANT (see `view/nodeEditing/index.ts`'s package doc): any
  * edit that changes a path's drawing-COMMAND COUNT (Z excluded) must splice
@@ -20,7 +21,7 @@ import {
   RigPath, RigPart, state, notify, selectedPart, freshId, dropSkinOverridesForPath,
 } from '../../core/model';
 import {
-  parsePath, serializePath, insertNodeAfter, PathPiece, PathCmd, arcToCubics,
+  parsePath, serializePath, PathPiece, PathCmd, arcToCubics,
   deleteSegment, closePath, joinPaths, isSingleSubpath, isClosedPath, nodeCount,
 } from '../../geometry/paths';
 import { checkpoint } from '../../core/history';
@@ -29,7 +30,9 @@ import { renderPose } from '../render';
 import { syncPartPathDom } from '../partDom';
 import { invalidateSkinCache } from '../skinRender';
 import { renderOverlay } from '../overlay';
-import { nodeIndexOf, ensureNodeTypes } from './dragMath';
+import {
+  nodeIndexOf, ensureNodeTypes, segmentStart, subpathStart, seamPartnerIndex,
+} from './dragMath';
 
 /**
  * THE chokepoint (see the file header's THREE-WAY LOCKSTEP INVARIANT): commit a
@@ -92,27 +95,80 @@ export function spliceNodeTypesForBake(path: RigPath, cmds: PathCmd[]): void {
   path.nodeTypes = out;
 }
 
-export function editNodeStructure(d: Extract<DragState, { kind: 'node' }>, op: 'insert' | 'delete'): void {
+/**
+ * Ctrl+click a node: delete it (Alt+click-to-insert-after-a-node retired — CLAUDE.md
+ * item 1, see `view/interactions/pipelines/node.ts`; exact-point insert on a SEGMENT
+ * now lives in `insertNodeOnSegment` below, driven by `nodesBendMarquee.ts`). Refuses
+ * an M (a path's start can't be spliced out this way) and a seam pair's own indexes
+ * (CLAUDE.md item 3 — the coincident pair "splits ONLY via the explicit delete-segment/
+ * open-path ops", never an implicit single-node delete).
+ */
+export function deleteNode(d: Extract<DragState, { kind: 'node' }>): void {
   const path = d.part.paths.find((p) => p.id === d.pathId);
   if (!path) return;
   const cmds = parsePath(path.d);
+  if (
+    cmds.length <= 3 || cmds[d.cmdIndex].cmd === 'M' || seamPartnerIndex(cmds, d.cmdIndex) != null
+  ) return;
   let nodeTypes = path.nodeTypes ? ensureNodeTypes(path) : null;
   const ni = nodeIndexOf(cmds, d.cmdIndex);
-  const countBefore = cmds.filter((c) => c.cmd !== 'Z').length;
-  if (op === 'insert') {
-    if (!insertNodeAfter(cmds, d.cmdIndex)) return;
-    if (nodeTypes) {
-      // New nodes appear right after this one; splitting a segment makes them smooth.
-      const added = cmds.filter((c) => c.cmd !== 'Z').length - countBefore;
-      nodeTypes = nodeTypes.slice(0, ni + 1) + 's'.repeat(added) + nodeTypes.slice(ni + 1);
-    }
-  } else {
-    if (cmds.length <= 3 || cmds[d.cmdIndex].cmd === 'M') return;
-    cmds.splice(d.cmdIndex, 1);
-    if (nodeTypes) nodeTypes = nodeTypes.slice(0, ni) + nodeTypes.slice(ni + 1);
-  }
+  cmds.splice(d.cmdIndex, 1);
+  if (nodeTypes) nodeTypes = nodeTypes.slice(0, ni) + nodeTypes.slice(ni + 1);
   applyStructuralEdit(d.part, path, { cmds, nodeTypes });
   renderOverlay();
+}
+
+/** De Casteljau split of a single cubic at parameter `t` (0..1). */
+function splitCubicAt(
+  p0: { x: number; y: number }, c: Extract<PathCmd, { cmd: 'C' }>, t: number,
+): { left: PathCmd; right: PathCmd } {
+  const lerp = (a: number, b: number) => a + (b - a) * t;
+  const ax = lerp(p0.x, c.x1), ay = lerp(p0.y, c.y1);
+  const bx = lerp(c.x1, c.x2), by = lerp(c.y1, c.y2);
+  const cx = lerp(c.x2, c.x), cy = lerp(c.y2, c.y);
+  const dx = lerp(ax, bx), dy = lerp(ay, by);
+  const ex = lerp(bx, cx), ey = lerp(by, cy);
+  const mx = lerp(dx, ex), my = lerp(dy, ey);
+  return {
+    left: { cmd: 'C', x1: ax, y1: ay, x2: dx, y2: dy, x: mx, y: my },
+    right: { cmd: 'C', x1: ex, y1: ey, x2: cx, y2: cy, x: c.x, y: c.y },
+  };
+}
+
+/**
+ * Alt+click ON A SEGMENT (CLAUDE.md item 1 — `nodesBendMarquee.ts` is the one caller,
+ * reusing the exact `segmentHit` geometry the bend gesture itself hit-tests against):
+ * insert a node at the PRECISE point clicked, identified segmentHit's way — `cmdIndex`
+ * is the command owning the segment (its own L/C/Z), `t` the parameter along it — rather
+ * than `insertNodeAfter`'s always-midpoint, node-relative split. A straight L (or the
+ * implicit Z closing line) splits by linear interpolation; a C splits by de Casteljau.
+ * The new node is marked smooth ('s'), matching `insertNodeAfter`'s existing convention
+ * (a split point is tangent-continuous by construction).
+ */
+export function insertNodeOnSegment(
+  part: RigPart, path: RigPath, cmdIndex: number, t: number,
+): boolean {
+  const cmds = parsePath(path.d);
+  const c = cmds[cmdIndex];
+  const p0 = segmentStart(cmds, cmdIndex);
+  if (!c || !p0) return false;
+  let nodeTypes = path.nodeTypes ? ensureNodeTypes(path) : null;
+  const ni = nodeIndexOf(cmds, cmdIndex);
+  if (c.cmd === 'L') {
+    cmds.splice(cmdIndex, 0, { cmd: 'L', x: p0.x + (c.x - p0.x) * t, y: p0.y + (c.y - p0.y) * t });
+  } else if (c.cmd === 'C') {
+    const { left, right } = splitCubicAt(p0, c, t);
+    cmds.splice(cmdIndex, 1, left, right);
+  } else if (c.cmd === 'Z') {
+    const s0 = subpathStart(cmds, cmdIndex);
+    if (!s0) return false;
+    cmds.splice(cmdIndex, 0, { cmd: 'L', x: p0.x + (s0.x - p0.x) * t, y: p0.y + (s0.y - p0.y) * t });
+  } else {
+    return false; // arcs aren't sampled by segmentHit, so this is never reached
+  }
+  if (nodeTypes) nodeTypes = nodeTypes.slice(0, ni) + 's' + nodeTypes.slice(ni);
+  applyStructuralEdit(part, path, { cmds, nodeTypes });
+  return true;
 }
 
 /** Delete every selected node (kept above each path's minimum). Main wires Delete. */
@@ -132,9 +188,14 @@ export function deleteSelectedNodes(): boolean {
     const cmds = parsePath(path.d);
     let list = path.nodeTypes ? ensureNodeTypes(path) : null;
     let touched = false;
-    // Highest index first so earlier indexes stay valid while splicing.
+    // Highest index first so earlier indexes stay valid while splicing. A seam pair
+    // (CLAUDE.md item 3) is skipped here too — same rule as the single-node delete
+    // above: it splits ONLY via the explicit delete-segment/open-path ops.
     for (const idx of [...indexes].sort((a, b) => b - a)) {
-      if (cmds.length <= 3 || !cmds[idx] || cmds[idx].cmd === 'M') continue;
+      if (
+        cmds.length <= 3 || !cmds[idx] || cmds[idx].cmd === 'M'
+        || seamPartnerIndex(cmds, idx) != null
+      ) continue;
       const ni = nodeIndexOf(cmds, idx);
       cmds.splice(idx, 1);
       if (list) list = list.slice(0, ni) + list.slice(ni + 1);
