@@ -91,7 +91,8 @@ export const FILE_EDIT_BINDINGS: ShortcutBinding[] = [
     run(ev) { ev.preventDefault(); void saveProject(); },
     help: {
       keys: 'Ctrl+S',
-      description: 'Quick-save the project (downloads a .rig.json; reuses the last filename after the first save)',
+      description: 'Quick-save the project — writes in place with no dialog once a file handle is ' +
+        'held (D1, Chromium), else downloads a .rig.json reusing the last filename after the first save',
       context: 'File',
     },
   },
@@ -106,9 +107,15 @@ export const FILE_EDIT_BINDINGS: ShortcutBinding[] = [
     patterns: [{ key: 'o', ctrl: true }],
     run(ev) {
       ev.preventDefault();
-      (document.getElementById('file-input') as HTMLInputElement | null)?.click();
+      // Proxy-clicks the toolbar button (ui/openFlow.ts's wireOpenButton) rather than
+      // duplicating its recents-dropdown-vs-plain-open branch here.
+      (document.getElementById('btn-open') as HTMLButtonElement | null)?.click();
     },
-    help: { keys: 'Ctrl+O', description: 'Open an SVG or a saved .rig.json project', context: 'File' },
+    help: {
+      keys: 'Ctrl+O',
+      description: 'Open an SVG or a saved .rig.json project, or pick from Recent files',
+      context: 'File',
+    },
   },
 
   // ---- Edit ----

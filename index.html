@@ -5,15 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Rig Studio</title>
     <link rel="stylesheet" href="/src/style.css" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon-192.png" />
+    <meta name="theme-color" content="#1e1e24" />
   </head>
   <body>
     <header id="toolbar">
       <strong class="brand">Rig Studio</strong>
       <div class="tb-group" role="group" aria-label="File">
         <button id="btn-new" title="Start a new blank project">New</button>
-        <button id="btn-open" title="SVG artwork or a saved .rig.json project">Open…</button>
+        <button id="btn-open" title="SVG artwork or a saved .rig.json project — or pick from Recent files">Open…</button>
         <button id="btn-sample" title="Load the bundled sample character">Load sample</button>
-        <button id="btn-save" title="Ctrl+S — quick-save, reusing the last filename">Save project</button>
+        <button id="btn-save" title="Ctrl+S — quick-save (writes in place once a file handle is held)">Save project</button>
         <button id="btn-save-as" title="Ctrl+Shift+S — always asks for a filename">Save As…</button>
       </div>
       <div class="tb-group" role="group" aria-label="History">
@@ -32,7 +35,6 @@
         <button id="btn-mode-animate">Animate</button>
       </div>
       <button id="btn-help" class="icon-btn" title="Keyboard shortcuts (?)">?</button>
-      <input id="file-input" type="file" accept=".svg,.json" hidden />
     </header>
     <main id="layout">
       <aside id="layers" aria-label="Layers"></aside>

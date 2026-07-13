@@ -23,13 +23,14 @@ import { buildPathContextMenu } from './ui/pathActions';
 import { download } from './ui/download';
 import { exportPngFlow, exportSvgFlow, canExportImage } from './ui/imageExport';
 import { buildEmptyState } from './ui/emptyState';
+import { wireOpenButton } from './ui/openFlow';
+import './pwa';
 
 const layersEl = document.getElementById('layers')!;
 const canvasEl = document.getElementById('canvas')!;
 const canvasToolsEl = document.getElementById('canvas-tools')!;
 const inspectorEl = document.getElementById('inspector')!;
 const timelineEl = document.getElementById('timeline')!;
-const fileInput = document.getElementById('file-input') as HTMLInputElement;
 
 const AUTOSAVE_KEY = 'rig-studio-autosave';
 
@@ -51,6 +52,8 @@ function afterDocReplaced(): void {
   state.activeClipIndex = 0;
   state.currentTime = 0;
   state.playing = false;
+  state.projectFileHandle = null; // D1: a fresh/replaced doc has no on-disk file yet —
+  // openFlow.ts re-establishes it right after for a project (.json) open.
   clearKeySelection();
   clearGroupEntry(); // entered-group ids from the old doc don't resolve in the new one
   cancelBonePlacement(); // an armed placement mid-gesture makes no sense across a swap
@@ -113,16 +116,12 @@ async function newProject(): Promise<void> {
 }
 document.getElementById('btn-new')!.onclick = () => { void newProject(); };
 
-document.getElementById('btn-open')!.onclick = () => fileInput.click();
-fileInput.onchange = async () => {
-  const file = fileInput.files?.[0];
-  if (!file) return;
-  if (!(await confirmReplaceIfDirty())) { fileInput.value = ''; return; }
-  const text = await file.text();
-  if (/\.json$/i.test(file.name)) loadProjectText(text);
-  else loadSvgText(text, file.name);
-  fileInput.value = '';
-};
+// D1: the storage interface (io/storage) owns file picking — no page-level <input
+// type=file> to wire up (ui/openFlow.ts's downloadFallbackStorage creates its own
+// transient one per call, decoupling the picker from any specific page markup).
+wireOpenButton(document.getElementById('btn-open') as HTMLButtonElement, {
+  confirmReplaceIfDirty, loadProjectText, loadSvgText,
+});
 
 document.getElementById('btn-sample')!.onclick = async () => {
   if (!(await confirmReplaceIfDirty())) return;

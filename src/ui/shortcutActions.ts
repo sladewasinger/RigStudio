@@ -10,7 +10,7 @@ import { state, notify, markClean, serializeDoc, EditorMode } from '../core/mode
 import { renderPose } from '../view';
 import { clearKeySelection } from '../timeline/timeline';
 import { dialog } from './dialogs';
-import { download } from './download';
+import { getProjectStorage, addRecent } from '../io/storage';
 
 /** Tab's action, and the Setup/Animate toolbar buttons'. */
 export function setEditorMode(mode: EditorMode): void {
@@ -24,12 +24,21 @@ export function setEditorMode(mode: EditorMode): void {
 }
 
 /**
- * Quick-save vs Save As (Category B item 3): the last filename actually saved under is
- * remembered per DOC NAME (simplest keying choice — matches autosave's single global
- * slot in spirit; a project renamed via "Save As" naturally gets its own remembered
- * slot next time). Browser downloads can't overwrite a real file on disk (no File
- * System Access handle) — this is filename MEMORY only, so Ctrl+S doesn't re-prompt
- * every time; a genuine "save over the same file" arrives with D1's storage layer.
+ * Quick-save vs Save As (Category B item 3, superseded in its FS-Access-capable form by
+ * D1 — ROADMAP.md "Desktop / real file access"): PRECEDENCE, highest first —
+ *   1. a live `state.projectFileHandle` + `ProjectStorage.supportsFileHandles`: Ctrl+S
+ *      writes straight through the handle, no dialog at all (real overwrite-in-place).
+ *   2. `supportsFileHandles` but no handle yet (first save this session, or the doc was
+ *      never opened from a real file): the native `showSaveFilePicker` handles BOTH
+ *      naming and permission — no in-app dialog needed either.
+ *   3. no File System Access support (Firefox/Safari): the pre-D1 filename-MEMORY
+ *      fallback — the last filename actually saved under is remembered per DOC NAME in
+ *      localStorage (simplest keying choice, matches autosave's single global slot in
+ *      spirit), so Ctrl+S only prompts the FIRST time a given doc name is saved.
+ * Autosave (main.ts, localStorage, unconditional) stays the crash net underneath all
+ * three — it never competes with any of this, it just never loses the in-memory doc.
+ * Ctrl+Shift+S (`saveProjectAs` below) always takes tier 2's picker (or tier 3's prompt)
+ * regardless of an existing handle — "Save As" always asks, D1 or not.
  */
 const LAST_FILENAME_PREFIX = 'rig-studio-last-filename:';
 
@@ -42,6 +51,29 @@ async function doSave(forcePrompt: boolean): Promise<void> {
     await dialog.alert('Nothing to save yet — import an SVG first.');
     return;
   }
+  const storage = getProjectStorage();
+  const text = serializeDoc(state.doc);
+
+  if (!forcePrompt && state.projectFileHandle && storage.supportsFileHandles) {
+    const res = await storage.saveProject(text, state.projectFileHandle);
+    if (!res) return;
+    state.projectFileHandle = res.handle ?? state.projectFileHandle;
+    void addRecent(res.name, res.handle);
+    markClean();
+    notify();
+    return;
+  }
+
+  if (storage.supportsFileHandles) {
+    const res = await storage.saveProjectAs(text, `${state.doc.name}.rig.json`);
+    if (!res) return; // cancelled
+    state.projectFileHandle = res.handle ?? null;
+    void addRecent(res.name, res.handle);
+    markClean();
+    notify();
+    return;
+  }
+
   const key = lastFilenameKey(state.doc.name);
   const remembered = localStorage.getItem(key);
   let filename = remembered;
@@ -49,8 +81,10 @@ async function doSave(forcePrompt: boolean): Promise<void> {
     filename = await dialog.prompt('Save project as', remembered ?? `${state.doc.name}.rig.json`);
     if (!filename) return;
   }
-  download(filename!, serializeDoc(state.doc), 'application/json');
+  const res = await storage.saveProjectAs(text, filename!);
+  if (!res) return;
   localStorage.setItem(key, filename!);
+  void addRecent(res.name);
   markClean(); // the download completed — nothing left unsaved
   notify();
 }

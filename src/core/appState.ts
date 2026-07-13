@@ -80,6 +80,18 @@ export interface AppState {
    * a false negative). Never serialized into a project, never persisted.
    */
   dirty: boolean;
+  /**
+   * D1 (ROADMAP.md "Desktop / real file access"): the File System Access API handle for
+   * the file the CURRENT project was opened from or last saved to — set by
+   * `ui/openFlow.ts`'s open flow and `ui/shortcutActions.ts`'s save flow, cleared on
+   * every doc replace (main.ts's `afterDocReplaced`). Enables Ctrl+S to write IN PLACE
+   * with no dialog when `io/storage`'s active `ProjectStorage.supportsFileHandles` is
+   * true. A handle is a live OS-file capability, not project data — never serialized
+   * into a project — and never persisted directly to localStorage (see
+   * `io/storage/handleStore.ts` for the separate IndexedDB persistence backing the
+   * recent-files reopen flow instead).
+   */
+  projectFileHandle: FileSystemFileHandle | null;
 }
 
 /** localStorage key for the snapping preference (a UI setting, not project data). */
@@ -123,6 +135,7 @@ export const state: AppState = {
   freezeMode: false,
   cleanPreview: false,
   dirty: false,
+  projectFileHandle: null,
 };
 
 /** Toggle freeze (origin-editing) mode. App state only — never serialized or persisted. */

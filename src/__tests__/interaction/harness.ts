@@ -29,6 +29,7 @@ import {
 import { resetHistory } from '../../core/history';
 import { importSvg } from '../../io/importSvg';
 import { Mat, matrixOfTransform } from '../../geometry/transforms';
+import { setProjectStorageForTest, downloadFallbackStorage } from '../../io/storage';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -42,9 +43,9 @@ export const INDEX_BODY = `
     <strong class="brand">Rig Studio</strong>
     <div class="tb-group" role="group" aria-label="File">
       <button id="btn-new" title="Start a new blank project">New</button>
-      <button id="btn-open" title="SVG artwork or a saved .rig.json project">Open…</button>
+      <button id="btn-open" title="SVG artwork or a saved .rig.json project — or pick from Recent files">Open…</button>
       <button id="btn-sample" title="Load the bundled sample character">Load sample</button>
-      <button id="btn-save" title="Ctrl+S — quick-save, reusing the last filename">Save project</button>
+      <button id="btn-save" title="Ctrl+S — quick-save (writes in place once a file handle is held)">Save project</button>
       <button id="btn-save-as" title="Ctrl+Shift+S — always asks for a filename">Save As…</button>
     </div>
     <div class="tb-group" role="group" aria-label="History">
@@ -63,7 +64,6 @@ export const INDEX_BODY = `
       <button id="btn-mode-animate">Animate</button>
     </div>
     <button id="btn-help" class="icon-btn" title="Keyboard shortcuts (?)">?</button>
-    <input id="file-input" type="file" accept=".svg,.json" hidden />
   </header>
   <main id="layout">
     <aside id="layers" aria-label="Layers"></aside>
@@ -123,6 +123,13 @@ export function bootRig(): Promise<void> {
   if (bootPromise) return bootPromise;
   bootPromise = (async () => {
     localStorage.clear();
+    // D1: every interaction test defaults to the REAL download-fallback ProjectStorage
+    // (not a mock) — headless Chromium exposes showOpenFilePicker/showSaveFilePicker but
+    // can never dismiss the native dialog they open, so no test may reach the real
+    // fileSystemAccessStorage. Individual scenarios that need to exercise the handle-
+    // based flow inject a fake via the same seam (resetRig below restores this default
+    // before each test, so a fake set by one test can't leak into the next).
+    setProjectStorageForTest(downloadFallbackStorage);
     document.body.innerHTML = INDEX_BODY;
     await import('../../main');
     (document.getElementById('btn-sample') as HTMLButtonElement).click();
@@ -169,6 +176,7 @@ export function resetRig(): void {
   state.currentTime = 0;
   state.activeClipIndex = 0;
   state.playing = false;
+  setProjectStorageForTest(downloadFallbackStorage); // undo any fake a prior test injected
   hook().loadProjectText(pristine); // rebuilds canvas, resets view + history, notifies
 }
 
