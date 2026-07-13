@@ -44,6 +44,12 @@ from the console; `window.__smPanel` drives the state-machine editor determinist
 - **Self-documenting code**: names over comments. Comments exist only for
   constraints the code itself can't express (invariants, hard-learned traps,
   "why", cross-file coupling) — not to narrate what a line already says.
+- **Spell names out — no abbreviations** (user ruling 2026-07-12, after a wave
+  proposed `layersDnd.ts`): file, module, and exported-symbol names use full
+  words in the repo's camelCase filename convention — `layersDragAndDrop.ts`,
+  never `layersDnd.ts`/`Mgr`/`Util`/`Ctx`-style contractions in NAMES.
+  (Established local variable idioms inside a file, like the `ctx` object,
+  are fine — this rule is about names a reader encounters cold.)
 - **Small, focused files**: ~200 lines is a smell threshold, not a hard limit.
   A file creeping past it is a prompt to ask whether it's doing two jobs.
   There are NO permanent "documented exceptions" anymore (user ruling
