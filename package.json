@@ -5,7 +5,8 @@
   "type": "module",
   "description": "Browser-based 2D SVG rigging and animation editor that exports Jetpack Compose rig code",
   "bin": {
-    "rig-studio": "src/headless/bin.mjs"
+    "rig-studio": "src/headless/bin.mjs",
+    "rig-studio-mcp": "src/mcp/bin.mjs"
   },
   "scripts": {
     "dev": "vite",
@@ -15,12 +16,15 @@
     "test:interaction": "vitest run --project interaction",
     "export:take-pill": "vitest run --config scripts/exportPipTakePill.config.ts",
     "rig": "tsx src/headless/cli.ts",
+    "mcp": "tsx src/mcp/server.ts",
     "pages": "vite build --outDir dist --base=/RigStudio/"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@resvg/resvg-js": "^2.6.2",
-    "jsdom": "^29.1.1"
+    "jsdom": "^29.1.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@rive-app/canvas": "^2.38.5",

@@ -1,18 +1,21 @@
 /**
- * H1a boundary test: `src/headless/`'s module graph must never reach `src/view`,
- * `src/panels`, `src/timeline`, or `src/ui` — those folders are DOM/canvas-coupled,
- * and the headless package exists precisely so agents/scripts can use the rig model
- * and exporters without dragging the editor along (see `src/headless/index.ts`'s
- * header). Walks real import specifiers from every `src/headless/**\/*.ts` file,
- * resolving relative imports on disk (same spirit as `architecture.test.ts`'s
- * filesystem-only approach — no bundler/type info needed for this check).
+ * H1a/H2 boundary test: neither `src/headless/`'s nor `src/mcp/`'s module graph may ever
+ * reach `src/view`, `src/panels`, `src/timeline`, or `src/ui` — those folders are
+ * DOM/canvas-coupled, and both the headless package and the MCP server exist precisely so
+ * agents/scripts can use the rig model and exporters without dragging the editor along
+ * (see `src/headless/index.ts`'s and `src/mcp/createServer.ts`'s headers). Walks real
+ * import specifiers from every file under each root, resolving relative imports on disk
+ * (same spirit as `architecture.test.ts`'s filesystem-only approach — no bundler/type
+ * info needed for this check). The walk is ROOT-SCOPED (each root's reachable set is
+ * checked independently, starting only from that root's own files) so a violation in one
+ * root's graph can't be masked by the other root happening to already be clean.
  */
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const SRC = join(__dirname, '..');
-const HEADLESS = join(SRC, 'headless');
+const ROOTS = [join(SRC, 'headless'), join(SRC, 'mcp')];
 const FORBIDDEN = new Set(['view', 'panels', 'timeline', 'ui']);
 
 function listTsFiles(dir: string): string[] {
@@ -49,33 +52,37 @@ function resolveRelative(fromFile: string, spec: string): string | null {
 }
 
 describe('headless boundary: never reaches view/panels/timeline/ui', () => {
-  it('the whole reachable module graph from src/headless/ stays out of the editor folders', () => {
-    const visited = new Set<string>();
-    const queue = listTsFiles(HEADLESS);
-    const violations: string[] = [];
+  for (const root of ROOTS) {
+    const rootName = relative(SRC, root).split(sep).join('/');
 
-    while (queue.length > 0) {
-      const file = queue.pop()!;
-      if (visited.has(file)) continue;
-      visited.add(file);
+    it(`the whole reachable module graph from src/${rootName}/ stays out of the editor folders`, () => {
+      const visited = new Set<string>();
+      const queue = listTsFiles(root);
+      const violations: string[] = [];
 
-      const rel = relative(SRC, file).split(sep).join('/');
-      const topFolder = rel.split('/')[0];
-      if (FORBIDDEN.has(topFolder)) {
-        violations.push(rel);
-        continue;
+      while (queue.length > 0) {
+        const file = queue.pop()!;
+        if (visited.has(file)) continue;
+        visited.add(file);
+
+        const rel = relative(SRC, file).split(sep).join('/');
+        const topFolder = rel.split('/')[0];
+        if (FORBIDDEN.has(topFolder)) {
+          violations.push(rel);
+          continue;
+        }
+        for (const spec of importSpecifiers(file)) {
+          const resolved = resolveRelative(file, spec);
+          if (resolved && !visited.has(resolved)) queue.push(resolved);
+        }
       }
-      for (const spec of importSpecifiers(file)) {
-        const resolved = resolveRelative(file, spec);
-        if (resolved && !visited.has(resolved)) queue.push(resolved);
-      }
-    }
 
-    expect(violations, violations.join('\n')).toEqual([]);
-    // Sanity: the walk actually left src/headless/ and pulled in core/geometry/io —
-    // an empty or headless-only visited set would make the assertion above vacuous.
-    const reachedOutside = [...visited].some((f) => !f.startsWith(HEADLESS));
-    expect(reachedOutside).toBe(true);
-    expect(visited.size).toBeGreaterThan(15);
-  });
+      expect(violations, violations.join('\n')).toEqual([]);
+      // Sanity: the walk actually left the root and pulled in core/geometry/io — an
+      // empty or root-only visited set would make the assertion above vacuous.
+      const reachedOutside = [...visited].some((f) => !f.startsWith(root));
+      expect(reachedOutside).toBe(true);
+      expect(visited.size).toBeGreaterThan(15);
+    });
+  }
 });

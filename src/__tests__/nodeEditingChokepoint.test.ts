@@ -5,12 +5,17 @@
  * alone. Two independent, complementary filesystem/regex checks, same spirit as
  * `headlessBoundary.test.ts` (no bundler/type info needed):
  *
- *  1. No file outside `src/view/nodeEditing/` (nor the single documented back-compat
- *     coercion in `core/serialization.ts`'s normalizeDoc, which nulls out a corrupt
- *     `nodeTypes` value read from an old/malformed project file on LOAD — not a live
- *     edit, so there's no path-command array to keep it in lockstep with) writes
- *     `.nodeTypes =` at all. This is the literal ask: "no other code path writes
- *     nodeTypes directly."
+ *  1. No file outside `src/view/nodeEditing/` (nor the two documented exceptions below)
+ *     writes `.nodeTypes =` at all. This is the literal ask: "no other code path writes
+ *     nodeTypes directly." The two allowlisted files: `core/serialization.ts`'s
+ *     normalizeDoc nulls out a corrupt `nodeTypes` value read from an old/malformed
+ *     project file on LOAD — not a live edit, so there's no path-command array to keep it
+ *     in lockstep with; `mcp/bindHeadless.ts` (ROADMAP H2) is a narrow, DOCUMENTED port of
+ *     `view/nodeEditing/structural.ts`'s `spliceNodeTypesForBake` (+ `dragMath.ts`'s
+ *     `ensureNodeTypes`) for `src/mcp/`, which may never import `src/view` (see
+ *     `headlessBoundary.test.ts`) — the editor's own `view/rigOpsBind.ts` reaches the
+ *     SAME chokepoint by CALLING the real `spliceNodeTypesForBake`, which this file would
+ *     too if it could; it keeps the identical lockstep math instead because it can't.
  *  2. `dropSkinOverridesForPath` — the override-drop half of the chokepoint's bundle —
  *     is called from nowhere except inside `view/nodeEditing/` (its own definition in
  *     `core/boneOps.ts` doesn't count as a call site). Anything else calling it ad hoc
@@ -29,9 +34,8 @@ function isNodeEditingModule(rel: string): boolean {
   return rel === 'view/nodeEditing.ts' || rel.startsWith('view/nodeEditing/');
 }
 
-// The one documented load-time back-compat coercion outside nodeEditing: normalizeDoc
-// nulls a malformed nodeTypes value coming off disk. Not a structural edit.
-const NODE_TYPES_WRITE_ALLOWLIST = new Set(['core/serialization.ts']);
+// The two documented exceptions outside nodeEditing — see the header comment above.
+const NODE_TYPES_WRITE_ALLOWLIST = new Set(['core/serialization.ts', 'mcp/bindHeadless.ts']);
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
