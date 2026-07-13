@@ -34,6 +34,15 @@ records them). Always re-run gates yourself after an agent reports green.
   for the state-machine editor, `window.__aiPreview` in interaction tests).
 - Load `public/PIP_MASTER.svg` via "Load sample" for UI verification. The
   nested-import fixture is `girl_example.svg` (test asset only).
+- **WORKTREE agents (two real incidents, 2026-07-12)**: the worktree tooling
+  forks from a STALE base — every worktree brief needs a startup base check,
+  a `git reset --hard main` fallback (clean fork, nothing to lose), and a
+  `pwd`/`git worktree list` assertion (one agent's cwd silently flipped to
+  the main repo and its edits landed in another agent's tree). AND
+  `preview_start`'s dev server resolves to the MAIN repo's cwd — a worktree
+  agent using it live-tests the WRONG CODE. Worktree live verification must
+  run `npm run dev` via the shell INSIDE the worktree on a unique port and
+  point the browser tab there directly.
 
 ## Interaction-test rules (codified in the harness — use it)
 
