@@ -826,11 +826,9 @@ CLAUDE.md convention: "Think in named patterns, not conventions").
      no ctrl/meta/alt), registered + documented via the registry itself.
   2. **ai/claude.ts — DONE** (b36b048, folded into the bones-awareness wave):
      ai/prompts.ts extracted; claude.ts 489→289, off the grandfather list.
-  3. **timeline/graph.ts — REORGANIZE (cross-file)**: its pan/zoom is a
-     byte-for-byte algorithmic duplicate of panels/sm/graphCamera.ts kept in
-     sync only by "mirrors X" comments — extract one shared view-rect
-     zoom/pan module both consume. (view/camera.ts is related but has
-     deliberately different clamp semantics; not merged.)
+  3. **timeline/graph.ts — DONE** (572566c): geometry/viewRect.ts shared
+     kernel with old-formula oracle tests; graph.ts ceiling ratcheted down
+     to 387; view/camera.ts exclusion documented in the module header.
   4. **io/exportLottie.ts — cohesive as-is, ZERO test coverage**: test wave
      CANCELLED by user (2026-07-12) — Lottie's usefulness in this project is
      in question and the exporter MAY BE DELETED later; leave the code as-is
