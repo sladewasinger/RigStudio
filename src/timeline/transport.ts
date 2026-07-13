@@ -9,7 +9,7 @@ import { renderPose } from '../view';
 import { checkpoint } from '../core/history';
 import { stopPreview } from '../panels/smPanel';
 import { dialog } from '../ui/dialogs';
-import { tlCtx, PanelMode, div, button, movePlayheadTo } from './tlState';
+import { tlCtx, PanelMode, div, button, movePlayheadTo, formatTime, toggleTimeDisplay } from './tlState';
 
 /** Space-bar hook (from main.ts). */
 export function togglePlay(): void {
@@ -61,7 +61,7 @@ export function startPlayback(): void {
     const playhead = tlCtx.container.querySelector<HTMLElement>('.tl-playhead');
     if (playhead) playhead.style.left = `${(state.currentTime / clip.duration) * 100}%`;
     const timeLabel = tlCtx.container.querySelector<HTMLElement>('.tl-time');
-    if (timeLabel) timeLabel.textContent = `${Math.round(state.currentTime)} ms`;
+    if (timeLabel) timeLabel.textContent = formatTime(state.currentTime);
     tlCtx.rafId = requestAnimationFrame(step);
   };
   tlCtx.rafId = requestAnimationFrame(step);
@@ -133,7 +133,9 @@ export function buildTransportBar(doc: RigDoc, clip: Clip | null): HTMLElement {
   transportCluster.appendChild(fpsEl);
 
   const timeLabel = div('tl-time');
-  timeLabel.textContent = `${Math.round(state.currentTime)} ms`;
+  timeLabel.textContent = formatTime(state.currentTime);
+  timeLabel.title = 'Click to toggle ms / frames';
+  timeLabel.onclick = () => { toggleTimeDisplay(); tlCtx.rerender(); };
   transportCluster.appendChild(timeLabel);
 
   bar.appendChild(transportCluster);

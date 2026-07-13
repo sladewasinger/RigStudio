@@ -71,7 +71,7 @@
 import { Clip, RigDoc, RigPart, drawOrder, sampleKeyList, subtreeIds } from '../../core/model';
 import { Scene } from './writer';
 import {
-  FPS, INTERP_LINEAR, P_DRAWABLE_ID, P_DRAW_TARGET_ID, P_FRAME, P_INTERP_TYPE,
+  INTERP_LINEAR, P_DRAWABLE_ID, P_DRAW_TARGET_ID, P_FRAME, P_INTERP_TYPE,
   P_KEYFRAME_ID_VALUE, P_OBJECT_ID, P_PARENT_ID, P_PLACEMENT_VALUE, P_PROPERTY_KEY,
   PLACEMENT_AFTER, PLACEMENT_BEFORE, T_DRAW_RULES, T_DRAW_TARGET, T_KEYED_OBJECT,
   T_KEYED_PROPERTY, T_KEYFRAME_ID,
@@ -154,7 +154,7 @@ export interface ZPlanKey { frame: number; targetIndex: number }
  */
 export function planZDrawTargets(
   scene: Scene, doc: RigDoc, clip: Clip, part: RigPart, entry: DrawRulesEntry,
-  partShapeIndex: Map<string, number>, hiddenIds: Set<string>,
+  partShapeIndex: Map<string, number>, hiddenIds: Set<string>, fps: number,
 ): ZPlanKey[] {
   const track = clip.tracks.find((t) => t.target === part.id && t.channel === 'z');
   if (!track || track.keyframes.length === 0) return [];
@@ -189,7 +189,7 @@ export function planZDrawTargets(
     }
     if (!anchor) continue; // unresolvable instant (module doc rule 2) — hold, don't guess
     const targetIndex = targetFor(scene, entry, anchor.id, partShapeIndex.get(anchor.id)!, placement);
-    out.push({ frame: Math.round((t / 1000) * FPS), targetIndex });
+    out.push({ frame: Math.round((t / 1000) * fps), targetIndex });
   }
   return out;
 }

@@ -44,7 +44,8 @@ export const INDEX_BODY = `
       <button id="btn-new" title="Start a new blank project">New</button>
       <button id="btn-open" title="SVG artwork or a saved .rig.json project">Open…</button>
       <button id="btn-sample" title="Load the bundled sample character">Load sample</button>
-      <button id="btn-save" title="Download the project as JSON">Save project</button>
+      <button id="btn-save" title="Ctrl+S — quick-save, reusing the last filename">Save project</button>
+      <button id="btn-save-as" title="Ctrl+Shift+S — always asks for a filename">Save As…</button>
     </div>
     <div class="tb-group" role="group" aria-label="History">
       <button id="btn-undo" title="Ctrl+Z" disabled>&#x21B6; Undo</button>

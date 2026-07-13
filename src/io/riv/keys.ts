@@ -161,6 +161,10 @@ import { Easing, SMConditionOp, SMListener } from '../../core/model';
 
 // ---- Shared format constants ----
 
+/** Fallback animation fps when a doc carries no (or an invalid) `doc.fps` — matches the
+ *  pre-doc.fps hardcoded value, so every doc that never sets fps exports byte-identically
+ *  to before (Category B item 2: doc.fps threading, 2026-07-13). The real per-doc value
+ *  is resolved once in animation.ts's `emitAnimations` and threaded through from there. */
 export const FPS = 60;
 export const DEG2RAD = Math.PI / 180;
 

@@ -29,7 +29,7 @@
 
 import {
   state, notify, activeClip, EditorMode, canMoveSelectedInDrawOrder, moveSelectedInDrawOrder,
-  selectAllParts,
+  selectAllParts, selectPart, invertSelection,
 } from '../core/model';
 import { checkpoint, undo, redo } from '../core/history';
 import {
@@ -41,8 +41,16 @@ import {
   hasKeySelection,
 } from '../timeline/timeline';
 import { canDuplicateSelection, duplicateSelectedParts } from './actions';
-import { saveProject } from './shortcutActions';
+import { saveProject, saveProjectAs } from './shortcutActions';
 import { DELETE_HANDLERS, runCascade } from './shortcutCascades';
+
+/** Shared by selectNone/invertSelection below: both are pose-mode selection gestures,
+ *  same scope Ctrl+A's non-node branch uses — a no-op in node-editing (nodes have their
+ *  own Ctrl+A-driven select-all; "select none/invert of these NODES" is a separate,
+ *  unbuilt gesture — out of scope for this wave, see ROADMAP Category B item 4). */
+function inPoseSelectionScope(): boolean {
+  return !(state.editorMode === 'setup' && state.mode === 'nodes');
+}
 
 /** true = required, false = forbidden, undefined = not checked. */
 export type ModReq = boolean | undefined;
@@ -77,9 +85,21 @@ export const FILE_EDIT_BINDINGS: ShortcutBinding[] = [
   // ---- File ----
   {
     id: 'save',
-    patterns: [{ key: 's', ctrl: true }],
+    // Explicit shift:false (was unchecked pre-Category-B) — Ctrl+Shift+S is now the
+    // distinct saveAs entry below; this disambiguates the two signatures.
+    patterns: [{ key: 's', ctrl: true, shift: false }],
     run(ev) { ev.preventDefault(); void saveProject(); },
-    help: { keys: 'Ctrl+S', description: 'Save the project (downloads a .rig.json)', context: 'File' },
+    help: {
+      keys: 'Ctrl+S',
+      description: 'Quick-save the project (downloads a .rig.json; reuses the last filename after the first save)',
+      context: 'File',
+    },
+  },
+  {
+    id: 'saveAs',
+    patterns: [{ key: 's', ctrl: true, shift: true }],
+    run(ev) { ev.preventDefault(); void saveProjectAs(); },
+    help: { keys: 'Ctrl+Shift+S', description: 'Save the project As… — always asks for a filename', context: 'File' },
   },
   {
     id: 'open',
@@ -126,7 +146,9 @@ export const FILE_EDIT_BINDINGS: ShortcutBinding[] = [
   },
   {
     id: 'selectAll',
-    patterns: [{ key: 'a', ctrl: true }],
+    // Explicit shift:false (was unchecked pre-Category-B) — Ctrl+Shift+A is now the
+    // distinct selectNone entry below; this disambiguates the two signatures.
+    patterns: [{ key: 'a', ctrl: true, shift: false }],
     run(ev) {
       ev.preventDefault();
       // Node-editing mode selects nodes; Setup/Animate select every part (same
@@ -139,6 +161,39 @@ export const FILE_EDIT_BINDINGS: ShortcutBinding[] = [
     help: {
       keys: 'Ctrl+A',
       description: 'Select all — every part in Edit/Animate, or every node of the edited path in node-editing mode',
+      context: 'Edit',
+    },
+  },
+  {
+    id: 'selectNone',
+    patterns: [{ key: 'a', ctrl: true, shift: true }],
+    run(ev) {
+      if (!inPoseSelectionScope()) return; // node-editing has its own selection; out of scope here
+      ev.preventDefault();
+      selectPart(null);
+      notify();
+      renderPose();
+    },
+    help: {
+      keys: 'Ctrl+Shift+A',
+      description: 'Deselect all parts (Edit/Animate pose selection; a no-op in node-editing mode)',
+      context: 'Edit',
+    },
+  },
+  {
+    id: 'invertSelection',
+    patterns: [{ key: 'i', ctrl: true, shift: false, alt: false }],
+    run(ev) {
+      if (!inPoseSelectionScope()) return; // node-editing has its own selection; out of scope here
+      ev.preventDefault();
+      invertSelection();
+      notify();
+      renderPose();
+    },
+    help: {
+      keys: 'Ctrl+I',
+      description: 'Invert the part selection — every non-hidden part not currently selected ' +
+        '(Edit/Animate pose selection; a no-op in node-editing mode)',
       context: 'Edit',
     },
   },

@@ -18,6 +18,8 @@ import {
   wireDropTarget, wirePartRowDrag, wirePartRowDrop, wirePathRowDrag, wirePathRowDrop,
 } from './layersDragAndDrop';
 import { ensureLayersSplitter } from './layersResize';
+import { buildSearchBar, isDirectMatch, visiblePartIds } from './layersSearch';
+import { buildEmptyState } from '../ui/emptyState';
 
 /** layersDragAndDrop opens folders through this (the `expanded` set stays module-local). */
 const expandPart = (partId: string): void => { expanded.add(partId); };
@@ -51,9 +53,20 @@ function visiblePartOrder(): string[] {
 
 export function buildLayersPanel(el: HTMLElement): void {
   ensureLayersSplitter(el); // idempotent — sets up the width splitter once, at boot
+
+  // Search re-renders THIS function directly (not a full notify()) so live filtering
+  // stays cheap and self-contained; capture the search input's focus/caret first so a
+  // keystroke's own rebuild doesn't steal focus out from under the user.
+  const prevInput = el.querySelector<HTMLInputElement>('.layers-search input');
+  const hadFocus = document.activeElement === prevInput;
+  const caret = prevInput?.selectionStart ?? null;
+
   el.innerHTML = '<h2>Layers</h2>';
   const doc = state.doc;
-  if (!doc) return;
+  if (!doc) {
+    buildEmptyState(el, 'No document loaded — the layer tree will fill in once you open one.');
+    return;
+  }
 
   // Never hide the selection inside a collapsed branch (e.g. a freshly placed bone).
   const selected = selectedPart();
@@ -61,11 +74,14 @@ export function buildLayersPanel(el: HTMLElement): void {
     for (const ancestor of ancestorChain(selected)) expanded.add(ancestor.id);
   }
 
+  el.appendChild(buildSearchBar(() => buildLayersPanel(el)));
+  const visible = visiblePartIds(doc);
+
   const tree = document.createElement('ul');
   tree.className = 'layer-tree';
   // Topmost drawn part first, like every art tool.
-  const roots = [...doc.parts].reverse().filter((p) => !p.parentId);
-  for (const part of roots) tree.appendChild(partNode(part));
+  const roots = [...doc.parts].reverse().filter((p) => !p.parentId && (!visible || visible.has(p.id)));
+  for (const part of roots) tree.appendChild(partNode(part, visible));
   el.appendChild(tree);
 
   // Drop strip: drag a part here to detach it from its parent.
@@ -82,9 +98,15 @@ export function buildLayersPanel(el: HTMLElement): void {
     'Drag a path onto its siblings to reorder paint order, or onto another part to move ' +
     'it there (the artwork stays put). Double-click renames.';
   el.appendChild(hint);
+
+  if (hadFocus) {
+    const input = el.querySelector<HTMLInputElement>('.layers-search input');
+    input?.focus();
+    if (input && caret !== null) input.setSelectionRange(caret, caret);
+  }
 }
 
-function partNode(part: RigPart): HTMLElement {
+function partNode(part: RigPart, visible: Set<string> | null): HTMLElement {
   const doc = state.doc!;
   const li = document.createElement('li');
   const row = document.createElement('div');
@@ -98,9 +120,14 @@ function partNode(part: RigPart): HTMLElement {
   if (part.id === state.selectedPartId && !pathSelectedHere) row.classList.add('selected');
   else if (pathSelectedHere || state.selectedPartIds.includes(part.id)) row.classList.add('in-selection');
   if (part.hidden) row.classList.add('hidden-part');
+  if (isDirectMatch(part)) row.classList.add('search-match');
 
-  const isOpen = expanded.has(part.id);
-  const children = [...doc.parts].reverse().filter((p) => p.parentId === part.id);
+  // While a search is active, every visible row auto-expands (so a match is reachable
+  // without manual clicks) WITHOUT touching the persistent `expanded` Set — clearing the
+  // query restores whatever fold state the user had before searching, untouched.
+  const isOpen = expanded.has(part.id) || (visible !== null && visible.has(part.id));
+  const children = [...doc.parts].reverse()
+    .filter((p) => p.parentId === part.id && (!visible || visible.has(p.id)));
 
   const chevron = document.createElement('span');
   chevron.className = 'chevron';
@@ -212,7 +239,7 @@ function partNode(part: RigPart): HTMLElement {
   if (isOpen) {
     const kids = document.createElement('ul');
     kids.className = 'layer-children';
-    for (const child of children) kids.appendChild(partNode(child));
+    for (const child of children) kids.appendChild(partNode(child, visible));
     for (const path of [...part.paths].reverse()) {
       const pathLi = document.createElement('li');
       const pathRow = document.createElement('div');

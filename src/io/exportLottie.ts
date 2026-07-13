@@ -38,8 +38,6 @@ import {
 import { parsePath, pathToCubics } from '../geometry/paths';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
 
-const FR = 60;
-
 type JsonObj = Record<string, unknown>;
 
 /** Studio easings → cubic-bezier segment handles (o leaves the key, i arrives at the next). */
@@ -51,7 +49,7 @@ const EASING_BEZIER: Record<Easing, { o: [number, number]; i: [number, number] }
 };
 
 const rnd = (n: number): number => Number(n.toFixed(3));
-const toFrames = (ms: number): number => rnd((ms * FR) / 1000);
+const toFrames = (ms: number, fr: number): number => rnd((ms * fr) / 1000);
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 
 export function exportLottie(doc: RigDoc, clipIndex: number): string {
@@ -67,7 +65,8 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
   const frame = artboardFrame(doc);
   const ox = frame.x;
   const oy = frame.y;
-  const op = Math.max(1, Math.round((clip.duration / 1000) * FR));
+  const fr = doc.fps && doc.fps > 0 ? doc.fps : 60; // byte-identical fallback (see FPS's doc comment in io/riv/keys.ts)
+  const op = Math.max(1, Math.round((clip.duration / 1000) * fr));
   const trackOf = (target: string, channel: Channel): Track | undefined =>
     clip.tracks.find((t) => t.target === target && t.channel === channel);
 
@@ -82,9 +81,9 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
     ks: {
       o: { a: 0, k: 100 },
       r: { a: 0, k: 0 },
-      p: positionProp(rpx, rpx, rpy, rpy, trackOf('root', 'tx'), trackOf('root', 'ty')),
+      p: positionProp(rpx, rpx, rpy, rpy, trackOf('root', 'tx'), trackOf('root', 'ty'), fr),
       a: { a: 0, k: [rnd(rpx), rnd(rpy), 0] },
-      s: scaleProp(trackOf('root', 'sx'), trackOf('root', 'sy')),
+      s: scaleProp(trackOf('root', 'sx'), trackOf('root', 'sy'), fr),
     },
     ao: 0, ip: 0, op, st: 0, bm: 0,
   };
@@ -105,11 +104,11 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
     const ks = {
       o: { a: 0, k: 100 }, // opacity CHANNEL export deferred — see the module doc comment
       // Keyed values are ABSOLUTE; the rest pose only fills unkeyed channels.
-      r: scalarProp(0, part.rest.rotate, trackOf(part.id, 'rotate')),
+      r: scalarProp(0, part.rest.rotate, trackOf(part.id, 'rotate'), fr),
       p: positionProp(
         px, px + part.rest.tx,
         py, py + part.rest.ty,
-        trackOf(part.id, 'tx'), trackOf(part.id, 'ty'),
+        trackOf(part.id, 'tx'), trackOf(part.id, 'ty'), fr,
       ),
       a: { a: 0, k: [rnd(px), rnd(py), 0] },
       // Rest scale is baked into the geometry (see shapeGroup) so it scales along
@@ -132,7 +131,7 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
 
   const animation: JsonObj = {
     v: '5.7.0',
-    fr: FR,
+    fr,
     ip: 0,
     op,
     w: Math.round(frame.w),
@@ -160,12 +159,12 @@ function keysOf(track: Track | undefined): Keyframe[] {
  * key's easing (the studio stores easing on arrival; Lottie stores the handles on the
  * key the segment leaves).
  */
-function scalarProp(animBase: number, staticValue: number, track: Track | undefined): JsonObj {
+function scalarProp(animBase: number, staticValue: number, track: Track | undefined, fr: number): JsonObj {
   const keys = keysOf(track);
   if (keys.length === 0) return { a: 0, k: rnd(staticValue) };
   if (keys.length === 1) return { a: 0, k: rnd(animBase + keys[0].value) };
   const k = keys.map((key, idx) => {
-    const kf: JsonObj = { t: toFrames(key.time), s: [rnd(animBase + key.value)] };
+    const kf: JsonObj = { t: toFrames(key.time, fr), s: [rnd(animBase + key.value)] };
     if (idx < keys.length - 1) {
       const next = keys[idx + 1];
       if (next.bezier) {
@@ -191,7 +190,7 @@ function scalarProp(animBase: number, staticValue: number, track: Track | undefi
 function positionProp(
   animBaseX: number, staticX: number,
   animBaseY: number, staticY: number,
-  txTrack: Track | undefined, tyTrack: Track | undefined,
+  txTrack: Track | undefined, tyTrack: Track | undefined, fr: number,
 ): JsonObj {
   const txKeys = keysOf(txTrack);
   const tyKeys = keysOf(tyTrack);
@@ -202,8 +201,8 @@ function positionProp(
   }
   return {
     s: true,
-    x: scalarProp(animBaseX, staticX, txTrack),
-    y: scalarProp(animBaseY, staticY, tyTrack),
+    x: scalarProp(animBaseX, staticX, txTrack, fr),
+    y: scalarProp(animBaseY, staticY, tyTrack, fr),
   };
 }
 
@@ -258,7 +257,7 @@ function dimBezier(
  * way it splits position, so the sx/sy timelines are merged on the union of their key
  * times, sampling each channel exactly and carrying per-dimension bezier handles.
  */
-function scaleProp(sxTrack: Track | undefined, syTrack: Track | undefined): JsonObj {
+function scaleProp(sxTrack: Track | undefined, syTrack: Track | undefined, fr: number): JsonObj {
   const sxKeys = keysOf(sxTrack);
   const syKeys = keysOf(syTrack);
   const times = [...new Set([...sxKeys, ...syKeys].map((k) => k.time))].sort((a, b) => a - b);
@@ -272,7 +271,7 @@ function scaleProp(sxTrack: Track | undefined, syTrack: Track | undefined): Json
   }
   const k = times.map((t, idx) => {
     const [vx, vy] = at(t);
-    const kf: JsonObj = { t: toFrames(t), s: [rnd(vx), rnd(vy), 100] };
+    const kf: JsonObj = { t: toFrames(t, fr), s: [rnd(vx), rnd(vy), 100] };
     if (idx < times.length - 1) {
       const bx = dimBezier(sxKeys, t, times[idx + 1]);
       const by = dimBezier(syKeys, t, times[idx + 1]);

@@ -14,13 +14,17 @@ import { buildAlignSection } from './alignSection';
 import { buildNodeOpsSection } from './nodeOpsSection';
 import { buildPathSection, buildArtboardSection } from './objectSection';
 import { buildAiPanel } from '../ai';
+import { buildEmptyState } from '../../ui/emptyState';
 
 // ---- Inspector ----
 
 export function buildInspector(el: HTMLElement): void {
   el.innerHTML = '<h2>Inspector</h2>';
   const doc = state.doc;
-  if (!doc) return;
+  if (!doc) {
+    buildEmptyState(el, 'Nothing to inspect yet — open an SVG or a saved project first.');
+    return;
+  }
   const setup = state.editorMode === 'setup';
 
   // Canvas tool switch (node editing is a Setup activity).

@@ -57,6 +57,30 @@ export function isEffectivelyHidden(part: RigPart): boolean {
 }
 
 /**
+ * Invert the part selection (Ctrl+I, Category B item 4): every non-hidden part NOT
+ * currently selected, replacing the selection wholesale — the exact complement of
+ * `selectAllParts`'s "select every part". Scope: TOP-LEVEL selectable parts, i.e. all of
+ * `doc.parts` flat, the same target space `selectAllParts` already uses — group-like
+ * membership (`isGroupLike`) is a canvas CLICK-time affordance for resolving what a
+ * pointer press selects, not a stored grouping the model tracks, so inverting doesn't
+ * try to reconstruct or respect it beyond "a selected child stays independently
+ * selectable" (already true of the existing selection state). Hidden parts are excluded
+ * deliberately (unlike selectAllParts, which does no hidden filtering) — inverting is a
+ * "select what I probably want to work on next" gesture, and an invisible part is never
+ * that. Lives here (not appState.ts) because it needs `isEffectivelyHidden`, defined in
+ * this same file — appState.ts must not import this module back (partHierarchy already
+ * imports `state`/`selectPart` FROM appState.ts).
+ */
+export function invertSelection(): void {
+  if (!state.doc) return;
+  const current = new Set(state.selectedPartIds);
+  const next = state.doc.parts.filter((p) => !isEffectivelyHidden(p) && !current.has(p.id));
+  state.selectedPartIds = next.map((p) => p.id);
+  state.selectedPartId = state.selectedPartIds[state.selectedPartIds.length - 1] ?? null;
+  state.selectedPathId = null;
+}
+
+/**
  * Every id in `part`'s subtree: itself plus every recursive descendant, walked purely
  * through the `parentId` field — independent of `parts`' current ARRAY position, which is
  * the point: this stays correct even mid-repair, while `parts` is transiently non-

@@ -175,6 +175,43 @@ export function setupShell(): void {
   tlCtx.container.appendChild(tlCtx.bodyEl);
 }
 
+// ---- Time readout: ms <-> frames toggle (Category B item 2) ----
+
+/** Editor preference (like the panel-height splitter above), never doc state. */
+const TIME_DISPLAY_KEY = 'rig-studio-time-display-frames';
+
+function loadShowFrames(): boolean {
+  try {
+    return localStorage.getItem(TIME_DISPLAY_KEY) === 'true';
+  } catch {
+    return false; // no localStorage (tests/node) — default to ms
+  }
+}
+
+let showFrames = loadShowFrames();
+
+export function isFrameDisplay(): boolean {
+  return showFrames;
+}
+
+/** Flip the ms/frames readout mode and persist the choice. Callers re-render. */
+export function toggleTimeDisplay(): void {
+  showFrames = !showFrames;
+  try {
+    localStorage.setItem(TIME_DISPLAY_KEY, String(showFrames));
+  } catch {
+    /* persistence unavailable — keep the in-memory flag */
+  }
+}
+
+/** ms -> the readout string for the CURRENT mode: "123 ms" or "7f" (round(ms*fps/1000)
+ *  at doc.fps, falling back to 60 for a doc that predates the field / has none loaded). */
+export function formatTime(ms: number): string {
+  if (!showFrames) return `${Math.round(ms)} ms`;
+  const fps = state.doc?.fps ?? 60;
+  return `${Math.round((ms * fps) / 1000)}f`;
+}
+
 // ---- Playhead scrub utility (shared by the transport bar and keyframe lanes) ----
 
 /** Scrub to a time and refresh the playhead/readout without a full rebuild. */
@@ -183,7 +220,7 @@ export function movePlayheadTo(time: number, duration: number): void {
   const playhead = tlCtx.container.querySelector<HTMLElement>('.tl-playhead');
   if (playhead) playhead.style.left = `${(time / duration) * 100}%`;
   const timeLabel = tlCtx.container.querySelector<HTMLElement>('.tl-time');
-  if (timeLabel) timeLabel.textContent = `${Math.round(time)} ms`;
+  if (timeLabel) timeLabel.textContent = formatTime(time);
   renderPose();
 }
 

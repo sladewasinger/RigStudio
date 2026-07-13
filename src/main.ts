@@ -15,13 +15,14 @@ import { exportRiv } from './io/riv';
 import { stopPreview } from './panels/smPanel';
 import { undo, redo, canUndo, canRedo, resetHistory, setRestoreHandler } from './core/history';
 import { toggleHelp } from './ui/help';
-import { installShortcuts, setEditorMode, saveProject } from './ui/shortcuts';
+import { installShortcuts, setEditorMode, saveProject, saveProjectAs } from './ui/shortcuts';
 import { dialog } from './ui/dialogs';
 import { showContextMenu } from './ui/contextMenu';
 import { buildPartContextMenu } from './ui/actions';
 import { buildPathContextMenu } from './ui/pathActions';
 import { download } from './ui/download';
 import { exportPngFlow, exportSvgFlow, canExportImage } from './ui/imageExport';
+import { buildEmptyState } from './ui/emptyState';
 
 const layersEl = document.getElementById('layers')!;
 const canvasEl = document.getElementById('canvas')!;
@@ -134,9 +135,11 @@ document.getElementById('btn-sample')!.onclick = async () => {
 };
 
 // ---- Project save / autosave ----
-// saveProject (the toolbar Save button and Ctrl+S share it) lives in ./ui/shortcuts now.
+// saveProject/saveProjectAs (the toolbar Save/Save As buttons and Ctrl+S/Ctrl+Shift+S)
+// live in ./ui/shortcuts now.
 
 document.getElementById('btn-save')!.onclick = () => { void saveProject(); };
+document.getElementById('btn-save-as')!.onclick = () => { void saveProjectAs(); };
 
 let autosaveTimer = 0;
 function scheduleAutosave(): void {
@@ -322,6 +325,15 @@ subscribe(() => {
   buildInspector(inspectorEl);
   renderTimeline();
   scheduleAutosave();
+  // buildCanvas() (which populates #canvas for a real doc, clearing it first) only runs
+  // on doc replace/undo-redo, not on every notify() — so this is the one place that
+  // needs its own empty-state check rather than delegating to a panel's own build
+  // function. Cleared+rebuilt every notify() while doc stays null (cheap, idempotent) so
+  // repeated notifications never stack duplicate CTAs.
+  if (!state.doc) {
+    canvasEl.innerHTML = '';
+    buildEmptyState(canvasEl, 'No document loaded — open an SVG, load the sample, or start a new project.');
+  }
 });
 
 document.addEventListener('rig-play', () => {

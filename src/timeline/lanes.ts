@@ -6,7 +6,7 @@
 import { state, notify, deleteKeyframe, Track, Keyframe, Clip } from '../core/model';
 import { renderPose } from '../view';
 import { checkpoint } from '../core/history';
-import { tlCtx, div, movePlayheadTo, syncPartSelectionFromKeys } from './tlState';
+import { tlCtx, div, movePlayheadTo, syncPartSelectionFromKeys, formatTime } from './tlState';
 
 /** The whole lanes area: ruler + padding + one lane per track + padding, with marquee
  *  box-select wired across the block. */
@@ -27,7 +27,7 @@ export function buildLanesPanel(clip: Clip): HTMLElement {
     state.currentTime = Math.round(frac * clip.duration);
     playhead.style.left = `${frac * 100}%`;
     const timeEl = tlCtx.container.querySelector<HTMLElement>('.tl-time');
-    if (timeEl) timeEl.textContent = `${Math.round(state.currentTime)} ms`;
+    if (timeEl) timeEl.textContent = formatTime(state.currentTime);
     renderPose();
   };
   ruler.addEventListener('pointerdown', (ev) => {

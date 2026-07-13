@@ -255,6 +255,10 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
   // normalizeDoc) — seed disabled from the current viewBox so it's a pure no-op until
   // opted into. A present-but-corrupt rect (hand-edited file, non-positive w/h) falls
   // back to the viewBox per axis rather than getting dropped wholesale.
+  // Project frame rate: seed 60 (the exporters' old hardcoded constant) so an absent
+  // value round-trips byte-identically, and repair a hand-edited/corrupt one the same way.
+  if (!Number.isFinite(doc.fps) || doc.fps! <= 0) doc.fps = 60;
+
   ensureArtboard(doc);
   doc.artboard!.enabled = !!doc.artboard!.enabled;
   if (!Number.isFinite(doc.artboard!.x)) doc.artboard!.x = doc.viewBox.x;

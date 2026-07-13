@@ -23,6 +23,7 @@ import {
   groupParts,
   isCanonicalPartOrder,
   isEffectivelyHidden,
+  invertSelection,
   keyAt,
   movePartRelativeTo,
   moveSelectedInDrawOrder,
@@ -574,6 +575,52 @@ describe('selectAllParts', () => {
   it('no-ops without a document', () => {
     resetState(null);
     expect(() => selectAllParts()).not.toThrow();
+    expect(state.selectedPartIds).toEqual([]);
+  });
+});
+
+describe('invertSelection', () => {
+  it('selects every non-hidden part NOT currently selected', () => {
+    resetState(makeDoc([makePart('a'), makePart('b'), makePart('c')]));
+    selectPart('b');
+    invertSelection();
+    expect(state.selectedPartIds).toEqual(['a', 'c']);
+    expect(state.selectedPartId).toBe('c'); // last one primary, matches selectAllParts
+  });
+
+  it('excludes hidden parts (unlike selectAllParts, which does not filter them)', () => {
+    resetState(makeDoc([makePart('a'), makePart('b', { hidden: true }), makePart('c')]));
+    invertSelection();
+    expect(state.selectedPartIds).toEqual(['a', 'c']);
+  });
+
+  it('is a true involution on a two-part doc: invert twice restores the original selection', () => {
+    resetState(makeDoc([makePart('a'), makePart('b'), makePart('c')]));
+    selectPart('a');
+    invertSelection();
+    expect(state.selectedPartIds).toEqual(['b', 'c']);
+    invertSelection();
+    expect(state.selectedPartIds).toEqual(['a']);
+  });
+
+  it('selecting none then inverting selects everything non-hidden', () => {
+    resetState(makeDoc([makePart('a'), makePart('b')]));
+    selectPart(null);
+    invertSelection();
+    expect(state.selectedPartIds).toEqual(['a', 'b']);
+  });
+
+  it('clears the entered path', () => {
+    resetState(makeDoc([makePart('a'), makePart('b')]));
+    selectPart('a');
+    state.selectedPathId = 'path_1';
+    invertSelection();
+    expect(state.selectedPathId).toBeNull();
+  });
+
+  it('no-ops without a document', () => {
+    resetState(null);
+    expect(() => invertSelection()).not.toThrow();
     expect(state.selectedPartIds).toEqual([]);
   });
 });
@@ -1188,6 +1235,26 @@ describe('normalizeDoc', () => {
     // x/w/h were invalid -> viewBox (0,_,100,100); y (12) was valid -> kept.
     expect(out.artboard).toEqual({ enabled: true, x: 0, y: 12, w: 100, h: 100 });
   });
+
+  it('seeds an absent fps as 60 (back-compat: pre-doc.fps docs and fresh SVG imports)', () => {
+    const doc = makeDoc([makePart('p1')]);
+    delete (doc as { fps?: number }).fps;
+    expect(normalizeDoc(doc).fps).toBe(60);
+  });
+
+  it('leaves a well-formed fps untouched', () => {
+    const doc = makeDoc([makePart('p1')]);
+    doc.fps = 24;
+    expect(normalizeDoc(doc).fps).toBe(24);
+  });
+
+  it('repairs a non-finite or non-positive fps (hand-edited file) back to 60', () => {
+    for (const bad of [0, -30, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const doc = makeDoc([makePart('p1')]);
+      doc.fps = bad;
+      expect(normalizeDoc(doc).fps, `fps ${bad}`).toBe(60);
+    }
+  });
 });
 
 describe('draw order (z-order)', () => {
@@ -1448,6 +1515,9 @@ function maximalDoc(): RigDoc {
     // Enabled and deliberately offset/sized differently from the viewBox, so the round
     // trip proves the two rects are independent (not one derived from the other).
     artboard: { enabled: true, x: -10, y: -5, w: 140, h: 130 },
+    // Deliberately non-default (the normalizeDoc fallback is 60) so the round trip
+    // actually proves persistence rather than just re-deriving the same default.
+    fps: 30,
     rootPivot: { x: 50, y: 90 },
     // Draw order (doc.parts array order) is CANONICAL (CLAUDE.md "Layer order IS
     // z-order"): every part's own index precedes its whole, contiguous descendant block.

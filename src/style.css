@@ -351,6 +351,11 @@ input[type='number'] { width: 90px; }
 .layer-row.selected .layer-count { color: #1a1a1a; }
 .layer-row.path { color: var(--muted); font-size: 12px; }
 .layer-row.path .path-icon { width: 14px; text-align: center; color: var(--accent-2); flex: none; }
+.layer-row.search-match .layer-name { color: var(--accent-2); font-weight: 600; }
+
+/* Layers search/filter (Category B item 1) */
+.layers-search { margin-bottom: var(--sp-2); }
+.layers-search input { height: var(--ctrl-h-sm); }
 
 /* Layers eye (visibility toggle) */
 .layer-row.hidden-part { opacity: 0.55; }
@@ -383,6 +388,11 @@ input[type='number'] { width: 90px; }
 .unparent-zone.drop-target { border-color: var(--accent-2); color: var(--accent-2); }
 
 .hint { color: var(--muted); font-size: 12px; }
+
+/* Empty-state call-to-action (Category B item 5) */
+.empty-state { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); padding: var(--sp-3) var(--sp-2); }
+.empty-state-actions { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+
 .row { display: flex; gap: 6px; margin-bottom: var(--sp-2); }
 .field {
   display: flex;
@@ -426,7 +436,7 @@ input[type='number'] { width: 90px; }
 .tl-bar label { display: flex; gap: 6px; align-items: center; color: var(--muted); }
 .tl-bar input[type='number'] { width: 80px; }
 .tl-play { min-width: 40px; }
-.tl-time { color: var(--accent-2); min-width: 70px; text-align: right; font-weight: 600; }
+.tl-time { color: var(--accent-2); min-width: 70px; text-align: right; font-weight: 600; cursor: pointer; }
 
 .tl-lanes { position: relative; }
 .tl-ruler {

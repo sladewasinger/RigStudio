@@ -19,7 +19,7 @@ import { TOOLS_VIEW_BINDINGS } from './shortcutBindingsTools';
 
 export const REGISTRY: ShortcutBinding[] = [...FILE_EDIT_BINDINGS, ...TOOLS_VIEW_BINDINGS];
 
-export { setEditorMode, saveProject } from './shortcutActions';
+export { setEditorMode, saveProject, saveProjectAs } from './shortcutActions';
 export { DELETE_HANDLERS, ESCAPE_HANDLERS } from './shortcutCascades';
 export type { ShortcutBinding, KeyPattern, ShortcutHelp, ModReq } from './shortcutBindings';
 

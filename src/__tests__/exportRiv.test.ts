@@ -380,6 +380,39 @@ describe('exportRiv clip loop', () => {
   });
 });
 
+// ---- doc.fps threading (Category B item 2, 2026-07-13) ----
+
+describe('exportRiv doc.fps threading', () => {
+  it('an absent doc.fps exports byte-identically to an explicit fps: 60 (both fall back to the 60fps default)', () => {
+    const withoutField = exportRiv(pipDoc());
+    const withExplicit60 = exportRiv({ ...pipDoc(), fps: 60 });
+    expect(Array.from(withExplicit60)).toEqual(Array.from(withoutField));
+  });
+
+  it('fps: 30 changes the LinearAnimation fps property and scales every frame number', () => {
+    const doc = { ...pipDoc(), fps: 30 };
+    const d = decodeRiv(exportRiv(doc));
+    const idle = d.animations.find((a) => a.name === 'idle')!;
+    expect(idle.fps).toBe(30);
+    expect(idle.duration).toBe(30); // 1000ms @ 30fps (was 60 @ 60fps)
+    const wave = d.animations.find((a) => a.name === 'wave')!;
+    expect(wave.duration).toBe(24); // 800ms @ 30fps (was 48 @ 60fps)
+
+    const arm = d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'arm')!;
+    const armRot = idle.objects.find((k) => k.objectId === arm.index)!
+      .props.find((p) => p.propertyKey === PROP.ROTATION)!;
+    // Same keyframe times (0/500/1000ms) as the 60fps pin above, halved: 0/15/30.
+    expect(armRot.keyframes.map((k) => k.frame)).toEqual([0, 15, 30]);
+  });
+
+  it('a non-finite/non-positive doc.fps falls back to 60 (defensive — normalizeDoc should already repair it)', () => {
+    for (const bad of [0, -30, Number.NaN]) {
+      const bytes = exportRiv({ ...pipDoc(), fps: bad });
+      expect(Array.from(bytes), `fps ${bad}`).toEqual(Array.from(exportRiv(pipDoc())));
+    }
+  });
+});
+
 // ---- Draw order ----
 //
 // Rule pinned from rive-runtime/src/artboard.cpp: m_Drawables fills in file order,

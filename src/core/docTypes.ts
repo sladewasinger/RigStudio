@@ -239,6 +239,13 @@ export interface RigDoc {
   stateMachines?: StateMachine[];
   /** Optional page frame; absent on older docs and on freshly-imported SVGs. */
   artboard?: Artboard;
+  /**
+   * Project frame rate (both exporters' animation fps AND the timeline's frames
+   * readout). Optional so pre-existing/hand-built docs stay valid; normalizeDoc seeds
+   * it to 60 (matching the exporters' old hardcoded constant, so an absent value is
+   * byte-identical to before) and repairs a non-positive/non-finite value the same way.
+   */
+  fps?: number;
 }
 
 export const CHANNEL_DEFAULTS: Record<Channel, number> = {

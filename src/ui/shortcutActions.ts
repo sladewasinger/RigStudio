@@ -23,15 +23,46 @@ export function setEditorMode(mode: EditorMode): void {
   renderPose();
 }
 
-/** Ctrl+S's action, and the toolbar Save button's. */
-export async function saveProject(): Promise<void> {
+/**
+ * Quick-save vs Save As (Category B item 3): the last filename actually saved under is
+ * remembered per DOC NAME (simplest keying choice — matches autosave's single global
+ * slot in spirit; a project renamed via "Save As" naturally gets its own remembered
+ * slot next time). Browser downloads can't overwrite a real file on disk (no File
+ * System Access handle) — this is filename MEMORY only, so Ctrl+S doesn't re-prompt
+ * every time; a genuine "save over the same file" arrives with D1's storage layer.
+ */
+const LAST_FILENAME_PREFIX = 'rig-studio-last-filename:';
+
+function lastFilenameKey(docName: string): string {
+  return `${LAST_FILENAME_PREFIX}${docName}`;
+}
+
+async function doSave(forcePrompt: boolean): Promise<void> {
   if (!state.doc) {
     await dialog.alert('Nothing to save yet — import an SVG first.');
     return;
   }
-  const filename = await dialog.prompt('Save project as', `${state.doc.name}.rig.json`);
-  if (!filename) return;
-  download(filename, serializeDoc(state.doc), 'application/json');
+  const key = lastFilenameKey(state.doc.name);
+  const remembered = localStorage.getItem(key);
+  let filename = remembered;
+  if (forcePrompt || !remembered) {
+    filename = await dialog.prompt('Save project as', remembered ?? `${state.doc.name}.rig.json`);
+    if (!filename) return;
+  }
+  download(filename!, serializeDoc(state.doc), 'application/json');
+  localStorage.setItem(key, filename!);
   markClean(); // the download completed — nothing left unsaved
   notify();
+}
+
+/** Ctrl+S's action, and the toolbar Save button's: quick-save using the remembered
+ *  filename, only prompting the first time this doc name is saved. */
+export async function saveProject(): Promise<void> {
+  return doSave(false);
+}
+
+/** Ctrl+Shift+S's action, and the toolbar Save As button's: always prompts, and updates
+ *  the remembered filename to whatever was typed. */
+export async function saveProjectAs(): Promise<void> {
+  return doSave(true);
 }

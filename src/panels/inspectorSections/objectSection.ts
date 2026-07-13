@@ -60,6 +60,15 @@ export function buildArtboardSection(el: HTMLElement): void {
   // edit, so no checkpoint here.
   const ab = ensureArtboard(doc);
 
+  const docTitle = document.createElement('h3');
+  docTitle.textContent = 'Document';
+  el.appendChild(docTitle);
+  el.appendChild(numberField('fps', doc.fps ?? 60, (v) => {
+    checkpoint();
+    doc.fps = Math.max(1, Math.round(v));
+    notify(); // the timeline's frames readout reads doc.fps live
+  }, 1));
+
   const title = document.createElement('h3');
   title.textContent = 'Artboard';
   el.appendChild(title);

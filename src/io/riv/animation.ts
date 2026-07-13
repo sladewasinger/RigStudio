@@ -70,6 +70,11 @@ export function emitAnimations(
   drawRules: DrawRulesSetup,
   hiddenIds: Set<string>,
 ): void {
+  // Project frame rate (doc.fps): normalizeDoc always seeds it, but this exporter is a
+  // pure function of its `doc` PARAMETER (test fixtures and headless callers may hand it
+  // a raw, never-normalized doc — see scene.ts's effectivelyHiddenIds for the same
+  // rationale), so fall back to the FPS constant here too.
+  const fps = doc.fps && doc.fps > 0 ? doc.fps : FPS;
   const byId = new Map(doc.parts.map((p) => [p.id, p]));
 
   const interpCache = new Map<string, number>();
@@ -151,7 +156,7 @@ export function emitAnimations(
           if (bez) { interpType = INTERP_CUBIC; interpId = emitInterpolator(bez); }
         }
         return {
-          frame: toFrame(key.time), value: argb(target.hex, target.baseOpacity * opacity),
+          frame: toFrame(key.time, fps), value: argb(target.hex, target.baseOpacity * opacity),
           interpType, interpId,
         };
       }),
@@ -182,7 +187,7 @@ export function emitAnimations(
             interpId = emitInterpolator(bez);
           }
         }
-        return { frame: toFrame(key.time), value: raw, interpType, interpId };
+        return { frame: toFrame(key.time, fps), value: raw, interpType, interpId };
       });
       props.push({ objectId: objectIdOf(spec.target), propertyKey, keys });
     }
@@ -193,7 +198,7 @@ export function emitAnimations(
     for (const [partId, entry] of drawRules) {
       const part = byId.get(partId);
       if (!part) continue;
-      const keys = planZDrawTargets(scene, doc, clip, part, entry, partShapeIndex, hiddenIds);
+      const keys = planZDrawTargets(scene, doc, clip, part, entry, partShapeIndex, hiddenIds, fps);
       if (keys.length > 0) zPlans.push({ entry, keys });
     }
 
@@ -203,7 +208,7 @@ export function emitAnimations(
 
     return {
       name: clip.name,
-      duration: Math.max(1, Math.round((clip.duration / 1000) * FPS)),
+      duration: Math.max(1, Math.round((clip.duration / 1000) * fps)),
       // Rive parity: looping is a LinearAnimation property (loopValue), not a per-state
       // one — see Clip.loop's doc comment in model.ts. Default true (absent = looping).
       loop: clip.loop !== false,
@@ -215,7 +220,7 @@ export function emitAnimations(
   for (const plan of plans) {
     scene.begin(T_LINEAR_ANIM, false);
     scene.propString(P_ANIM_NAME, plan.name);
-    scene.propUint(P_FPS, FPS);
+    scene.propUint(P_FPS, fps);
     scene.propUint(P_DURATION, plan.duration);
     scene.propUint(P_LOOP, plan.loop ? 1 : 0); // 1 loop / 0 oneShot (loopValue table above)
     scene.end();
@@ -271,9 +276,9 @@ function keysOf(track: Track | undefined): Keyframe[] {
   return [...(track?.keyframes ?? [])].sort((a, b) => a.time - b.time);
 }
 
-/** ms -> integer frame at 60 fps. */
-export function toFrame(ms: number): number {
-  return Math.round((ms / 1000) * FPS);
+/** ms -> integer frame at `fps` (defaults to the 60fps fallback constant). */
+export function toFrame(ms: number, fps: number = FPS): number {
+  return Math.round((ms / 1000) * fps);
 }
 
 /**
