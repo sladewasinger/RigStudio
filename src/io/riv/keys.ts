@@ -120,6 +120,41 @@
  *     conditions AND with the exit-time gate). flags/exitTime are emitted ONLY when a
  *     transition leaving an ANIMATION state carries an exitFraction; every other transition
  *     omits both keys, so a doc without exit times exports byte-identically to before.
+ *
+ * DRAW ORDER (DrawRules/DrawTarget) + PER-KEYFRAME-TYPE KEYS (.riv export completions wave,
+ * 2026-07-13). Pinned from rive-runtime dev/defs (main branch) + src, fetched directly —
+ * see io/riv/drawRules.ts's header for the full mechanism writeup and citations.
+ *
+ *   Object (typeKey)   | def                            | notes
+ *   -------------------|--------------------------------|-------------------------------------
+ *   DrawTarget    = 48 | draw_target.json               | drawableId(119)/placementValue(120)
+ *   DrawRules     = 49 | draw_rules.json                | drawTargetId(121), ANIMATES
+ *   KeyFrameColor = 37 | animation/keyframe_color.json  | value(88); extends InterpolatingKeyFrame
+ *                      |                                | (frame/interpolationType/interpolatorId
+ *                      |                                | are the SAME 67/68/69 keys KeyFrameDouble
+ *                      |                                | uses) - real lerp per src/animation/
+ *                      |                                | keyframe_color.cpp's colorLerp, so custom
+ *                      |                                | bezier/easing works exactly like doubles.
+ *   KeyFrameId    = 50 | animation/keyframe_id.json     | value(122); src/animation/keyframe_id.cpp's
+ *                      |                                | apply()/applyInterpolation() BOTH hard-SET
+ *                      |                                | the frame's raw value regardless of
+ *                      |                                | interpolationType/mix - inherently a HOLD,
+ *                      |                                | matching this app's stepped `z` channel.
+ *
+ *   Property (propertyKey)     | owner def                     | type  | notes
+ *   ----------------------------|-------------------------------|-------|---------------------
+ *   drawableId     = 119 [U]    | draw_target.json              | Id    | DrawTarget's anchor
+ *   placementValue = 120 [U]    | draw_target.json              | uint  | DrawTargetPlacement enum
+ *   drawTargetId   = 121 [U]    | draw_rules.json               | Id    | ANIMATABLE; -1/missing
+ *                                |                               |       | = inactive (normal spot)
+ *   keyframeIdValue    = 122 [U]| animation/keyframe_id.json    | Id    | KeyFrameId.value
+ *   keyframeColorValue = 88 [C] | animation/keyframe_color.json | Color | KeyFrameColor.value
+ *
+ *   DrawTargetPlacement (include/rive/draw_target_placement.hpp): before=0, after=1. Given
+ *   this exporter's REVERSED shape-emission (first-in-file = topmost, see scene.ts's draw-
+ *   order comment) and the prev/next splice in src/artboard.cpp's Artboard::sortDrawOrder,
+ *   `before` renders the ruled group IN FRONT OF (more topmost than) its DrawTarget's anchor
+ *   and `after` renders it BEHIND - traced and documented in drawRules.ts.
  */
 
 import { Easing, SMConditionOp, SMListener } from '../../core/model';
@@ -144,6 +179,10 @@ export const T_LINEAR_ANIM = 31;
 export const T_KEYED_OBJECT = 25;
 export const T_KEYED_PROPERTY = 26;
 export const T_KEYFRAME_DOUBLE = 30;
+export const T_DRAW_TARGET = 48; // draw_target.json
+export const T_DRAW_RULES = 49; // draw_rules.json
+export const T_KEYFRAME_COLOR = 37; // animation/keyframe_color.json
+export const T_KEYFRAME_ID = 50; // animation/keyframe_id.json
 
 // State-machine typeKeys (animation/*.json). None of these consume an artboard
 // component index: like animations, they are added to the artboard's separate
@@ -200,6 +239,16 @@ export const P_IN_ROTATION = 84;
 export const P_IN_DISTANCE = 85;
 export const P_OUT_ROTATION = 86;
 export const P_OUT_DISTANCE = 87;
+export const P_KEYFRAME_COLOR_VALUE = 88; // [C] KeyFrameColor.value — NOT SolidColor.colorValue (37)
+export const P_DRAWABLE_ID = 119; // [U] DrawTarget.drawableId (Id)
+export const P_PLACEMENT_VALUE = 120; // [U] DrawTarget.placementValue (DrawTargetPlacement enum)
+export const P_DRAW_TARGET_ID = 121; // [U] DrawRules.drawTargetId (Id, ANIMATABLE)
+export const P_KEYFRAME_ID_VALUE = 122; // [U] KeyFrameId.value — NOT KeyFrameDouble.value (70)
+
+// DrawTargetPlacement (include/rive/draw_target_placement.hpp). See the header comment
+// above for the before=in-front / after=behind mapping under this exporter's conventions.
+export const PLACEMENT_BEFORE = 0;
+export const PLACEMENT_AFTER = 1;
 
 // State-machine propertyKeys.
 export const P_SM_NAME = 138; // [S] StateMachineComponent.name — machine/input names (addressed by name at runtime)
@@ -280,6 +329,11 @@ export const FIELD_TYPE: Record<number, number> = {
   [P_LISTENER_INPUT_ID]: F_UINT,
   [P_LISTENER_BOOL_VALUE]: F_UINT,
   [P_LISTENER_NUMBER_VALUE]: F_DOUBLE,
+  [P_KEYFRAME_COLOR_VALUE]: F_COLOR,
+  [P_DRAWABLE_ID]: F_UINT,
+  [P_PLACEMENT_VALUE]: F_UINT,
+  [P_DRAW_TARGET_ID]: F_UINT,
+  [P_KEYFRAME_ID_VALUE]: F_UINT,
 };
 
 // TransitionConditionOp enum (include/rive/animation/transition_condition_op.hpp).
@@ -317,3 +371,23 @@ export const EASING_CUBIC: Record<Exclude<Easing, 'linear'>, [number, number, nu
   easeOut: [0, 0, 0.58, 1],
   easeInOut: [0.42, 0, 0.58, 1],
 };
+
+/**
+ * #rgb / #rrggbb + opacity -> packed ARGB uint32 (0xAARRGGBB). Rive folds paint opacity
+ * into the SolidColor's alpha (there is no separate paint-opacity property). Unparseable
+ * colors fall back to opaque black. Lives here (not scene.ts) so both scene.ts (the static
+ * fold) and animation.ts (keyed opacity's per-frame color, drawRules.ts's neighbors) can
+ * import it without scene.ts <-> animation.ts import cycles.
+ */
+export function argb(value: string, opacity: number): number {
+  let hex = value.trim().replace(/^#/, '');
+  if (hex.length === 3) hex = hex.split('').map((ch) => ch + ch).join('');
+  let r = 0, g = 0, b = 0;
+  if (/^[0-9a-fA-F]{6}$/.test(hex)) {
+    r = parseInt(hex.slice(0, 2), 16);
+    g = parseInt(hex.slice(2, 4), 16);
+    b = parseInt(hex.slice(4, 6), 16);
+  }
+  const a = Math.round(Math.min(1, Math.max(0, opacity)) * 255);
+  return (((a << 24) | (r << 16) | (g << 8) | b) >>> 0);
+}

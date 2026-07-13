@@ -12,6 +12,8 @@ export const TYPE = {
   BACKBOARD: 23, ARTBOARD: 1, NODE: 2, SHAPE: 3, POINTS_PATH: 16, CUBIC_VERTEX: 6,
   FILL: 20, STROKE: 24, SOLID_COLOR: 18, CUBIC_INTERP: 28,
   LINEAR_ANIM: 31, KEYED_OBJECT: 25, KEYED_PROPERTY: 26, KEYFRAME_DOUBLE: 30,
+  // Draw order (.riv export completions wave).
+  DRAW_TARGET: 48, DRAW_RULES: 49, KEYFRAME_COLOR: 37, KEYFRAME_ID: 50,
   // State machine family (none consume an artboard index).
   STATE_MACHINE: 53, SM_LAYER: 57, SM_BOOL: 59, SM_NUMBER: 56, SM_TRIGGER: 58,
   ENTRY_STATE: 63, ANY_STATE: 62, EXIT_STATE: 64, ANIMATION_STATE: 61,
@@ -24,6 +26,8 @@ export const PROP = {
   THICKNESS: 47, OBJECT_ID: 51, PROPERTY_KEY: 53, ANIM_NAME: 55, FPS: 56, DURATION: 57, LOOP: 59,
   X1: 63, Y1: 64, X2: 65, Y2: 66, FRAME: 67, INTERP_TYPE: 68, INTERPOLATOR_ID: 69,
   VALUE: 70, IN_ROT: 84, IN_DIST: 85, OUT_ROT: 86, OUT_DIST: 87,
+  KEYFRAME_COLOR_VALUE: 88, DRAWABLE_ID: 119, PLACEMENT_VALUE: 120, DRAW_TARGET_ID: 121,
+  KEYFRAME_ID_VALUE: 122,
   // State machine family.
   SM_NAME: 138, SM_NUMBER_VALUE: 140, SM_BOOL_VALUE: 141, ANIMATION_ID: 149, STATE_TO_ID: 151,
   COND_INPUT_ID: 155, COND_OP: 156, COND_VALUE: 157, TRANS_DURATION: 158, TRANS_FLAGS: 152,
@@ -32,10 +36,13 @@ export const PROP = {
   LISTENER_BOOL_VALUE: 228, LISTENER_NUMBER_VALUE: 229,
 };
 // Component object typeKeys consume an artboard index (in read order); animation and
-// state-machine objects and the backboard do not.
+// state-machine objects and the backboard do not. DrawRules/DrawTarget DO consume one
+// (they're plain artboard components, per draw_rules.json/draw_target.json — see
+// io/riv/drawRules.ts's header) but KeyFrameId/KeyFrameColor, like KeyFrameDouble, don't.
 export const CONSUMES_INDEX = new Set([
   TYPE.ARTBOARD, TYPE.NODE, TYPE.SHAPE, TYPE.POINTS_PATH, TYPE.CUBIC_VERTEX,
   TYPE.FILL, TYPE.STROKE, TYPE.SOLID_COLOR, TYPE.CUBIC_INTERP,
+  TYPE.DRAW_TARGET, TYPE.DRAW_RULES,
 ]);
 
 // ---- Structural .riv decoder ----
@@ -161,10 +168,15 @@ export function decodeRiv(bytes: Uint8Array): Decoded {
     } else if (typeKey === TYPE.KEYED_PROPERTY) {
       curProp = { propertyKey: Number(props[PROP.PROPERTY_KEY] ?? 0), keyframes: [] };
       curKeyed!.props.push(curProp);
-    } else if (typeKey === TYPE.KEYFRAME_DOUBLE) {
+    } else if (
+      typeKey === TYPE.KEYFRAME_DOUBLE || typeKey === TYPE.KEYFRAME_ID || typeKey === TYPE.KEYFRAME_COLOR
+    ) {
+      // Same nesting (child of the most-recent KeyedProperty); only the "value" property
+      // key differs per keyframe type (double 70, id 122, color 88 — keys.ts's header).
+      const raw = props[PROP.VALUE] ?? props[PROP.KEYFRAME_ID_VALUE] ?? props[PROP.KEYFRAME_COLOR_VALUE];
       curProp!.keyframes.push({
         frame: Number(props[PROP.FRAME] ?? 0),
-        value: Number(props[PROP.VALUE] ?? 0),
+        value: Number(raw ?? 0),
         interpType: Number(props[PROP.INTERP_TYPE] ?? 0),
         interpId: props[PROP.INTERPOLATOR_ID] === undefined ? -1 : Number(props[PROP.INTERPOLATOR_ID]),
       });

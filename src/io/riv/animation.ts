@@ -5,23 +5,51 @@
  * emits one LinearAnimation per clip with its KeyedObject/KeyedProperty/KeyFrameDouble
  * tree. Keyed values are ABSOLUTE; a channel with no keyframes emits nothing here and
  * stays a static Node property (written by scene.ts) — rest fills only unkeyed channels.
+ * Hidden parts (`isEffectivelyHidden`) never enter channelSpecs at all, so no clip can
+ * accidentally key a Node/color that scene.ts never emitted.
  *
- * OPACITY CHANNEL (not fully mapped this wave): a keyed `opacity` channel / non-1
- * `RestPose.opacity` is SILENTLY IGNORED — channelSpecs below lists only
- * rotate/tx/ty/sx/sy, so no KeyedProperty is ever built for it, and no static Node
- * opacity property exists in the schema table (keys.ts) to write either. Real export
- * (Rive's Shape/Node don't carry opacity directly — it would need Feathering/opacity via
- * a Fill/Stroke alpha animation, or per-Shape visibility) is the next wave.
+ * OPACITY CHANNEL (export-completions wave, 2026-07-13): a keyed `opacity` channel
+ * animates each of the part's own Fill/Stroke SolidColor.colorValue (P_COLOR) via
+ * KeyFrameColor, NOT Node.opacity. Verified against rive-runtime (src/transform_
+ * component.cpp): TransformComponent::childOpacity() returns the already-composed
+ * m_RenderOpacity, so Node opacity CASCADES multiplicatively down the whole Node
+ * ancestor chain — every part's Node is a real nested child of its parent's Node here
+ * (scene.ts's parentId chain), so targeting Node.opacity would incorrectly dim a part's
+ * children too. This editor's opacity is explicitly NON-propagating
+ * (core/docTypes.ts's RestPose.opacity: "applied to the part's own drawn geometry only
+ * — does NOT propagate to children"), matching the LIVE canvas exactly (view/partDom.ts
+ * appends every part `<g>` as a FLAT SIBLING of one root group, never nested — SVG
+ * opacity inheritance never enters into it). Targeting the paint's own SolidColor alpha
+ * is cascade-free by construction (a paint never affects descendants) and reuses the
+ * exact "fold opacity into alpha" model rest opacity already uses (scene.ts's argb()
+ * calls) — no double-application: a keyed color KeyFrame HARD-SETS colorValue (src/
+ * animation/keyframe_color.cpp's applyColor, mix==1 -> CoreRegistry::setColor, a plain
+ * overwrite), it never multiplies against the static rest-folded alpha scene.ts wrote,
+ * exactly like every other keyed channel here overwrites its static Node property.
+ *
+ * DRAW ORDER (`z`) is delegated to drawRules.ts (DrawRules/DrawTarget + KeyFrameId) —
+ * see its header for the full mechanism; this file only plans+emits per clip.
  */
 
-import { Channel, Keyframe, RigDoc, Track } from '../../core/model';
+import { Channel, Clip, Keyframe, RigDoc, Track } from '../../core/model';
 import { Scene } from './writer';
+import { DrawRulesEntry, DrawRulesSetup, emitZKeyedProperty, planZDrawTargets, ZPlanKey } from './drawRules';
 import {
-  DEG2RAD, EASING_CUBIC, FPS, INTERP_CUBIC, INTERP_LINEAR, P_ANIM_NAME, P_DURATION, P_FPS,
-  P_FRAME, P_INTERP_TYPE, P_INTERPOLATOR_ID, P_LOOP, P_NODE_X, P_NODE_Y, P_OBJECT_ID,
-  P_PROPERTY_KEY, P_ROTATION, P_SCALE_X, P_SCALE_Y, P_VALUE, P_X1, P_X2, P_Y1, P_Y2,
-  T_CUBIC_INTERP, T_KEYED_OBJECT, T_KEYED_PROPERTY, T_KEYFRAME_DOUBLE, T_LINEAR_ANIM,
+  argb, DEG2RAD, EASING_CUBIC, FPS, INTERP_CUBIC, INTERP_LINEAR, P_ANIM_NAME, P_COLOR,
+  P_DURATION, P_FPS, P_FRAME, P_INTERP_TYPE, P_INTERPOLATOR_ID, P_KEYFRAME_COLOR_VALUE,
+  P_LOOP, P_NODE_X, P_NODE_Y, P_OBJECT_ID, P_PROPERTY_KEY, P_ROTATION, P_SCALE_X, P_SCALE_Y,
+  P_VALUE, P_X1, P_X2, P_Y1, P_Y2, T_CUBIC_INTERP, T_KEYED_OBJECT, T_KEYED_PROPERTY,
+  T_KEYFRAME_COLOR, T_KEYFRAME_DOUBLE, T_LINEAR_ANIM,
 } from './keys';
+
+/** One Fill or Stroke SolidColor a part owns (scene.ts's emitShape records these). */
+export interface OpacityColorTarget {
+  colorIndex: number;
+  hex: string;
+  /** The path's own fill-opacity/stroke-opacity — the multiplier the keyed part opacity
+   *  applies on top of, exactly mirroring the static rest-opacity fold in scene.ts. */
+  baseOpacity: number;
+}
 
 /**
  * Build the plan for every clip and emit it into `scene`: root first, then every part's
@@ -37,6 +65,10 @@ export function emitAnimations(
   rootIndex: number,
   rootBaseX: number,
   rootBaseY: number,
+  partShapeIndex: Map<string, number>,
+  opacityTargets: Map<string, OpacityColorTarget[]>,
+  drawRules: DrawRulesSetup,
+  hiddenIds: Set<string>,
 ): void {
   const byId = new Map(doc.parts.map((p) => [p.id, p]));
 
@@ -57,7 +89,12 @@ export function emitAnimations(
 
   interface PlanKey { frame: number; value: number; interpType: number; interpId: number }
   interface PlanProp { objectId: number; propertyKey: number; keys: PlanKey[] }
-  interface PlanClip { name: string; duration: number; loop: boolean; props: PlanProp[] }
+  interface ZPlan { entry: DrawRulesEntry; keys: ZPlanKey[] }
+  interface OpacityPlan { colorIndex: number; keys: PlanKey[] }
+  interface PlanClip {
+    name: string; duration: number; loop: boolean;
+    props: PlanProp[]; zPlans: ZPlan[]; opacityPlans: OpacityPlan[];
+  }
 
   // Canonical, deterministic per-target channel plan: [target, channel, propertyKey,
   // base offset, isAngle]. root first, then parts in doc order; fixed channel order.
@@ -75,6 +112,9 @@ export function emitAnimations(
     { target: 'root', channel: 'sy', propertyKey: P_SCALE_Y, base: 0, isAngle: false },
   ];
   for (const part of doc.parts) {
+    // Full exclusion (hidden-part export completions): a hidden part got no Node from
+    // scene.ts, so no clip may key any channel on it — see this file's header.
+    if (hiddenIds.has(part.id)) continue;
     const parent = part.parentId ? byId.get(part.parentId) ?? null : null;
     const parentRef = parent ? parent.pivot : doc.rootPivot;
     channelSpecs.push(
@@ -90,6 +130,33 @@ export function emitAnimations(
   }
   const objectIdOf = (target: string): number =>
     target === 'root' ? rootIndex : partIndex.get(target)!;
+
+  /** One part's keyed `opacity` -> a KeyFrameColor plan for EACH SolidColor it owns
+   *  (see this file's header for why the target is the paint, not Node.opacity). */
+  const buildOpacityPlans = (clip: Clip, partId: string): OpacityPlan[] => {
+    const targets = opacityTargets.get(partId);
+    if (!targets || targets.length === 0) return [];
+    const track = clip.tracks.find((t) => t.target === partId && t.channel === 'opacity');
+    const sorted = keysOf(track);
+    if (sorted.length === 0) return [];
+    return targets.map((target) => ({
+      colorIndex: target.colorIndex,
+      keys: sorted.map((key, i) => {
+        const opacity = Math.min(1, Math.max(0, key.value));
+        let interpType = INTERP_LINEAR;
+        let interpId = -1;
+        const next = sorted[i + 1];
+        if (next) {
+          const bez = cubicFor(next);
+          if (bez) { interpType = INTERP_CUBIC; interpId = emitInterpolator(bez); }
+        }
+        return {
+          frame: toFrame(key.time), value: argb(target.hex, target.baseOpacity * opacity),
+          interpType, interpId,
+        };
+      }),
+    }));
+  };
 
   const plans: PlanClip[] = doc.clips.map((clip) => {
     const props: PlanProp[] = [];
@@ -119,13 +186,28 @@ export function emitAnimations(
       });
       props.push({ objectId: objectIdOf(spec.target), propertyKey, keys });
     }
+
+    // Keyed draw order (z): one plan per part this doc gave DrawRules to (drawRules.ts
+    // filters/creates its own DrawTarget objects on demand — see its header).
+    const zPlans: ZPlan[] = [];
+    for (const [partId, entry] of drawRules) {
+      const part = byId.get(partId);
+      if (!part) continue;
+      const keys = planZDrawTargets(scene, doc, clip, part, entry, partShapeIndex, hiddenIds);
+      if (keys.length > 0) zPlans.push({ entry, keys });
+    }
+
+    // Keyed opacity: one plan per SolidColor owned by any part this clip keys opacity on.
+    const opacityPlans: OpacityPlan[] = [];
+    for (const partId of opacityTargets.keys()) opacityPlans.push(...buildOpacityPlans(clip, partId));
+
     return {
       name: clip.name,
       duration: Math.max(1, Math.round((clip.duration / 1000) * FPS)),
       // Rive parity: looping is a LinearAnimation property (loopValue), not a per-state
       // one — see Clip.loop's doc comment in model.ts. Default true (absent = looping).
       loop: clip.loop !== false,
-      props,
+      props, zPlans, opacityPlans,
     };
   });
 
@@ -153,6 +235,29 @@ export function emitAnimations(
         scene.propUint(P_INTERP_TYPE, k.interpType);
         if (k.interpId >= 0) scene.propUint(P_INTERPOLATOR_ID, k.interpId);
         scene.propDouble(P_VALUE, k.value);
+        scene.end();
+      }
+    }
+
+    // Keyed draw order: KeyedObject/KeyedProperty(drawTargetId)/KeyFrameId* (drawRules.ts).
+    for (const zp of plan.zPlans) emitZKeyedProperty(scene, zp.entry, zp.keys);
+
+    // Keyed opacity: KeyedObject/KeyedProperty(colorValue)/KeyFrameColor* per SolidColor.
+    for (const op of plan.opacityPlans) {
+      scene.begin(T_KEYED_OBJECT, false);
+      scene.propUint(P_OBJECT_ID, op.colorIndex);
+      scene.end();
+
+      scene.begin(T_KEYED_PROPERTY, false);
+      scene.propUint(P_PROPERTY_KEY, P_COLOR);
+      scene.end();
+
+      for (const k of op.keys) {
+        scene.begin(T_KEYFRAME_COLOR, false);
+        if (k.frame !== 0) scene.propUint(P_FRAME, k.frame);
+        scene.propUint(P_INTERP_TYPE, k.interpType);
+        if (k.interpId >= 0) scene.propUint(P_INTERPOLATOR_ID, k.interpId);
+        scene.propColor(P_KEYFRAME_COLOR_VALUE, k.value);
         scene.end();
       }
     }

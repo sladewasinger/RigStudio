@@ -302,6 +302,70 @@
         return { artboards: inst.artboardNames, animations };
       }
 
+      /**
+       * .riv EXPORT COMPLETIONS wave (2026-07-13): z draw order (DrawRules/DrawTarget),
+       * opacity keys, full hidden-part exclusion — all three at once. `hidden_part` has
+       * `hidden: true`; if it survived export it would show up as `ab.node('hidden_part')`.
+       * `mover`'s z track (0 -> 100 at 500ms) drives it in front of/behind `stack_top` via
+       * a keyed DrawRules.drawTargetId. `fader`'s fill opacity is keyed 1 -> 0.
+       * NOTE ON DRAW ORDER / OPACITY PIXELS: this harness's rive-js wrapper exposes nodes
+       * (`ab.node`) but not a paint-color or draw-order introspection API, so this check
+       * can only prove the file LOADS CLEAN (the real bar for "did the schema addition
+       * work" — a bad ToC/object stream throws on load) and that the hidden node is
+       * truly absent. Actual on-screen stacking/fade — see exportRiv.test.ts's decoder-
+       * level assertions for the byte-exact math — goes on Austin's visual review list.
+       */
+      function drawOrderOpacityHiddenDoc() {
+        const sq = (id, label, fill) => ({
+          id, label, kind: 'art', transform: '', pivot: { x: 0, y: 0 }, pivotHint: null,
+          rest: { rotate: 0, tx: 10, ty: 10, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+          parentId: null,
+          paths: [{
+            id: id + '_p', label: id + '_p', d: 'M 0,0 L 20,0 L 20,20 L 0,20 Z',
+            fill, fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1, transform: '',
+          }],
+        });
+        const stackBottom = sq('p_bottom', 'stack_bottom', '#336699');
+        const stackTop = sq('p_top', 'stack_top', '#99cc33');
+        const mover = sq('p_mover', 'mover', '#cc3366');
+        const fader = sq('p_fader', 'fader', '#ffaa00');
+        const hidden = { ...sq('p_hidden', 'hidden_part', '#000000'), hidden: true };
+        const clip = {
+          name: 'demo', duration: 1000,
+          tracks: [
+            { target: 'p_mover', channel: 'z', keyframes: [
+              { time: 0, value: 0, easing: 'linear' },
+              { time: 500, value: 100, easing: 'linear' },
+            ] },
+            { target: 'p_fader', channel: 'opacity', keyframes: [
+              { time: 0, value: 1, easing: 'linear' },
+              { time: 500, value: 0, easing: 'linear' },
+            ] },
+          ],
+        };
+        return {
+          name: 'draw_order_opacity_hidden', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+          parts: [stackBottom, stackTop, mover, fader, hidden],
+          rootPivot: { x: 50, y: 50 }, clips: [clip],
+        };
+      }
+
+      async function drawOrderOpacityHiddenCheck() {
+        const bytes = exportRiv(drawOrderOpacityHiddenDoc());
+        const inst = await loadRive(bytes, document.getElementById('c'));
+        const ab = inst.artboard;
+        const present = ['stack_bottom', 'stack_top', 'mover', 'fader'].map((n) => !!ab.node(n));
+        const hiddenAbsent = !ab.node('hidden_part');
+        const li = new inst.runtime.LinearAnimationInstance(ab.animationByName('demo'), ab);
+        li.advance(0); li.apply(1.0); // just prove advance/apply doesn't throw either
+        const checks = {
+          loadedWithoutError: true,
+          visiblePartsPresent: present.every(Boolean),
+          hiddenPartAbsent: hiddenAbsent,
+        };
+        return { checks, pass: Object.values(checks).every(Boolean) };
+      }
+
       async function main() {
         try {
           if (!window.rive) throw new Error('Rive runtime failed to load');
@@ -309,12 +373,14 @@
           const stateMachine = await stateMachineCheck();
           const exitTime = await exitTimeCheck();
           const wholeDoc = await wholeDocCheck();
+          const drawOrderOpacityHidden = await drawOrderOpacityHiddenCheck();
           report({
             status: 'ok',
             note: 'Pixel readback unavailable in this headless env; verified at transform level.',
             stateMachine,
             exitTime,
             wholeDoc,
+            drawOrderOpacityHidden,
           });
         } catch (e) {
           report({ status: 'error', error: String((e && e.message) || e) });

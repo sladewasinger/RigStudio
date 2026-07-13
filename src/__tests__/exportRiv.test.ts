@@ -833,3 +833,232 @@ describe('exportRiv Unified Skeleton attachment (Phase 1)', () => {
     expect(armNode.props[PROP.PARENT_ID]).toBe(spineNode.index);
   });
 });
+
+// ---- Export-completions wave (2026-07-13): hidden-part exclusion, opacity keys, z draw order ----
+
+describe('exportRiv hidden-part exclusion (Layers eye, FULL — completes the shapes-only skip)', () => {
+  function hiddenDoc(): RigDoc {
+    const body = part('p_body', { label: 'body', paths: [path('body_path')] });
+    const shadow = part('p_shadow', { label: 'shadow', hidden: true, paths: [path('shadow_path')] });
+    // A child of a HIDDEN part is itself effectively hidden (cascades) even though its own
+    // `hidden` flag is unset — must ALSO be fully excluded.
+    const shadowChild = part('p_shadow_child', {
+      label: 'shadow_child', parentId: 'p_shadow', paths: [path('shadow_child_path')],
+    });
+    const clip: Clip = {
+      name: 'idle', duration: 1000,
+      tracks: [
+        { target: 'p_shadow', channel: 'rotate', keyframes: [{ time: 0, value: 10, easing: 'linear' }] },
+        { target: 'p_shadow_child', channel: 'tx', keyframes: [{ time: 0, value: 5, easing: 'linear' }] },
+        { target: 'p_body', channel: 'tx', keyframes: [{ time: 0, value: 3, easing: 'linear' }] },
+      ],
+    };
+    return {
+      name: 'hid', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+      parts: [body, shadow, shadowChild], rootPivot: { x: 50, y: 50 }, clips: [clip],
+      stateMachines: [{
+        id: 'sm1', name: 'M', inputs: [],
+        states: [
+          { id: 's_entry', name: 'Entry', kind: 'entry' },
+          { id: 's_any', name: 'Any', kind: 'any' },
+          { id: 's_exit', name: 'Exit', kind: 'exit' },
+        ],
+        transitions: [],
+        listeners: [{ id: 'l1', targetPartId: 'p_shadow', event: 'down', actions: [] }],
+      }],
+    };
+  }
+
+  const d = decodeRiv(exportRiv(hiddenDoc()));
+
+  it('emits no Node for a hidden part or its (effectively hidden) descendants', () => {
+    const names = d.objects.filter((o) => o.typeKey === TYPE.NODE).map((o) => o.props[PROP.NAME]);
+    expect(names).toContain('body');
+    expect(names).not.toContain('shadow');
+    expect(names).not.toContain('shadow_child');
+  });
+
+  it('emits no Shape for a hidden part or its descendants (the pre-existing skip, still correct)', () => {
+    const shapes = d.objects.filter((o) => o.typeKey === TYPE.SHAPE);
+    expect(shapes.length).toBe(1);
+    expect(shapes[0].props[PROP.NAME]).toBe('body_path');
+  });
+
+  it('drops every keyed track targeting an excluded part — only body.tx survives', () => {
+    const validIds = new Set(d.objects.filter((o) => o.index >= 0).map((o) => o.index));
+    const allProps = d.animations.flatMap((a) => a.objects.flatMap((ko) => {
+      expect(validIds.has(ko.objectId)).toBe(true); // no KeyedObject dangles on a dropped Node
+      return ko.props;
+    }));
+    expect(allProps.length).toBe(1);
+    expect(allProps[0].propertyKey).toBe(PROP.X); // body's keyed tx
+  });
+
+  it('drops a state-machine listener targeting a hidden part', () => {
+    expect(d.stateMachines[0].listeners.length).toBe(0);
+  });
+
+  it('exports cleanly and deterministically', () => {
+    expect(() => exportRiv(hiddenDoc())).not.toThrow();
+    expect(Array.from(exportRiv(hiddenDoc()))).toEqual(Array.from(exportRiv(hiddenDoc())));
+  });
+});
+
+describe('exportRiv opacity keys (part-level, non-cascading)', () => {
+  function opacityDoc(restOpacity: number, keyed: boolean): RigDoc {
+    const body = part('p_body', {
+      label: 'body',
+      rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: restOpacity },
+      paths: [path('body_path', { stroke: '#000000', strokeWidth: 2, strokeOpacity: 0.8 })],
+    });
+    const clip: Clip = {
+      name: 'idle', duration: 1000,
+      tracks: keyed
+        ? [{
+          target: 'p_body', channel: 'opacity',
+          keyframes: [
+            { time: 0, value: 1, easing: 'linear' },
+            { time: 500, value: 0, easing: 'linear' },
+          ],
+        }]
+        : [],
+    };
+    return {
+      name: 'op', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+      parts: [body], rootPivot: { x: 50, y: 50 }, clips: [clip],
+    };
+  }
+
+  it('folds an UNKEYED rest opacity multiplicatively into the static Fill/Stroke alpha', () => {
+    const d = decodeRiv(exportRiv(opacityDoc(0.5, false)));
+    const colors = d.objects.filter((o) => o.typeKey === TYPE.SOLID_COLOR);
+    const alphas = colors.map((c) => (c.props[PROP.COLOR] as number) >>> 24);
+    expect(alphas).toContain(Math.round(1 * 0.5 * 255)); // fill: fillOpacity(1) * restOpacity(0.5)
+    expect(alphas).toContain(Math.round(0.8 * 0.5 * 255)); // stroke: strokeOpacity(0.8) * restOpacity(0.5)
+  });
+
+  it('rest.opacity=1 (the default) reproduces the exact pre-wave alpha — no regression', () => {
+    const d = decodeRiv(exportRiv(opacityDoc(1, false)));
+    const fillColor = d.objects.find(
+      (o) => o.typeKey === TYPE.SOLID_COLOR && (o.props[PROP.COLOR] as number) >>> 0 === (__riv.argb('#3366cc', 1) >>> 0),
+    );
+    expect(fillColor).toBeTruthy();
+  });
+
+  it('a KEYED opacity channel animates each SolidColor via KeyFrameColor — never Node.opacity', () => {
+    const d = decodeRiv(exportRiv(opacityDoc(1, true)));
+    const body = d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'body')!;
+    const idle = d.animations[0];
+    expect(idle.objects.map((o) => o.objectId)).not.toContain(body.index);
+
+    const colors = d.objects.filter((o) => o.typeKey === TYPE.SOLID_COLOR);
+    expect(colors.length).toBe(2); // fill (base opacity 1) + stroke (base opacity 0.8)
+    const baseOpacities = [1, 0.8]; // emission order: Fill's SolidColor, then Stroke's
+    colors.forEach((c, i) => {
+      const keyed = idle.objects.find((o) => o.objectId === c.index)!;
+      expect(keyed).toBeTruthy();
+      const prop = keyed.props.find((p) => p.propertyKey === PROP.COLOR)!;
+      expect(prop.keyframes.map((k) => k.frame)).toEqual([0, 30]); // 0ms, 500ms@60fps
+      // frame 0: part opacity 1 -> alpha = base * 1. frame 30: part opacity 0 -> alpha 0.
+      expect(prop.keyframes[0].value >>> 24).toBe(Math.round(baseOpacities[i] * 255));
+      expect(prop.keyframes[1].value >>> 24).toBe(0);
+    });
+  });
+
+  it('a clip that never keys opacity leaves the SolidColor unkeyed (rest fold stands)', () => {
+    const doc = opacityDoc(1, true);
+    doc.clips.push({ name: 'still', duration: 500, tracks: [] });
+    const d = decodeRiv(exportRiv(doc));
+    const stillAnim = d.animations.find((a) => a.name === 'still')!;
+    expect(stillAnim.objects.length).toBe(0);
+  });
+
+  it('is deterministic', () => {
+    expect(Array.from(exportRiv(opacityDoc(0.5, true)))).toEqual(Array.from(exportRiv(opacityDoc(0.5, true))));
+  });
+});
+
+describe('exportRiv keyed draw order (z via DrawRules/DrawTarget)', () => {
+  /** doc.parts order A,B,C -> default paint order A(back) B C(front/topmost). */
+  function zDoc(): RigDoc {
+    const a = part('p_a', { label: 'A', paths: [path('a_p')] });
+    const b = part('p_b', { label: 'B', paths: [path('b_p')] });
+    const c = part('p_c', { label: 'C', paths: [path('c_p')] });
+    const clip: Clip = {
+      name: 'reorder', duration: 1000,
+      tracks: [{
+        target: 'p_b', channel: 'z',
+        keyframes: [
+          { time: 0, value: 0, easing: 'linear' },
+          { time: 500, value: 100, easing: 'linear' },
+        ],
+      }],
+    };
+    return {
+      name: 'zdoc', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+      parts: [a, b, c], rootPivot: { x: 50, y: 50 }, clips: [clip],
+    };
+  }
+
+  const d = decodeRiv(exportRiv(zDoc()));
+  const nodeByName = (n: string) => d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === n)!;
+  const shapeByName = (n: string) => d.objects.find((o) => o.typeKey === TYPE.SHAPE && o.props[PROP.NAME] === n)!;
+
+  it("emits exactly one DrawRules, parented to the z-keyed part's own Node", () => {
+    const rules = d.objects.filter((o) => o.typeKey === TYPE.DRAW_RULES);
+    expect(rules.length).toBe(1);
+    expect(rules[0].props[PROP.PARENT_ID]).toBe(nodeByName('B').index);
+  });
+
+  it('emits two DrawTargets (one per resolved instant), both anchored on C, opposite placements', () => {
+    const rulesIdx = d.objects.find((o) => o.typeKey === TYPE.DRAW_RULES)!.index;
+    const targets = d.objects.filter((o) => o.typeKey === TYPE.DRAW_TARGET);
+    expect(targets.length).toBe(2);
+    for (const t of targets) {
+      expect(t.props[PROP.PARENT_ID]).toBe(rulesIdx);
+      expect(t.props[PROP.DRAWABLE_ID]).toBe(shapeByName('c_p').index);
+    }
+    expect(targets.map((t) => t.props[PROP.PLACEMENT_VALUE]).sort()).toEqual([0, 1]);
+  });
+
+  it('keys drawTargetId with a KeyFrameId per instant, switching to the right anchor placement', () => {
+    const rulesIdx = d.objects.find((o) => o.typeKey === TYPE.DRAW_RULES)!.index;
+    const anim = d.animations.find((a) => a.name === 'reorder')!;
+    const keyed = anim.objects.find((o) => o.objectId === rulesIdx)!;
+    const prop = keyed.props.find((p) => p.propertyKey === PROP.DRAW_TARGET_ID)!;
+    expect(prop.keyframes.map((k) => k.frame)).toEqual([0, 30]);
+
+    const targets = d.objects.filter((o) => o.typeKey === TYPE.DRAW_TARGET);
+    const afterTarget = targets.find((t) => t.props[PROP.PLACEMENT_VALUE] === 1)!; // behind C
+    const beforeTarget = targets.find((t) => t.props[PROP.PLACEMENT_VALUE] === 0)!; // in front of C
+
+    // t=0: z=0 ties the unkeyed default (order stays [A,B,C]) -> B's front neighbor C is
+    // static -> anchors AFTER C, i.e. exactly its original spot (byte-stable-looking rest).
+    expect(prop.keyframes[0].value).toBe(afterTarget.index);
+    // t=500ms(frame30): B jumps to z=100 (topmost) -> back neighbor C is static -> anchors
+    // BEFORE C (B now renders in front of C).
+    expect(prop.keyframes[1].value).toBe(beforeTarget.index);
+  });
+
+  it('emits none of the draw-order machinery for a doc with no z keyframes (zero overhead)', () => {
+    const clean = decodeRiv(exportRiv(pipDoc()));
+    const drawTypes = new Set([TYPE.DRAW_RULES, TYPE.DRAW_TARGET, TYPE.KEYFRAME_ID]);
+    expect(clean.objects.some((o) => drawTypes.has(o.typeKey))).toBe(false);
+  });
+
+  it('skips machinery for a z-keyed part with an unguarded shape-owning descendant (documented limit)', () => {
+    const doc = zDoc();
+    // A non-z-keyed child with its own Shape would otherwise leak into B's reordering
+    // (Rive's ancestor walk has nothing closer to stop at) — the exporter skips instead.
+    doc.parts.push(part('p_b_child', { label: 'B_child', parentId: 'p_b', paths: [path('bc_p')] }));
+    const dd = decodeRiv(exportRiv(doc));
+    expect(dd.objects.some((o) => o.typeKey === TYPE.DRAW_RULES)).toBe(false);
+    // The doc still exports cleanly; the child renders normally, parented under B.
+    const child = dd.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'B_child');
+    expect(child).toBeTruthy();
+  });
+
+  it('is deterministic', () => {
+    expect(Array.from(exportRiv(zDoc()))).toEqual(Array.from(exportRiv(zDoc())));
+  });
+});
