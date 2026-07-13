@@ -77,12 +77,6 @@ export const SHORTCUTS: ShortcutEntry[] = [
   },
   { keys: 'Shift+H', description: 'Flip the selection horizontally, in place (Edit)', context: 'Tools' },
   { keys: 'Shift+V', description: 'Flip the selection vertically, in place (Edit)', context: 'Tools' },
-  // NOTE (AI Animate System v2 A0): the canvas-tools eye button is live; the 'C' keydown
-  // binding itself still needs a one-line addition to main.ts's global handler (see the
-  // panels/canvasTools.ts clean-preview button) — main.ts is a different work stream's
-  // file, not touched by this change. Documented here per this file's own rule ("any
-  // binding change in main.ts must update it in the same change") so the row is ready
-  // the moment that wiring lands.
   {
     keys: 'C',
     description: 'Toggle clean preview (Animate) — hide all editor chrome (handles, ' +
@@ -107,8 +101,9 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { keys: '? / F1', description: 'Toggle this shortcut overlay', context: 'View' },
   {
     keys: 'Escape',
-    description: 'Step back out: close this overlay → exit freeze mode → finish the bone ' +
-      'chain → exit path → exit group / deselect',
+    description: 'Step back out: close this overlay → exit freeze mode → discard the AI ' +
+      'preview → stop the logic preview → finish the bone chain → exit path → exit ' +
+      'group / deselect',
     context: 'View',
   },
 
