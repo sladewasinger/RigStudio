@@ -577,6 +577,25 @@ view/interactions.ts + view/nodeEditing.ts (redesign QUEUED below — the old
 small pinned files (ai/claude 489, main 522, paths 434, graph 395, layers 347,
 exportLottie 327), audit queued below.
 
+## Post-run live fixes (user-reported 2026-07-13, on his return — all landed)
+
+- [x] **First-paint chrome blowup on autosave boots** (da0aa44) — the layers
+  splitter's grid column existed in CSS before its DOM did; the canvas got
+  measured at 6px and chrome radii baked ~50× (the "black blob"/"red
+  circles"). One idempotent buildLayersPanel call before any doc load; new
+  bootLayout scenario asserts chrome size at zero-interaction first paint.
+- [x] **Drill-down dead in Animate** (6f57e9f) — a stale Setup gate on the
+  part→path dblclick branch (+ the path inspector/highlight gates), removed
+  per the standing "navigation identical in both modes" ruling; GL5 pins the
+  user recipe in BOTH modes, GL6 pins a 3-deep ladder.
+- [x] **Origin press bends the outline in node-editing freeze** (725988a) —
+  the node-editing overlay branch never rendered freeze joint markers, so
+  origin presses fell to the segment-bend pipeline. All three initial
+  hypotheses ruled out by live reproduction first; F10 + US6b pin it.
+  NOTE: reproduced specifically in NODE-EDITING mode — if the user's own
+  repro was in plain pose mode, reopen with exact steps (every non-node-mode
+  combination was verified correct).
+
 ## Live bug queue (user-reported 2026-07-12, next main-tree wave after nodeEditing)
 
 - [x] **Group-like selection for art-with-children** (63a2b67) — every group behavior
