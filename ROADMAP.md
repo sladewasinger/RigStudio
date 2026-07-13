@@ -591,6 +591,59 @@ exportLottie 327), audit queued below.
   resets app-state, doc was never wrong. Fix: structural ops (group/ungroup/
   delete/reparent) must repair or clear entered-group state; reproduce first.
 
+## Unified skeleton: cross-chain bone attachment (user-requested 2026-07-12,
+## IN the autonomous run — "the entire pip could be rigged so his body (spine)
+## can affect the arm bones… moving relative to one another by hierarchy")
+
+Why it's disjointed today: each limb chain parents under its own art
+(hierarchy-as-assignment) and the spine chain under the pip group — FOUR
+disconnected skeletons. Bone motion propagates through bone parent links only.
+The LBS math already follows bone WORLD transforms, so connecting the chains
+(arm root bone becomes a child of the spine bone) makes everything compose —
+the feature is making that attachment first-class and safe.
+
+- [ ] **Phase 1 — attach via Layers drag** (the deliverable): dragging a chain's
+  ROOT bone onto a bone of ANOTHER chain parents it WORLD-PRESERVING (fold the
+  chain-frame delta into the root's rest, the foldLostArtPoseIntoBoneRest
+  precedent — zero visual jump, bind data untouched). The new link is an
+  **ATTACHED ROOT** (`RigPart.attachedRoot: true`, set by cross-chain reparent):
+  origin ≠ parent tip is LEGAL for it (a shoulder isn't at the spine's tip) —
+  the connected-chain no-gap invariant is scoped to chain-INTERNAL links only
+  (tests updated accordingly). `boneChain` (the auto-bind unit) STOPS at
+  attached roots — extending an arm chain must never re-target the body's art —
+  while POSE composition uses the full hierarchy (it already does: parentId).
+  Overlay: draw a subtle dashed attachment link parent-bone→attached-root so
+  the coupling is visible (GOTCHA: visible counterpart). Un-attach = drag the
+  root elsewhere (same world-preserving fold). Acceptance = the user's Pip:
+  spine bone rotates → both arm chains AND their deformed arms ride; arm IK
+  still works locally; undo restores exactly.
+- [ ] **Phase 2 — IK across attachments (DEFERRED DECISION for Austin)**: does
+  grabbing a hand FABRIK through the spine? Default OFF (IK chain resolution
+  stops at attached roots — safer, predictable); the full-body solve is a flag
+  to discuss. DOCUMENTED, not built.
+- [ ] **Phase 3 — placement sugar (deferred)**: starting a pen chain with a bone
+  selected but clicking far from its tip could create an attached root at the
+  click instead of anchoring at the tip. Needs UX thought; not built.
+
+## Layer order IS z-order (user idea 2026-07-12 — fleshed out; the design is
+## sound, not crazy; folded into the autonomous run AFTER the skeleton work)
+
+Design: the layers panel shows REST structure and its visual (depth-first) order
+IS the rest paint order — moving a subtree in the panel moves its whole paint
+block. The keyed stepped `z` channel stays an ANIMATE-TIME override that
+re-sorts the CANVAS only; the panel NEVER re-sorts during animation (panel =
+structure you edit, canvas = animated result). Edit mode shows pure rest order.
+
+- [ ] **Audit + enforce "panel order = paint order"**: doc.parts array order and
+  tree display order can diverge across subtree boundaries today; canonicalize
+  (paint order = DFS of the hierarchy; sibling order = the draggable freedom),
+  verify the importer already satisfies it (it walks the SVG depth-first),
+  normalizeDoc repairs legacy docs, PageUp/Down + the stacking row + panel
+  drag-reorder all preserve it. Exporters inherit (they read doc.parts order).
+  Interaction tests: reorder right_arm above body in the panel → canvas + both
+  exporters stack it above; keyed z still re-sorts the canvas in Animate while
+  the panel holds still.
+
 ## Skinned-part posing decision (user ruling 2026-07-12: "Allow rotate+translate")
 
 Code truth behind the ruling: a skinned part's keyed rotate/tx/ty WORKS — its
@@ -622,15 +675,20 @@ Node scale would — scale stays blocked on skinned parts.
 ## AUTONOMOUS RUN (user directive 2026-07-12: "get through as much of the
 ## roadmap as possible without my input — defer + document decisions")
 
-Execution order: bug wave → layers + AI branch integrations → arc fix +
-polish guard → skinned-drags wave → shortcuts registry (parallel worktree) →
-ergonomics wave → context-menu polish → node editor items 1/2/4 (+3 with the
-documented design) → shared pan/zoom module → .riv export items (keyed-z draw
-order via DrawTarget/DrawRules, opacity keys, full hidden-part exclusion —
-verified against the @rive-app/canvas harness) → H2 MCP server → Category B →
-D1 (File System Access + PWA). Every wave: full gates + roadmap tick.
+Execution order: bug wave ✓ → layers + AI branch integrations ✓ → arc fix +
+polish guard ✓ → skinned-drags wave → shortcuts registry (parallel worktree) →
+ergonomics wave → **unified-skeleton Phase 1** → **layer-order-is-z audit**
+(both added 2026-07-12 before Austin left) → context-menu polish → node editor
+items 1/2/4 (+3 with the documented design) → shared pan/zoom module → .riv
+export items (keyed-z draw order via DrawTarget/DrawRules, opacity keys, full
+hidden-part exclusion — verified against the @rive-app/canvas harness) → H2
+MCP server → Category B → D1 (File System Access + PWA). Every wave: full
+gates + roadmap tick.
 
 **DEFERRED FOR AUSTIN (decisions his to make — nothing below gets built):**
+- Unified skeleton Phase 2: whether IK solves ACROSS attachments (grab a hand,
+  FABRIK through the spine). Ships OFF; the full-body-solve flag is his call.
+- Unified skeleton Phase 3: pen-tool placement creating attached roots directly.
 - D2 (Tauri desktop): requires installing the Rust/Tauri toolchain on this
   machine — not doing unattended. D1 proceeds (browser-native APIs only).
 - Lottie: frozen per earlier ruling (may be deleted); the .riv-only export
