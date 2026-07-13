@@ -597,13 +597,34 @@ CLAUDE.md convention: "Think in named patterns, not conventions").
   `applyStructuralEdit(path, edit)` door every command-count-changing op must
   pass through (does the nodeTypes splice + override drop itself); then split
   the ops by family (drag math / structural wiring / one-shot type ops) safely.
-- [ ] **Pattern audit over the six pinned files** (ai/claude 489, main 522,
-  geometry/paths 434, timeline/graph 395, panels/layers 347, io/exportLottie
-  327): a review wave that RECOMMENDS (does not auto-implement) pattern-based
-  reorganizations — e.g. main.ts's keydown handler is the same shape as the
-  gesture router (a priority cascade → candidate for a binding table that also
-  generates help.ts's SHORTCUTS); reports per file: natural seams, applicable
-  named pattern, cost/benefit, or an honest "cohesive as-is".
+- [x] **Pattern audit over the six pinned files** (done 2026-07-12, read-only).
+  Verdicts, ranked by payoff:
+  1. **main.ts — REORGANIZE**: keydown handler (~60% of the file) → a binding
+     Registry + two explicit Chain-of-Responsibility arrays (DELETE_HANDLERS /
+     ESCAPE_HANDLERS) in a new `ui/shortcuts.ts`; help.ts's keyboard rows
+     GENERATED from the registry (killing the sync convention, which the audit
+     proved broken twice — both drifts fixed in 4ed4127); main.ts exits the
+     grandfather list. Risk note: only 2 of ~30 bindings are tested through
+     the real dispatcher — the wave needs a full manual binding pass.
+  2. **ai/claude.ts — REORGANIZE**: extract the prompt constants + clip schema
+     to an `ai/prompts.ts` leaf (finishing the pattern threads.ts/
+     profileBlock.ts already established); claude.ts becomes pure orchestration
+     and exits the list. Low risk (pure data, already unit-tested).
+  3. **timeline/graph.ts — REORGANIZE (cross-file)**: its pan/zoom is a
+     byte-for-byte algorithmic duplicate of panels/sm/graphCamera.ts kept in
+     sync only by "mirrors X" comments — extract one shared view-rect
+     zoom/pan module both consume. (view/camera.ts is related but has
+     deliberately different clamp semantics; not merged.)
+  4. **io/exportLottie.ts — cohesive as-is, ZERO test coverage**: documented
+     invariants (z ignored, opacity ignored, hidden→empty shapes,
+     absolute/rest-fallback) pinned by nothing → dedicated test wave
+     (launched immediately, not gated on the redesign pass).
+  5. **geometry/paths.ts — cohesive as-is**: one representation throughout;
+     its cross-file invariant already sits behind nodeEditing's chokepoint.
+  6. **panels/layers.ts — cohesive as-is**: one tree widget; drag pipelines
+     are coupled to the DOM they decorate; no reuse case.
+  Items 1–3 fold into this redesign pass after the gesture-pipeline wave,
+  in rank order.
 - [x] **Size-ratchet test** (`architecture.test.ts`) landed 2026-07-11 —
   CODE-line counts (comments/blanks free per user ruling), grandfathered
   ceilings shrink-only, new files fail >300, stale-entry honesty check.
