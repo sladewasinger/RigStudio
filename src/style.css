@@ -108,7 +108,11 @@ input[type='number'],
 #layout {
   flex: 1;
   display: grid;
-  grid-template-columns: 200px 1fr 260px;
+  /* --layers-width is set from JS (panels/layersResize.ts) on #layout's own inline
+     style, which wins over this fallback regardless of cascade order — same discipline
+     as the timeline height splitter (timeline/tlState.ts). The 6px column is the
+     draggable splitter #layersResize.ts inserts as #layers' next DOM sibling. */
+  grid-template-columns: var(--layers-width, 200px) 6px 1fr 260px;
   min-height: 0;
 }
 
@@ -119,6 +123,31 @@ input[type='number'],
 }
 #layers { border-right: 1px solid var(--divider); }
 #inspector { border-left: 1px solid var(--divider); }
+
+/* ---- Layers panel width splitter (sibling of #layers, between it and #canvas-col;
+   element created at runtime by panels/layersResize.ts) — mirrors #timeline-splitter's
+   styling in timeline/timeline.css, rotated for a vertical (col-resize) handle. ---- */
+#layers-splitter {
+  position: relative;
+  cursor: col-resize;
+  background: var(--divider);
+  touch-action: none;
+}
+#layers-splitter:hover,
+#layers-splitter.dragging {
+  background: var(--accent-2);
+}
+#layers-splitter::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 34px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.35);
+}
 
 #canvas-col {
   display: flex;

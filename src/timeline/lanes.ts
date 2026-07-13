@@ -6,7 +6,7 @@
 import { state, notify, deleteKeyframe, Track, Keyframe, Clip } from '../core/model';
 import { renderPose } from '../view';
 import { checkpoint } from '../core/history';
-import { tlCtx, div, movePlayheadTo } from './tlState';
+import { tlCtx, div, movePlayheadTo, syncPartSelectionFromKeys } from './tlState';
 
 /** The whole lanes area: ruler + padding + one lane per track + padding, with marquee
  *  box-select wired across the block. */
@@ -122,6 +122,10 @@ function buildLane(track: Track, duration: number, index: number): HTMLElement {
         tlCtx.selectedKeys.clear();
         tlCtx.selectedKeys.add(key);
       }
+      // Selects the target part(s) too — ONCE per press, not per retime-drag pointermove
+      // (see tlState.ts's syncPartSelectionFromKeys); the deferred notify() in `up` below
+      // is what actually repaints the layers tree/inspector for it.
+      syncPartSelectionFromKeys();
       // Scrub to the clicked key so the canvas shows the pose it records.
       movePlayheadTo(key.time, duration);
 
@@ -209,7 +213,11 @@ function wireBoxSelect(lanes: HTMLElement): void {
         const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
         if (cx >= x0 && cx <= x1 && cy >= y0 && cy <= y1) tlCtx.selectedKeys.add(key);
       }
-      tlCtx.rerender();
+      // Union of the marquee's touched keys' target parts (see tlState.ts's
+      // syncPartSelectionFromKeys) — notify() repaints layers/inspector AND the
+      // timeline itself (its subscriber calls the same render() tlCtx.rerender points at).
+      syncPartSelectionFromKeys();
+      notify();
     };
     lanes.addEventListener('pointermove', move);
     lanes.addEventListener('pointerup', up);

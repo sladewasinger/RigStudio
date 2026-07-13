@@ -16,6 +16,7 @@ import { icon } from './icons';
 import {
   wireDropTarget, wirePartRowDrag, wirePartRowDrop, wirePathRowDrag, wirePathRowDrop,
 } from './layersDragAndDrop';
+import { ensureLayersSplitter } from './layersResize';
 
 /** layersDragAndDrop opens folders through this (the `expanded` set stays module-local). */
 const expandPart = (partId: string): void => { expanded.add(partId); };
@@ -48,6 +49,7 @@ function visiblePartOrder(): string[] {
 }
 
 export function buildLayersPanel(el: HTMLElement): void {
+  ensureLayersSplitter(el); // idempotent — sets up the width splitter once, at boot
   el.innerHTML = '<h2>Layers</h2>';
   const doc = state.doc;
   if (!doc) return;
@@ -124,6 +126,10 @@ function partNode(part: RigPart): HTMLElement {
   name.className = 'layer-name';
   name.textContent = part.label;
   row.appendChild(name);
+  // Full label on hover — the tree column can be narrower than a long/unnamed-bone
+  // label truncates to (CLAUDE.md "Editing ergonomics": always set, browsers only
+  // surface `title` on overflow anyway, so detecting truncation first is pointless).
+  row.title = part.label;
 
   const count = document.createElement('span');
   count.className = 'layer-count';
@@ -211,6 +217,7 @@ function partNode(part: RigPart): HTMLElement {
       pathRow.className = 'layer-row path';
       pathRow.dataset.pathId = path.id; // unambiguous lookup, mirrors row.dataset.partId above
       if (state.selectedPathId === path.id) pathRow.classList.add('selected');
+      pathRow.title = path.label; // full label on hover, same rationale as the part row above
       pathRow.innerHTML = `<span class="path-icon">◇</span>`;
       const pathName = document.createElement('span');
       pathName.className = 'layer-name';

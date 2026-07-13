@@ -186,3 +186,30 @@ export function movePlayheadTo(time: number, duration: number): void {
   if (timeLabel) timeLabel.textContent = `${Math.round(time)} ms`;
   renderPose();
 }
+
+// ---- Keyframe selection -> part selection (editing ergonomics wave) ----
+
+/**
+ * Syncs `state.selectedPartIds` to the UNION of the currently-selected keys' target
+ * parts, so the layers tree highlights + auto-expands to them and the inspector shows
+ * one ("extremely hard to see what I'm editing" with unnamed bones otherwise — user
+ * report). Root-targeted tracks are skipped (`root` is the synthetic whole-figure
+ * target, never a real part); if the union ends up empty — no keys selected, or every
+ * selected key targets root — the existing part selection is left untouched. This is a
+ * ONE-WAY key->part coupling: deselecting keys never clears a part selection the user
+ * may be mid-editing. Callers own calling `notify()` afterward (this only mutates
+ * state) and must call this once per key-selection CHANGE — the initial press of a
+ * click/shift-click/retime drag, or a marquee's pointerup — never per pointermove, so a
+ * retime drag doesn't churn part selection every frame.
+ */
+export function syncPartSelectionFromKeys(): void {
+  const ids = new Set<string>();
+  for (const key of tlCtx.selectedKeys) {
+    const target = tlCtx.trackOfKey.get(key)?.target;
+    if (target && target !== 'root') ids.add(target);
+  }
+  if (ids.size === 0) return;
+  state.selectedPartIds = [...ids];
+  state.selectedPartId = state.selectedPartIds[state.selectedPartIds.length - 1];
+  state.selectedPathId = null;
+}
