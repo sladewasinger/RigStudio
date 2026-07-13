@@ -16,8 +16,8 @@ import { selectPart as modelSelectPart } from '../../core/model';
 import { renderPose } from '../../view';
 import {
   bootRig, resetRig, state, notify, partByLabel, partGroupEl, gestureDrag, docToClient,
-  clientCenterOf, overlayEl, expectClose, selectByLabel, repaint, pressKey,
-  medialPoints, placeBoneChain,
+  clientCenterOf, overlayEl, overlayCount, expectClose, selectByLabel, repaint, pressKey,
+  medialPoints, placeBoneChain, assertScreenConstant,
 } from './harness';
 
 beforeAll(bootRig);
@@ -245,5 +245,122 @@ describe('scenario F3 — the freeze indicator + Y / Escape toggling', () => {
     expect(state.freezeMode).toBe(false);
     expect(canvas.classList.contains('freeze-mode')).toBe(false);
     expect(getComputedStyle(banner).display).toBe('none');
+  });
+});
+
+// ---- Post-A Fix 1: freeze origin-drag no longer requires pre-selecting the bone ----
+
+describe('scenario F7 — freeze origin-drag on an UNSELECTED bone (Post-A Fix 1)', () => {
+  it('a press on the ROOT origin of an unselected bone selects it AND moves the joint in one gesture — never rotates', () => {
+    const [b1] = placeChain('left_leg', 2);
+    pressKey('y'); // freeze
+    modelSelectPart(null);
+    notify();
+    repaint();
+    expect(state.selectedPartId, 'nothing selected before the press').toBeNull();
+
+    // MUTATION-CHECK NOTE: before the fix, no data-role="pivot" element exists for an
+    // unselected bone at all — this querySelector would find nothing, and the press
+    // would fall through to the glyph's body-drag (rotate) pipeline instead.
+    const marker = overlayEl().querySelector(`[data-role="pivot"][data-part-id="${b1.id}"]`);
+    expect(marker, 'a freeze-mode origin marker exists for the UNSELECTED root bone').toBeTruthy();
+    const from = clientCenterOf(marker!);
+    const rot0 = b1.rest.rotate;
+    const pivot0 = { ...b1.pivot };
+
+    gestureDrag(from, { x: from.x + 34, y: from.y - 26 }, { steps: 10 });
+
+    const cur = state.doc!.parts.find((p) => p.id === b1.id)!;
+    expect(state.selectedPartId, 'the press selected the bone in the SAME gesture').toBe(b1.id);
+    expect(cur.rest.rotate, 'rest.rotate untouched — a JOINT MOVE, not a body rotate').toBe(rot0);
+    const moved = Math.hypot(cur.pivot.x - pivot0.x, cur.pivot.y - pivot0.y);
+    expect(moved, 'the joint (pivot) actually moved').toBeGreaterThan(0.3);
+  });
+
+  it('a press on a SHARED JOINT (unselected child origin) selects it AND reshapes the parent tip', () => {
+    const [b1, b2] = placeChain('left_leg', 2);
+    pressKey('y');
+    modelSelectPart(null);
+    notify();
+    repaint();
+
+    const marker = overlayEl().querySelector(`[data-role="pivot"][data-part-id="${b2.id}"]`);
+    expect(marker, 'a freeze-mode origin marker exists for the unselected CHILD bone').toBeTruthy();
+    const from = clientCenterOf(marker!);
+    const tip0 = { ...b1.boneTip! };
+
+    gestureDrag(from, { x: from.x + 30, y: from.y + 24 }, { steps: 10 });
+
+    const cur1 = state.doc!.parts.find((p) => p.id === b1.id)!;
+    const cur2 = state.doc!.parts.find((p) => p.id === b2.id)!;
+    expect(state.selectedPartId, 'the press selected the CHILD bone').toBe(b2.id);
+    const moved = Math.hypot(cur1.boneTip!.x - tip0.x, cur1.boneTip!.y - tip0.y);
+    expect(moved, 'the shared joint (parent tip) actually moved').toBeGreaterThan(0.3);
+    expectClose(cur2.pivot.x, cur1.boneTip!.x, 0.3, 'child origin tracks the new joint');
+    expectClose(cur2.pivot.y, cur1.boneTip!.y, 0.3, 'child origin tracks the new joint');
+  });
+
+  it('a press on an unselected bone origin OUTSIDE freeze is UNCHANGED (still selects + rotates)', () => {
+    // "Outside freeze, behavior is UNCHANGED" — no origin markers render for anything but
+    // the selected part, so the press still falls through to the ordinary body/glyph
+    // click pipeline (select + rotate), exactly as before this wave.
+    const [b1] = placeChain('left_leg', 2);
+    modelSelectPart(null);
+    notify();
+    repaint();
+    expect(state.freezeMode).toBe(false);
+
+    const marker = overlayEl().querySelector(`[data-role="pivot"][data-part-id="${b1.id}"]`);
+    expect(marker, 'no freeze-mode-only marker exists outside freeze').toBeFalsy();
+
+    const glyph = overlayEl().querySelector(`[data-part-id="${b1.id}"]`)!;
+    const from = clientCenterOf(glyph);
+    const rot0 = b1.rest.rotate;
+    gestureDrag(from, { x: from.x + 34, y: from.y - 26 }, { steps: 10 });
+    const cur = state.doc!.parts.find((p) => p.id === b1.id)!;
+    expect(state.selectedPartId, 'still selects on press (unchanged)').toBe(b1.id);
+    expect(cur.rest.rotate, 'still rotates the body (unchanged outside freeze)').not.toBe(rot0);
+  });
+});
+
+describe('scenario F8 — visible counterpart: freeze renders an origin marker for EVERY bone', () => {
+  it('marker count jumps from "selected only" to "every bone" when freeze toggles on, and back off', () => {
+    const bones = placeChain('left_leg', 3); // 3 bones, none selected after placement
+    modelSelectPart(null);
+    notify();
+    repaint();
+
+    expect(state.freezeMode).toBe(false);
+    expect(overlayCount('[data-role="pivot"]'), 'no markers with nothing selected, freeze off').toBe(0);
+
+    pressKey('y');
+    repaint();
+    expect(overlayCount('[data-role="pivot"]'), 'every bone gets a marker once freeze is on')
+      .toBe(bones.length);
+
+    // Selecting one bone still shows exactly one marker each for the OTHER bones plus the
+    // primary's own (richer) crosshair — same total count, no double-marker on the primary.
+    modelSelectPart(bones[1].id);
+    notify();
+    repaint();
+    expect(overlayCount('[data-role="pivot"]'), 'selecting one bone keeps the count at N (no duplicate)')
+      .toBe(bones.length);
+
+    pressKey('Escape'); // leaves freeze
+    expect(state.freezeMode).toBe(false);
+    repaint();
+    expect(overlayCount('[data-role="pivot"]'), 'back down to just the selected bone\'s marker')
+      .toBe(1);
+  });
+});
+
+describe('scenario F9 — freeze origin markers are screen-constant (GOTCHA guard)', () => {
+  it('an unselected bone\'s freeze-mode origin marker holds its on-screen size across a zoom sweep', () => {
+    placeChain('left_leg', 2);
+    modelSelectPart(null);
+    notify();
+    pressKey('y');
+    repaint();
+    assertScreenConstant('.pivot-handle.other .pivot-ring');
   });
 });

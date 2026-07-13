@@ -18,13 +18,12 @@ import {
   parsePath, serializePath, PathCmd,
 } from '../geometry/paths';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
-import { solveChainIK } from '../geometry/ik';
 import { snapPoint, snapDelta, SnapAxis } from '../geometry/snap';
 import { checkpoint } from '../core/history';
 import {
   ctx, DragState, ROTATE_SNAP_DEGREES, DRAG_THRESHOLD_PX, MIN_SCALE, MAX_SCALE,
   MIN_BONE_LENGTH_PX, round1, round2, round3, linearOnly, nodeKey, parseNodeKey,
-  snappingActive, wrapToPi,
+  snappingActive, wrapToPi, notifyTimelineOnly,
 } from './context';
 import {
   svgPoint, pointerInRoot, snapThreshold, rootToUser,
@@ -53,6 +52,7 @@ import {
   groupScaleMembers, applyGroupScale,
 } from './rigOps';
 import { applyViewRect, zoomAround } from './camera';
+import { startIkDrag, startIkDragOnSkinnedArt, updateIkDrag } from './ikDrag';
 
 /** First real movement of a drag: fire the deferred checkpoint exactly once. */
 function activateDrag(
@@ -220,6 +220,14 @@ export function wireInteractions(): void {
     if (target instanceof SVGElement && target.dataset.role === 'bone-tip') {
       const part = selectedPart();
       if (!part) return;
+      // IK tool: even a direct tip-handle press solves the WHOLE chain (Fix 2) instead of
+      // the single-bone aim+stretch below — grabbing the tip is just the on-axis case of a
+      // grab-point-relative IK drag (startIkDrag reads the actual press position).
+      if (state.tool === 'ik') {
+        startIkDrag(part, pointerInRoot(ev), ev);
+        notify();
+        return;
+      }
       ctx.drag = { kind: 'boneTip', part, startClient: { x: ev.clientX, y: ev.clientY }, active: false };
       try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
       return;
@@ -423,9 +431,13 @@ export function wireInteractions(): void {
       return;
     }
 
-    const pivotEl = (target as Element).closest('[data-role="pivot"]');
+    const pivotEl = (target as Element).closest('[data-role="pivot"]') as SVGElement | null;
     if (pivotEl) {
-      const part = selectedPart();
+      // Freeze fix: a joint marker now renders for EVERY bone in freeze mode (overlay.ts),
+      // each carrying data-part-id — so the press resolves ITS OWN part instead of always
+      // `selectedPart()`, and selects it in the SAME gesture (one press, no pre-selecting
+      // the bone first — the reported "rotates instead of moving the joint" bug).
+      const part = doc.parts.find((p) => p.id === pivotEl.dataset.partId) ?? null;
       if (!part) return;
       // A CHILD bone's origin IS its parent bone's tip — one shared joint. Dragging it moves
       // that joint (rotating+stretching the parent, art follows outside freeze), so it is
@@ -433,11 +445,18 @@ export function wireInteractions(): void {
       // part's pivot — is freeze-gated: visible but INERT outside freeze so a stray press
       // never re-anchors it (the accidental-origin-drag complaint). Swallow the press as a
       // hard no-op (no drag, no selection change) rather than fall through to a body drag.
+      // (Freeze-only markers are never rendered outside freeze, so this branch can only be
+      // reached for a non-child-joint bone when freeze is already on — this gate never
+      // actually fires for them; it stays as the single source of truth for the rule.)
       const parentBone = part.kind === 'bone' && part.parentId
         ? doc.parts.find((pp) => pp.id === part.parentId && pp.kind === 'bone')
         : null;
       const isChildJoint = !!parentBone;
       if (!isChildJoint && !state.freezeMode) return;
+      if (part.id !== state.selectedPartId) {
+        selectPart(part.id);
+        notify();
+      }
       ctx.drag = {
         kind: 'pivot',
         part,
@@ -545,19 +564,13 @@ export function wireInteractions(): void {
         // click just (re)selects; we still repaint so the selection box + "skinned" hint
         // show immediately instead of staying stale until the next pan/zoom.
         if (part.skin) {
-          if (action === 'ik') {
-            const bones = part.skin.bones
-              .map((b) => doc.parts.find((pp) => pp.id === b.id))
-              .filter((b): b is RigPart => !!b && b.kind === 'bone');
-            if (bones.length > 0) {
-              // Deepest-in-chain bone is the tip joint: FABRIK solves the whole chain
-              // root→that bone, driving its tip to the pointer (the limb end follows).
-              bones.sort((a, b) => ancestorChain(a).length - ancestorChain(b).length);
-              startIkDrag(bones[bones.length - 1], p, ev);
-              notify();
-              renderPose();
-              return;
-            }
+          // Deepest-in-chain bone is the effector: FABRIK solves the whole chain root→that
+          // bone, driving the ACTUAL grabbed point to the pointer (grab-point-relative —
+          // not always the tip).
+          if (action === 'ik' && startIkDragOnSkinnedArt(part, p, ev)) {
+            notify();
+            renderPose();
+            return;
           }
           notify();
           renderPose(); // selection box + skinned hint appear without a pan/zoom
@@ -571,10 +584,11 @@ export function wireInteractions(): void {
 
         if (action === 'ik' && part.kind === 'bone') {
           // Grabbing a BONE glyph: FABRIK solves the whole bone chain root→this bone,
-          // driving its tip to the pointer. Every joint in the chain participates, INCLUDING
-          // the grabbed bone's own rotation (the reported "only two joints move" fix). A
-          // grabbed non-bone (plain art with the IK tool, no skin) has no bone chain to
-          // solve, so it falls through to a plain rotate below.
+          // driving the GRABBED POINT to the pointer (tip or mid-body — grab-point-
+          // relative). Every joint in the chain participates, INCLUDING the grabbed bone's
+          // own rotation (the reported "only two joints move" fix). A grabbed non-bone
+          // (plain art with the IK tool, no skin) has no bone chain to solve, so it falls
+          // through to a plain rotate below.
           startIkDrag(part, p, ev);
           notify();
           return;
@@ -842,42 +856,9 @@ export function wireInteractions(): void {
       d.part.rest.ty = round1(d.startTy + deltaLocal.y);
       renderPose();
     } else if (ctx.drag.kind === 'ik') {
-      const d = ctx.drag;
-      const p = pointerInRoot(ev);
-      const t = poseTime();
-      d.current = { x: p.x, y: p.y }; // drives the overlay's effector→pointer target line
-      const chain = d.chain;
-      if (chain.length > 0) {
-        // Build the joint polyline (root space): every bone's origin, then the effector tip.
-        // FABRIK solves it against the pointer — segment lengths (== bone lengths) preserved,
-        // root pinned, current pose the bend bias.
-        const effectorNow = () =>
-          applyMat(matrixOfTransform(fullPoseTransform(d.grabbed, t)), d.grabLocal.x, d.grabLocal.y);
-        const joints = chain.map((b) => effectivePivot(b, t));
-        joints.push(effectorNow());
-        const solved = solveChainIK(joints, { x: p.x, y: p.y });
-        // Write each bone's rotation from its solved segment direction, ROOT-FIRST: a bone's
-        // rest.rotate is RELATIVE (its parent's rotation reframes it), and rotating a bone
-        // reframes every descendant — so aim bone i from its CURRENT origin/axis, which
-        // already reflects the parents just written this pass, never a stale snapshot. Only
-        // rest.rotate changes (never pivot/boneTip), so every bone length stays byte-exact
-        // and the shared-joint connection (child origin == parent tip) is untouched.
-        for (let i = 0; i < chain.length; i++) {
-          const bone = chain[i];
-          const origin = effectivePivot(bone, t);
-          const axisEnd = i < chain.length - 1 ? effectivePivot(chain[i + 1], t) : effectorNow();
-          const curAng = Math.atan2(axisEnd.y - origin.y, axisEnd.x - origin.x);
-          const wantAng = Math.atan2(solved[i + 1].y - solved[i].y, solved[i + 1].x - solved[i].x);
-          const deltaDeg = (wrapToPi(wantAng - curAng) * 180) / Math.PI;
-          if (Math.abs(deltaDeg) < 1e-4) continue;
-          if (setup) bone.rest.rotate = round1(bone.rest.rotate + deltaDeg);
-          else {
-            setKeyframe(bone.id, 'rotate', round1(channelValue(bone, 'rotate', state.currentTime) + deltaDeg));
-          }
-        }
-      }
-      renderPose();
-      notifyTimelineOnly();
+      // Full drag pipeline (chain build, FABRIK solve, root-first write-back) lives in
+      // ikDrag.ts — see its module doc for the grab-point-relative design (Fix 2).
+      updateIkDrag(ev);
     } else if (ctx.drag.kind === 'boneTip') {
       const p = pointerInRoot(ev);
       const part = ctx.drag.part;
@@ -1093,32 +1074,6 @@ export function wireInteractions(): void {
   ctx.svg.addEventListener('pointercancel', end);
 }
 
-/** Bones ROOT→effector (outermost first) — the full chain a FABRIK IK drag rotates. The
- *  art a chain roots on is filtered out (only `kind === 'bone'` ancestors), so it's never
- *  mistaken for a joint. */
-function ikBoneChain(effector: RigPart): RigPart[] {
-  return [...ancestorChain(effector).filter((a) => a.kind === 'bone'), effector];
-}
-
-/**
- * Start a full-chain IK drag on `effector` (a bone). The FABRIK end-effector is the
- * effector bone's TIP (its `boneTip` in its own frame → the overlay effector marker /
- * target line anchor), driven to the pointer; the whole chain root→effector rotates.
- */
-function startIkDrag(effector: RigPart, p: { x: number; y: number }, ev: PointerEvent): void {
-  const tip = effector.boneTip ?? { x: effector.pivot.x + 5, y: effector.pivot.y };
-  ctx.drag = {
-    kind: 'ik',
-    chain: ikBoneChain(effector),
-    grabbed: effector,
-    grabLocal: { x: tip.x, y: tip.y },
-    current: { x: p.x, y: p.y },
-    startClient: { x: ev.clientX, y: ev.clientY },
-    active: false,
-  };
-  try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
-}
-
 /**
  * Handle one pen-tool chain click at `clickRoot` (root/doc space). The FIRST click of a
  * chain seeds ctx.boneChain: with a bone selected the origin anchors at that bone's
@@ -1208,10 +1163,4 @@ function frozenReshapedBoneIds(d: DragState): string[] {
     return d.targets.filter((tt) => tt.part.kind === 'bone').map((tt) => tt.part.id);
   }
   return [];
-}
-
-// The timeline listens for this to redraw keyframe diamonds during a drag without the
-// heavier full-panel rebuild that notify() triggers on pointer-up.
-function notifyTimelineOnly(): void {
-  document.dispatchEvent(new CustomEvent('rig-keys-changed'));
 }

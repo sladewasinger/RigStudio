@@ -21,6 +21,7 @@ import {
   poseTime, effectivePivot, effectiveTip, partRootBoxes, fullPoseTransform, groupUnionBox,
 } from './pose';
 import { nodeEditSkinSuspendId } from './focus';
+import { boneKitePath, jointDotHtml } from './glyphs';
 
 /** The 4 corner rotate-handle circles of the Inkscape-style rotate/skew handle set —
  *  shared between Edit's rotate+skew set and Animate's rotate-only set (bug fix: the
@@ -343,6 +344,28 @@ export function renderOverlay(): void {
   renderDragGizmo(holder, size);
   renderToolGizmo(size, t, rootTransform);
 
+  // FREEZE FIX (Post-A "origin-drag rotates unselected bones"): outside freeze, only the
+  // selected part gets a pivot marker (below) — origin/joint handles on every OTHER bone
+  // stay invisible, matching the existing "select first" affordance. In freeze mode EVERY
+  // bone's origin gets one too (visible counterpart for the new interaction below), each
+  // carrying data-part-id so interactions.ts's pivotEl branch can select + start the joint
+  // drag in one press without requiring pre-selection. The primary/selected bone still
+  // gets its own richer crosshair (below), so it's skipped here to avoid a doubled marker.
+  if (setup && state.freezeMode) {
+    for (const bone of doc.parts) {
+      if (bone.kind !== 'bone' || bone.id === state.selectedPartId) continue;
+      if (isEffectivelyHidden(bone)) continue;
+      const op = effectivePivot(bone, t);
+      const dot = document.createElementNS(SVG_NS, 'g');
+      dot.setAttribute('class', 'pivot-handle other');
+      dot.dataset.role = 'pivot';
+      dot.dataset.partId = bone.id;
+      if (rootTransform) dot.setAttribute('transform', rootTransform);
+      dot.innerHTML = jointDotHtml(op.x, op.y, size);
+      ctx.overlay.appendChild(dot);
+    }
+  }
+
   // The selected pivot: crosshair + ring, with a generous invisible grab circle.
   // Drawn last (and in its own interactive group) so it stays on top; draggable only in
   // Setup mode — moving a joint is a rig edit, not an animation edit. Layers eye: a
@@ -360,46 +383,15 @@ export function renderOverlay(): void {
       'class',
       setup ? (isChildJoint ? 'pivot-handle joint' : 'pivot-handle') : 'pivot-handle locked',
     );
-    if (setup) cross.dataset.role = 'pivot';
+    if (setup) { cross.dataset.role = 'pivot'; cross.dataset.partId = part.id; }
     if (rootTransform) cross.setAttribute('transform', rootTransform);
     cross.innerHTML =
-      `<circle class="pivot-grab" cx="${px}" cy="${py}" r="${size * 1.6}" />` +
-      `<circle class="pivot-ring" cx="${px}" cy="${py}" r="${size * 1.1}" />` +
-      `<circle class="pivot-dot" cx="${px}" cy="${py}" r="${size * 0.3}" />` +
+      jointDotHtml(px, py, size) +
       `<line x1="${px - size * 2}" y1="${py}" x2="${px + size * 2}" y2="${py}" />` +
       `<line x1="${px}" y1="${py - size * 2}" x2="${px}" y2="${py + size * 2}" />`;
     ctx.overlay.appendChild(cross);
   }
   drawSnapMarker();
-}
-
-/**
- * The classic bone silhouette between two points (joint fat end, pointed tip). The
- * origin→tip SPAN legitimately scales with zoom (it's the true joint positions), but
- * per the screen-constant-chrome GOTCHA the kite's CROSS-SECTION must not: `w` (and the
- * along-axis offset of its widest point) derive only from `size` (handleSize(), already
- * screen-constant), never from `len` (a fixed doc-space quantity whose on-screen size
- * grows with zoom) — that mixed-unit `Math.min(len*k, size*k)` used to win on whichever
- * term was smaller, so the girth crept wider through most of a zoom-in before a
- * high-zoom crossover finally capped it (the reported "bone glyphs not zoom-stable"
- * bug). `len` still bounds where the widest point sits ALONG the segment, purely so a
- * very short bone's kite doesn't overshoot its own tip — that's a shape/proportion
- * clamp, not a girth one, and doesn't reintroduce the bug.
- */
-function boneKitePath(p: { x: number; y: number }, q: { x: number; y: number }, size: number): string {
-  const dx = q.x - p.x, dy = q.y - p.y;
-  const len = Math.hypot(dx, dy);
-  if (len < 1e-6) return '';
-  const ux = dx / len, uy = dy / len;
-  const w = size * 1.6;
-  const off = Math.min(len * 0.5, size * 2);
-  const bx = p.x + ux * off;
-  const by = p.y + uy * off;
-  return (
-    `<path d="M ${p.x},${p.y} L ${bx - uy * w},${by + ux * w} L ${q.x},${q.y} ` +
-    `L ${bx + uy * w},${by - ux * w} Z" />` +
-    `<circle cx="${p.x}" cy="${p.y}" r="${w * 0.5}" />`
-  );
 }
 
 /**

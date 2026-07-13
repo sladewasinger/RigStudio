@@ -470,6 +470,22 @@ function boneLen(b: ReturnType<typeof partByLabel>): number {
 }
 
 /**
+ * A bone's TIP in CLIENT px, from its own rendered (if hidden) group's LIVE screen CTM
+ * — never a captured element/rect. Needed since Post-A Fix 2 (grab-point-relative IK):
+ * `clientCenterOf(a bone's glyph)` is only ever an approximate MIDPOINT of the kite
+ * polygon, not the tip, so a scenario that means to grab the tip precisely (not "grab
+ * somewhere on the bone and see the whole chain move") must compute it directly.
+ */
+function boneTipClient(b: ReturnType<typeof partByLabel>): { x: number; y: number } {
+  const g = svgEl().querySelector<SVGGElement>(`[data-part-id="${b.id}"]`)!;
+  const m = g.getScreenCTM()!;
+  const pt = svgEl().createSVGPoint();
+  pt.x = b.boneTip!.x; pt.y = b.boneTip!.y;
+  const s = pt.matrixTransform(m);
+  return { x: s.x, y: s.y };
+}
+
+/**
  * Place an n-bone chain with the ART part SELECTED first, so bone 1 PARENTS to the art
  * (the locked hierarchy-as-assignment chain art→bone1→…→bone n) and every bone binds it.
  * Selection is preserved across the chain's clicks, so the single auto-bind at the end
@@ -731,12 +747,19 @@ describe("scenario B21 — a parent tip reshape preserves the CHILD bone's own l
 
 describe('scenario B22 — child length preservation recurses down a 3-bone chain', () => {
   it('reshaping the ROOT carries both its child AND grandchild without touching either one\'s own length', () => {
-    const [b1, b2, b3] = placeParentedChain(LIMB, 3);
-    // Not the 'select' tool's default: its rotate-gizmo RING is a fixed screen radius
-    // around the pivot, and a 3-way-subdivided limb's individual bones are short enough
-    // for the ring to reach the tip handle and steal the press. The IK tool draws no
-    // such pivot-centered chrome (only its own drag-time feedback, scenario B20).
-    state.tool = 'ik';
+    // This scenario targets the classic single-bone tip-reshape (aimBoneAtTip +
+    // carryChildOrigins), which needs a REAL press on the tip-handle circle. Two things
+    // can steal that press: the 'select' tool's rotate-gizmo RING is a fixed SCREEN
+    // radius around the pivot (independent of bone length — screen-constant chrome), so
+    // a short bone segment puts its tip inside the ring's reach; and since Post-A Fix 2,
+    // the 'ik' tool now routes a direct tip-handle press through FULL-CHAIN IK instead of
+    // the single-bone reshape this test means to exercise (its own dedicated coverage:
+    // scenario B24). Using a WIDER medial spread than placeParentedChain's default
+    // 0.16–0.84 makes each of the 3 bones longer than the ring's reach, so the 'select'
+    // tool (unlike 'ik') can be used here without the press landing on the ring instead.
+    selectByLabel(LIMB);
+    const [b1, b2, b3] = placeBoneChain(medialPoints(LIMB, 3, 0.04, 0.98));
+    state.tool = 'select';
     modelSelectPart(b1.id);
     repaint();
 
@@ -826,7 +849,10 @@ describe('scenario B24 — full-chain IK on a 4-bone chain (the reported bug: EV
     const rot0 = bones.map((b) => b.rest.rotate);
     const len0 = bones.map(boneLen);
 
-    const from = clientCenterOf(overlayEl().querySelector(`[data-part-id="${b4.id}"]`)!);
+    // Grab the ACTUAL tip (Post-A Fix 2 is grab-point-relative — the grabbed point, not
+    // always the tip, tracks the cursor — so "the tip lands on the pointer" below is only
+    // a meaningful/precise check when the grab genuinely IS the tip).
+    const from = boneTipClient(b4);
     const rootC = clientCenterOf(overlayEl().querySelector(`[data-part-id="${b1.id}"]`)!);
     const dxr = rootC.x - from.x, dyr = rootC.y - from.y; // toward the root
     const len = Math.hypot(dxr, dyr) || 1;
@@ -845,11 +871,12 @@ describe('scenario B24 — full-chain IK on a 4-bone chain (the reported bug: EV
       expectClose(boneLen(cur(b.id)), len0[i], 1e-9, `bone ${i + 1} length byte-stable`);
     });
 
-    // The grabbed bone's TIP lands on the pointer ("the hand tracks the pointer").
+    // The grabbed TIP lands on the pointer ("the hand tracks the pointer") — tight
+    // tolerance now that the grab point is precisely the tip (Post-A Fix 2 contract (a)).
     modelSelectPart(b4.id);
     repaint();
     const tip = clientCenterOf(overlayEl().querySelector('.bone-tip-handle')!);
-    expectClose(Math.hypot(tip.x - toward.x, tip.y - toward.y), 0, 8, 'tip landed on the pointer');
+    expectClose(Math.hypot(tip.x - toward.x, tip.y - toward.y), 0, 3, 'tip landed on the pointer');
 
     // One gesture = one checkpoint: a single undo restores EVERY bone's rest.
     expect(canUndo()).toBe(true);

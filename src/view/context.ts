@@ -284,6 +284,12 @@ export function wrapToPi(a: number): number {
   return Math.atan2(Math.sin(a), Math.cos(a));
 }
 
+/** Lightweight keyframe-lane refresh during a drag (vs. the full-panel notify() on
+ *  pointerup) — shared by every pose-drag pipeline that keys as it moves. */
+export function notifyTimelineOnly(): void {
+  document.dispatchEvent(new CustomEvent('rig-keys-changed'));
+}
+
 export function round1(n: number): number {
   return Math.round(n * 10) / 10;
 }

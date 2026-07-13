@@ -117,6 +117,21 @@ export function solveAim(a: Pt, e: Pt, t: Pt): number {
   return normDeg((want - cur) * RAD2DEG);
 }
 
+/**
+ * Rotation delta (deg) that swings the ray origin→axisEnd onto the ray
+ * solvedOrigin→solvedEnd — the per-bone FABRIK write-back step (view/ikDrag.ts): a chain
+ * bone's rest.rotate is RELATIVE, so aiming it is just "how far do I need to turn my
+ * current axis to match the solved one." `axisEnd` need not be the bone's own tip — an
+ * off-axis grab point (Fix 2's mid-body IK grab) is just as valid an axis, since only the
+ * ANGLE about `origin` matters, never the axis length or whether `axisEnd` sits exactly on
+ * the solved ray. Normalizes to (-180, 180] (wrap-safe across the atan2 branch cut).
+ */
+export function chainStepDelta(origin: Pt, axisEnd: Pt, solvedOrigin: Pt, solvedEnd: Pt): number {
+  const curAng = angleOf(origin, axisEnd);
+  const wantAng = angleOf(solvedOrigin, solvedEnd);
+  return normDeg((wantAng - curAng) * RAD2DEG);
+}
+
 export function solveTwoBone(
   a: Pt, b: Pt, e: Pt, t: Pt,
 ): { delta1: number; delta2: number } {

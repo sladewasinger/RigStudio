@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { solveAim, solveChainIK, solveTwoBone, Pt } from '../geometry/ik';
+import { chainStepDelta, solveAim, solveChainIK, solveTwoBone, Pt } from '../geometry/ik';
 import { distToSegment, skinWeights } from '../geometry/skin';
 
 function dist(a: Pt, b: Pt): number {
@@ -184,6 +184,54 @@ describe('solveChainIK (full-chain FABRIK)', () => {
     const out = solveChainIK([a, b, e], target);
     expect(dist(out[out.length - 1], target)).toBeLessThan(0.05); // both reach the target
     expect(dist(out[1], elbow)).toBeLessThan(0.05); // same elbow (same bend side)
+  });
+});
+
+describe('chainStepDelta (grab-point-relative IK write-back, Post-A Fix 2)', () => {
+  it('matches the plain on-axis rotation delta (origin/axisEnd == solvedOrigin/solvedEnd rotated)', () => {
+    const origin = { x: 0, y: 0 };
+    const axisEnd = { x: 10, y: 0 }; // pointing at 0°
+    const solvedEnd = { x: 0, y: 10 }; // pointing at 90° (screen: +y down == CW)
+    expect(chainStepDelta(origin, axisEnd, origin, solvedEnd)).toBeCloseTo(90, 6);
+  });
+
+  it('is well-defined for an OFF-AXIS grab point (not the bone\'s own tip)', () => {
+    // The bone's own axis (origin→(20,0), 0°) is irrelevant to a body grab — what matters
+    // is the actual grabbed point's angle, here (5,0) at a different length than the axis.
+    const origin = { x: 0, y: 0 };
+    const grabAt0deg = { x: 5, y: 0 };
+    const solvedAt90deg = { x: 0, y: 3 }; // swung to 90°, and at a DIFFERENT length
+    expect(chainStepDelta(origin, grabAt0deg, origin, solvedAt90deg)).toBeCloseTo(90, 6);
+  });
+
+  it('the delta is invariant to axisEnd/solvedEnd distance from origin (angle-only)', () => {
+    const origin = { x: 2, y: -3 };
+    const near = { x: origin.x + 1, y: origin.y };
+    const far = { x: origin.x + 50, y: origin.y };
+    const solvedNear = { x: origin.x, y: origin.y + 1 };
+    const solvedFar = { x: origin.x, y: origin.y + 80 };
+    const d1 = chainStepDelta(origin, near, origin, solvedNear);
+    const d2 = chainStepDelta(origin, far, origin, solvedFar);
+    expect(d1).toBeCloseTo(d2, 9);
+    expect(d1).toBeCloseTo(90, 6);
+  });
+
+  it('wraps across the ±180° branch cut to the SHORT way around', () => {
+    const origin = { x: 0, y: 0 };
+    // Current axis just past +180° (screen convention), solved axis just past -180°:
+    // a raw difference would be ~-348°; the true short delta is ~+12°.
+    const axisEnd = { x: -10, y: 1.05 }; // ~174°
+    const solvedEnd = { x: -10, y: -1.05 }; // ~-174°
+    const d = chainStepDelta(origin, axisEnd, origin, solvedEnd);
+    expect(Math.abs(d)).toBeLessThan(20);
+    expect(d).toBeGreaterThan(0); // short way is the small positive step, not -348°
+  });
+
+  it('a zero delta when the axis already points at the solved direction', () => {
+    const origin = { x: 5, y: 5 };
+    const alreadyThere = { x: 5, y: 15 }; // same ray as the "solved" target below
+    const solvedEnd = { x: 5, y: 45 }; // further out along the identical ray
+    expect(chainStepDelta(origin, alreadyThere, origin, solvedEnd)).toBeCloseTo(0, 9);
   });
 });
 
