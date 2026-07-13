@@ -635,7 +635,11 @@ block. The keyed stepped `z` channel stays an ANIMATE-TIME override that
 re-sorts the CANVAS only; the panel NEVER re-sorts during animation (panel =
 structure you edit, canvas = animated result). Edit mode shows pure rest order.
 
-- [ ] **Audit + enforce "panel order = paint order"**: doc.parts array order and
+- [x] **Audit + enforce "panel order = paint order"** (dbac402 — seven real
+  divergences found+fixed at the setParent/structural-op chokepoints;
+  take-pill hash re-pinned 3754fc45 after VISUAL verification via headless
+  render-frames; NOTE for Austin: the Dosey checkout's riv+rig.json outputs
+  were rewritten with the canonical bytes): doc.parts array order and
   tree display order can diverge across subtree boundaries today; canonicalize
   (paint order = DFS of the hierarchy; sibling order = the draggable freedom),
   verify the importer already satisfies it (it walks the SVG depth-first),

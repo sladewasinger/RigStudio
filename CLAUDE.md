@@ -139,6 +139,15 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
 
 ## Conventions that must hold
 
+- **`doc.parts` order is CANONICAL** (user feature 2026-07-12, "layer order IS
+  z-order", dbac402): depth-first pre-order — every parent immediately precedes its
+  contiguous descendant subtree; sibling order is the draggable freedom and IS the
+  rest paint order (panel row order == canvas stacking == exporter emission).
+  `setParent` is the ordering chokepoint (moves the whole subtree); every structural
+  op preserves canonicity by construction or canonicalizes (`isCanonicalPartOrder`/
+  `canonicalizePartOrder` in structuralOps, `normalizeDoc` repairs legacy docs on
+  load). The keyed stepped `z` channel re-sorts the CANVAS at animate time only —
+  the layers panel NEVER re-sorts; Edit mode shows pure rest order.
 - **Coordinates are SVG document space:** +y down, positive rotation = clockwise.
   Every part rotates around its own pivot; `root` is a synthetic target for whole-figure
   translate + scale (jumps, squash-and-stretch) around `rootPivot`.
