@@ -6,17 +6,44 @@
  * so one pipeline claims all three in their original sub-order.
  */
 
-import { state, selectedPart, selectedParts, channelValue } from '../../../core/model';
+import {
+  state, RigPart, selectedPart, selectedParts, channelValue, ancestorChain, isGroupLike,
+} from '../../../core/model';
 import {
   ctx, DragState, MIN_SCALE, MAX_SCALE, linearOnly, round1, round2,
 } from '../../context';
 import { handleSize, pointerInRoot } from '../../coords';
-import { poseTime, groupTransformOf, chainMatOf, effectivePivot, groupUnionBox } from '../../pose';
+import { poseTime, groupTransformOf, chainMatOf, effectivePivot } from '../../pose';
 import { applyMat, invertMat, matrixOfTransform } from '../../../geometry/transforms';
 import { renderPose } from '../../render';
-import { groupScaleMembers, applyGroupScale } from '../../rigOps';
+import { groupScaleMembers, applyGroupScale, GroupScaleMember } from '../../rigOps';
+import { groupLikeUnionBox } from '../../overlayHandles';
 import { capturePointer, moveRotate } from '../lifecycle';
 import { GesturePipeline } from '../priority';
+
+/**
+ * The members a group-scale drag distributes across: `groupScaleMembers`'s descendant
+ * set PLUS the group-like part's OWN geometry when it has paths (art-with-children —
+ * Pip's `face`: its mouth should grow with the rest of the composite, not sit frozen
+ * while `eyes` scales around it). The self-entry's `startPivotRoot` equals the drag's
+ * own `pivotRoot` exactly (both read `effectivePivot(part, t)` at the same instant), so
+ * `applyGroupScale`'s point-scale formula resolves its target to `pivotRoot` unchanged —
+ * the part's own joint never moves, only its rest.sx/sy and the tx/ty that keeps the
+ * pivot pinned, exactly like the group's own-pivot anchor invariant for a partless
+ * `group` null. Re-sorted ancestor-first (matching `groupScaleMembers`) so a descendant
+ * (e.g. `eyes`) reads the self-member's WRITTEN rest via `chainMatOf` before its own
+ * turn, the same ordering guarantee `groupScaleMembers` documents.
+ */
+function scaleMembersFor(part: RigPart, t: number | null): GroupScaleMember[] {
+  const members = groupScaleMembers(part, t);
+  if (part.paths.length > 0) {
+    members.push({
+      part, startSx: part.rest.sx, startSy: part.rest.sy, startPivotRoot: effectivePivot(part, t),
+    });
+    members.sort((a, b) => ancestorChain(a.part).length - ancestorChain(b.part).length);
+  }
+  return members;
+}
 
 type Spot = { g: { x: number; y: number }; a: { x: number; y: number } };
 
@@ -46,11 +73,11 @@ export const HANDLES_PIPELINE: GesturePipeline = {
     if (hit.scaleHandle) {
       const part = selectedPart();
       if (!part) return 'handled';
-      if (part.kind === 'group') {
-        const ub = groupUnionBox(part);
+      if (isGroupLike(part, hit.doc.parts)) {
+        const ub = groupLikeUnionBox(part);
         if (!ub) return 'handled'; // nothing inside yet — nothing to scale
         const t = poseTime();
-        const pad = handleSize() * 0.8; // matches overlay.ts's group-box padding
+        const pad = handleSize() * 0.8; // matches overlayHandles.ts's group-box padding
         const spots = handleSpots(ub.x0 - pad, ub.y0 - pad, ub.x1 + pad, ub.y1 + pad);
         const grab = spots[hit.scaleHandle]?.g;
         if (!grab) return 'handled';
@@ -60,7 +87,7 @@ export const HANDLES_PIPELINE: GesturePipeline = {
           handle: hit.scaleHandle,
           pivotRoot: effectivePivot(part, t),
           grabRoot: grab,
-          members: groupScaleMembers(part, t),
+          members: scaleMembersFor(part, t),
           poseT: t,
           current: null,
           startClient: { x: ev.clientX, y: ev.clientY },

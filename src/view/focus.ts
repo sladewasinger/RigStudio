@@ -7,7 +7,8 @@
  */
 
 import {
-  state, RigPart, selectedPart, selectPart, ancestorChain, partById, chainBonesOfPart,
+  state, RigPart, selectedPart, selectedParts, selectPart, ancestorChain, partById,
+  chainBonesOfPart, isGroupLike,
 } from '../core/model';
 import { ctx } from './context';
 
@@ -117,6 +118,7 @@ export function artworkUnderPointer(
  * blank canvas — which exits the focus, Inkscape-style. Null = nothing dimmed.
  */
 export function focusContext(): Set<string> | null {
+  repairEnteredGroups();
   const part = selectedPart();
   if (state.mode === 'nodes' && state.editorMode === 'setup' && part) {
     // Bones of the edited part's own chain are its binding context, not "everything
@@ -160,7 +162,41 @@ export function nodeEditSkinSuspendId(): string | null {
 export function enterGroupsFor(partId: string): void {
   const part = partById(partId);
   if (!part) return;
+  const parts = state.doc?.parts ?? [];
   for (const a of ancestorChain(part)) {
-    if (a.kind === 'group') ctx.enteredGroups.add(a.id);
+    if (isGroupLike(a, parts)) ctx.enteredGroups.add(a.id);
+  }
+}
+
+/**
+ * Self-healing chokepoint for the reported "Ctrl+G leaves the canvas dimmed" bug: no
+ * structural mutation (group/ungroup/delete/reparent — deliberately none of them know
+ * `enteredGroups` exists, since it is view-layer editing-SESSION state, not doc state)
+ * clears or repairs it. Run this on every `focusContext()` call instead, so no future
+ * structural op can strand dimming:
+ *  - drop any entered id whose part no longer exists (ungrouped/deleted — the DOC was
+ *    correct, the SESSION reference went stale);
+ *  - drop any entered id that is not an ancestor of (or equal to) at least one
+ *    currently SELECTED part — but only when something IS selected, so the deliberate
+ *    "dive in, select nothing" state (dblclick drill-down) is never disturbed.
+ * This also gives the least-surprising UX for "group while entered" without any
+ * structural-op call site needing to know this repair exists: grouping members that
+ * live INSIDE the entered group nests the new group there too (still an ancestor of
+ * the new selection, so entry is naturally preserved); grouping members from OUTSIDE
+ * it pops back out to whichever entered id (if any) still encloses the result.
+ */
+function repairEnteredGroups(): void {
+  const doc = state.doc;
+  if (!doc || ctx.enteredGroups.size === 0) return;
+  for (const id of [...ctx.enteredGroups]) {
+    if (!doc.parts.some((p) => p.id === id)) ctx.enteredGroups.delete(id);
+  }
+  const selected = selectedParts();
+  if (selected.length === 0) return;
+  for (const id of [...ctx.enteredGroups]) {
+    const relevant = selected.some(
+      (sp) => sp.id === id || ancestorChain(sp).some((a) => a.id === id),
+    );
+    if (!relevant) ctx.enteredGroups.delete(id);
   }
 }

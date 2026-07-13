@@ -5,7 +5,9 @@
  * GesturePipeline row. Verbatim extraction from the old interactions.ts.
  */
 
-import { state, notify, ancestorChain, selectPart } from '../../core/model';
+import {
+  state, notify, ancestorChain, selectPart, isGroupLike,
+} from '../../core/model';
 import { ctx } from '../context';
 import { clearGroupEntry, artworkUnderPointer } from '../focus';
 import { renderPose } from '../render';
@@ -49,7 +51,7 @@ export function wireDblClick(svg: SVGSVGElement): void {
     // may itself be a nested group (selected, not dived). A further double-click on a
     // nested group dives one level deeper.
     const closed = ancestorChain(part).find(
-      (a) => a.kind === 'group' && !ctx.enteredGroups.has(a.id),
+      (a) => isGroupLike(a, state.doc!.parts) && !ctx.enteredGroups.has(a.id),
     );
     if (closed) {
       ctx.enteredGroups.add(closed.id);

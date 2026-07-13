@@ -8,8 +8,10 @@
  */
 
 import { ctx, SVG_NS } from './context';
-import { state, selectedParts, isEffectivelyHidden } from '../core/model';
-import { groupUnionBox } from './pose';
+import {
+  state, RigPart, selectedParts, isEffectivelyHidden, isGroupLike,
+} from '../core/model';
+import { groupUnionBox, partRootBoxes } from './pose';
 
 /** The 4 corner rotate-handle circles of the Inkscape-style rotate/skew handle set —
  *  shared between Edit's rotate+skew set and Animate's rotate-only set (bug fix: the
@@ -32,18 +34,46 @@ function appendRotateCorners(
 }
 
 /**
- * Dashed transform boxes + Inkscape-style handles for every selected part. ART parts
- * use their own rendered bbox (part-local boxTransform); GROUPS are partless (no
- * artwork of their own — CLAUDE.md), so they use the root-space union AABB of their
- * descendants' rendered boxes instead (groupUnionBox — the same box the dashed group
- * outline always drew) and, for the PRIMARY selection, the identical scale/rotate
- * handle sets an art part gets (minus skew — groups have no shear field): first click
- * = 8 scale handles (a DISTRIBUTED rest edit across every descendant, rigOps.ts's
- * applyGroupScale, the flipSelected family generalized to scale), second click = 4
- * rotate corners (the group's OWN rest.rotate, which genuinely propagates through the
- * pose chain). Per the visible-counterpart GOTCHA, the handle-set toggle must render
- * something different for every selectable KIND — groups used to draw only the
- * passive dashed box with no way to tell scale mode from rotate mode.
+ * Root-space union box for GROUP-LIKE selection/handle chrome. A partless `group` null
+ * has no geometry of its own, so its box is exactly `groupUnionBox` (descendants only).
+ * A group-like ART part (`face`: its own mouth path PLUS a nested `eyes` part) ALSO
+ * draws its own rendered geometry, so its box must union `groupUnionBox` with its own
+ * rendered bbox (`partRootBoxes`) — otherwise the selection box (and the group-scale
+ * handle spots in handles.ts) would clip the very artwork the click landed on, which was
+ * exactly the reported bug ("boxes only the mouth path, not the eyes").
+ */
+export function groupLikeUnionBox(
+  part: RigPart,
+): { x0: number; y0: number; x1: number; y1: number } | null {
+  const descendants = groupUnionBox(part);
+  if (part.paths.length === 0) return descendants;
+  const own = partRootBoxes([part.id]).get(part.id);
+  if (!own) return descendants;
+  const ownBox = { x0: own.x, y0: own.y, x1: own.x + own.w, y1: own.y + own.h };
+  if (!descendants) return ownBox;
+  return {
+    x0: Math.min(descendants.x0, ownBox.x0), y0: Math.min(descendants.y0, ownBox.y0),
+    x1: Math.max(descendants.x1, ownBox.x1), y1: Math.max(descendants.y1, ownBox.y1),
+  };
+}
+
+/**
+ * Dashed transform boxes + Inkscape-style handles for every selected part. Plain ART
+ * parts (not group-like) use their own rendered bbox (part-local boxTransform).
+ * GROUP-LIKE parts — partless `group` nulls (no artwork of their own — CLAUDE.md) AND
+ * art-with-children (Pip's `face`: its own mouth path plus a nested `eyes` part) — use
+ * the root-space union AABB instead (`groupLikeUnionBox`: descendants only for a pure
+ * null, descendants UNIONED with the part's own box for art-with-children — the same
+ * box the dashed group outline always drew, now correctly including a group-like art
+ * part's own geometry too) and, for the PRIMARY selection, the identical scale/rotate
+ * handle sets an art part gets (minus skew — no shear field on the distributed edit):
+ * first click = 8 scale handles (a DISTRIBUTED rest edit across every descendant PLUS
+ * the group-like part's own rest, when it has paths — handles.ts's `scaleMembersFor`),
+ * second click = 4 rotate corners (the part's OWN rest.rotate, which genuinely
+ * propagates through the pose chain to every descendant regardless of kind). Per the
+ * visible-counterpart GOTCHA, the handle-set toggle must render something different
+ * for every selectable KIND — groups used to draw only the passive dashed box with no
+ * way to tell scale mode from rotate mode.
  */
 export function renderSelectionHandles(rootTransform: string, size: number, setup: boolean): void {
   if (!ctx.overlay) return;
@@ -51,12 +81,12 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
     // Layers eye: a hidden part stays selectable via Layers (the inspector still shows
     // its fields) but draws NOTHING on canvas — no box, no handles.
     if (isEffectivelyHidden(part)) continue;
-    const isGroup = part.kind === 'group';
+    const groupLike = isGroupLike(part, state.doc?.parts ?? []);
     const g = ctx.partGroups.get(part.id);
     let box: { x: number; y: number; width: number; height: number };
     let boxTransform: string;
-    if (isGroup) {
-      const ub = groupUnionBox(part);
+    if (groupLike) {
+      const ub = groupLikeUnionBox(part);
       if (!ub) continue; // nothing inside yet — nothing to box or handle
       box = { x: ub.x0, y: ub.y0, width: ub.x1 - ub.x0, height: ub.y1 - ub.y0 };
       boxTransform = rootTransform; // union bbox is already root-space
@@ -67,7 +97,7 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
       box = g.getBBox();
     }
     const primary = part.id === state.selectedPartId;
-    const pad = size * (isGroup ? 0.8 : 0.6);
+    const pad = size * (groupLike ? 0.8 : 0.6);
     const x0 = box.x - pad, y0 = box.y - pad;
     const x1 = box.x + box.width + pad, y1 = box.y + box.height + pad;
 
@@ -131,7 +161,7 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
         // skew sides entirely (no shear field), so their set is rotate-corners-only;
         // still visibly distinct from the 8-square scale set (the GOTCHA's bar).
         appendRotateCorners(handles, x0, y0, x1, y1, size);
-        if (!isGroup) {
+        if (!groupLike) {
           for (const [name, hx, hy] of [
             ['n', cx, y0], ['e', x1, cy], ['s', cx, y1], ['w', x0, cy],
           ] as [string, number, number][]) {

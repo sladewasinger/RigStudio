@@ -28,6 +28,23 @@ export function isAncestorOf(maybeAncestor: RigPart, part: RigPart): boolean {
 }
 
 /**
+ * Whether a part behaves like a GROUP for selection/dive-down/handle-chrome purposes: a
+ * genuine partless `kind: 'group'` null, OR an ART part carrying at least one non-bone
+ * child part — the recursive SVG importer's normal shape for a container that ALSO draws
+ * its own geometry (Pip's `face`: its own mouth path plus a nested `eyes` part — the
+ * reported bug: every group behavior keyed on `kind === 'group'` alone, so `face` got
+ * none of them). Bones are excluded on the child side: an art part whose only children
+ * are its OWN bone chain (hierarchy-as-assignment parents a limb's rig under its art on
+ * purpose) must NOT start behaving like a container — clicking the art, or dragging it,
+ * has to stay a normal single-part gesture, not a group substitution/distributed scale.
+ */
+export function isGroupLike(part: RigPart, parts: RigPart[]): boolean {
+  if (part.kind === 'group') return true;
+  if (part.kind !== 'art') return false;
+  return parts.some((p) => p.parentId === part.id && p.kind !== 'bone');
+}
+
+/**
  * Whether a part should render/hit-test as invisible right now: hidden itself, or riding
  * a hidden ancestor (the Layers eye cascades down the bone hierarchy like a design tool's
  * layer visibility — "a hidden limb's rig shouldn't float"). The doc stores only the flag

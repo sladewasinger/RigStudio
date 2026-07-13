@@ -13,7 +13,7 @@
  */
 
 import {
-  state, notify, selectedParts, selectPart, ancestorChain, channelValue,
+  state, notify, selectedParts, selectPart, ancestorChain, channelValue, isGroupLike,
 } from '../../../core/model';
 import { invertMat } from '../../../geometry/transforms';
 import { ctx, DragState, linearOnly } from '../../context';
@@ -35,7 +35,7 @@ export const ARTWORK_PIPELINE: GesturePipeline = {
     // never hijacked back to its group.
     if (part && state.mode === 'rig' && !state.selectedPartIds.includes(part.id)) {
       const closed = ancestorChain(part).find(
-        (a) => a.kind === 'group' && !ctx.enteredGroups.has(a.id),
+        (a) => isGroupLike(a, hit.doc.parts) && !ctx.enteredGroups.has(a.id),
       );
       if (closed) part = closed;
     }
