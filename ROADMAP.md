@@ -566,10 +566,44 @@ precedent, zero behavior change, gated on the full suites:
 
 **Refactor pass COMPLETE (2026-07-12):** every planned split landed — io/riv/,
 core/ (9 modules), panels/ai/ (A4), panels/sm/, inspectorSections/, timeline
-internals, overlay + rigOps clusters. Grandfather list is down to the two
-documented exceptions (view/interactions.ts, view/nodeEditing.ts) plus six
+internals, overlay + rigOps clusters. Grandfather list is down to
+view/interactions.ts + view/nodeEditing.ts (redesign QUEUED below — the old
+"documented exception" status was retired by user decision 2026-07-12) plus six
 small pinned files (ai/claude 489, main 522, paths 434, graph 395, layers 347,
-exportLottie 327) that no wave is scheduled to split — they simply may not grow.
+exportLottie 327), audit queued below.
+
+## Pattern-driven redesign pass (user-approved 2026-07-12 — runs after H1b lands)
+
+Origin: the user rejected "documented exception" status for the two remaining
+monoliths and mandated named design patterns over proximity/convention (now a
+CLAUDE.md convention: "Think in named patterns, not conventions").
+
+- [ ] **view/interactions/ — gesture-pipeline redesign** (Chain of Responsibility
+  with a STATIC priority table): `priority.ts` exports the ordered
+  `GESTURE_PIPELINES` list (boneTip, boneChain, pivot, gizmo, nodes, skinnedArt,
+  boneGlyph, artwork, blank — top row wins, order readable at a glance);
+  router resolves the press ONCE into a shared `HitContext` (element/role/part/
+  node key — kills per-branch re-sniffing), walks the table until a pipeline's
+  `claim()` returns non-null, then routes move/release to the claimant. Each
+  pipeline file is feature-complete (claim guards + drag math + commit,
+  ~50–150 lines); shared gesture mechanics (threshold, checkpoint-once-per-
+  gesture deferral, pointer capture, snap + Ctrl axis locks) in `lifecycle.ts`
+  applied uniformly by the router. Table stays STATIC — armed modes (pen tool)
+  are high-priority rows whose claim checks armed state; no runtime push/pop.
+  Convert ONE pipeline at a time with full gates between each; the 168-scenario
+  interaction suite is the net. ikDrag.ts stays the IK math engine.
+- [ ] **view/nodeEditing chokepoint + split**: make the lockstep invariant
+  (path commands ↔ nodeTypes string ↔ skin-override indexes) STRUCTURAL via one
+  `applyStructuralEdit(path, edit)` door every command-count-changing op must
+  pass through (does the nodeTypes splice + override drop itself); then split
+  the ops by family (drag math / structural wiring / one-shot type ops) safely.
+- [ ] **Pattern audit over the six pinned files** (ai/claude 489, main 522,
+  geometry/paths 434, timeline/graph 395, panels/layers 347, io/exportLottie
+  327): a review wave that RECOMMENDS (does not auto-implement) pattern-based
+  reorganizations — e.g. main.ts's keydown handler is the same shape as the
+  gesture router (a priority cascade → candidate for a binding table that also
+  generates help.ts's SHORTCUTS); reports per file: natural seams, applicable
+  named pattern, cost/benefit, or an honest "cohesive as-is".
 - [x] **Size-ratchet test** (`architecture.test.ts`) landed 2026-07-11 —
   CODE-line counts (comments/blanks free per user ruling), grandfathered
   ceilings shrink-only, new files fail >300, stale-entry honesty check.

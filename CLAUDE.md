@@ -76,6 +76,25 @@ from the console; `window.__smPanel` drives the state-machine editor determinist
   resolution treats a directory import as its `index.ts`), never a deep path;
   implementation modules never import the facade back. See "The `src/view/`
   layering is binding" below for the enforcement rule this implies.
+- **Think in named patterns, not conventions** (user mandate 2026-07-12, from the
+  interactions.ts design review): when code needs organizing, reach for an
+  explicit structural pattern and NAME it in the module doc. Concretely:
+  an if-cascade whose branch order is load-bearing becomes a
+  Chain-of-Responsibility with a STATIC priority table (the order is data you
+  can read at a glance, the branches become feature-complete modules); a
+  multi-field invariant ("command count changed ⇒ splice `nodeTypes` + drop
+  overrides") gets a CHOKEPOINT — one function every mutation must pass through,
+  so the invariant is enforced by the only door rather than by neighboring code
+  serving as the example to copy; repeated per-branch sniffing becomes one
+  shared context resolved up front; registries/tables beat scattered branches,
+  and a new feature REGISTERS into them instead of growing a cascade.
+  Proximity-and-convention arguments ("all the call sites are in one file, so
+  people will see the rule") are NOT an acceptable defense for a monolith: if a
+  file stays large, the reason must be structural (it is one irreducible
+  responsibility), and any "documented exception" must be re-argued when a new
+  seam appears — the ikDrag.ts extraction is the precedent. Optimize for what a
+  human developer reads first: explicit ordering, one obvious place per concern,
+  patterns they already know by name.
 
 ## Architecture (src/)
 
