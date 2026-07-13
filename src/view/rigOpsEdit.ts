@@ -280,12 +280,17 @@ export function aimBoneAtTip(
  * `carryChildBoneOrigins` (the inspector length-field path); freeze mode's bind refresh
  * runs on top of this and needs no separate handling — the geometry it re-binds is
  * already correct either way.
+ *
+ * UNIFIED SKELETON: skips a direct child flagged `attachedRoot` — its origin is
+ * deliberately LOOSE (not glued to this bone's tip), so carrying it here would silently
+ * snap a cross-chain attach back onto the tip whenever this bone reshapes, destroying
+ * the fixed offset `rigOpsAttach.ts`'s attach fold solved for.
  */
 export function carryChildOrigins(bone: RigPart, t: number | null): void {
   const doc = state.doc;
   if (!doc || !bone.boneTip) return;
   for (const child of doc.parts) {
-    if (child.kind !== 'bone' || child.parentId !== bone.id) continue;
+    if (child.kind !== 'bone' || child.parentId !== bone.id || child.attachedRoot) continue;
     const ot = ownTranslateOf(child, t);
     const newPivot = { x: round3(bone.boneTip.x - ot.x), y: round3(bone.boneTip.y - ot.y) };
     if (child.boneTip) {

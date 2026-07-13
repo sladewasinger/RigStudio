@@ -36,11 +36,13 @@ function placeChain(label: string, n: number): RigPart[] {
   return placeBoneChain(medialPoints(label, n));
 }
 
-/** The connected-chain invariant (contract (d)) — re-checked after every scenario here. */
+/** The connected-chain invariant (contract (d)) — re-checked after every scenario here.
+ *  SCOPED to chain-internal links: an `attachedRoot` cross-chain attach is deliberately
+ *  loose (Unified Skeleton Phase 1), so it's excluded rather than asserted against. */
 function assertNoGap(): void {
   const parts = state.doc?.parts ?? [];
   for (const child of parts) {
-    if (child.kind !== 'bone' || !child.parentId) continue;
+    if (child.kind !== 'bone' || !child.parentId || child.attachedRoot) continue;
     const parent = parts.find((p) => p.id === child.parentId && p.kind === 'bone');
     if (!parent || !parent.boneTip) continue;
     expectClose(child.pivot.x + child.rest.tx, parent.boneTip.x, 0.3, 'no gap: child origin x == parent tip x');

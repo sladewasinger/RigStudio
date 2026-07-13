@@ -1428,6 +1428,7 @@ const ELBOW = 'elbow_bone';
 const GROUP1 = 'group1';
 const LEFT_ARM = 'left_arm';
 const SKINNED_HAND = 'skinned_hand';
+const WRIST_ATTACH = 'wrist_attach_bone';
 
 function maximalDoc(): RigDoc {
   return {
@@ -1505,6 +1506,15 @@ function maximalDoc(): RigDoc {
         pivot: { x: 50, y: 55 }, pivotHint: null, boneTip: { x: 70, y: 55 },
         rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: TORSO, skin: null, paths: [],
+      },
+      {
+        // Unified Skeleton (Phase 1): a cross-chain ATTACH — parented to ELBOW (another
+        // chain's bone) but deliberately NOT sitting at its tip (90,55); rest.rotate/tx/ty
+        // hold the fixed "loose" offset a real Layers-drag attach fold would solve for.
+        id: WRIST_ATTACH, label: 'wrist_attach', kind: 'bone', transform: '',
+        pivot: { x: 70, y: 55 }, pivotHint: null, boneTip: { x: 82, y: 68 },
+        rest: { rotate: 4, tx: 6, ty: 9, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+        parentId: ELBOW, skin: null, paths: [], attachedRoot: true,
       },
     ],
     clips: [
@@ -1643,8 +1653,23 @@ describe('serializeDoc / deserializeDoc round trip', () => {
     const restored = deserializeDoc(serializeDoc(doc));
     expect(restored.parts.map((p) => p.id)).toEqual(doc.parts.map((p) => p.id));
     expect(restored.parts.map((p) => p.id)).toEqual([
-      SKINNED_HAND, ELBOW, GROUP1, LEFT_ARM, TORSO, SHOULDER,
+      SKINNED_HAND, ELBOW, GROUP1, LEFT_ARM, TORSO, SHOULDER, WRIST_ATTACH,
     ]);
+  });
+
+  it('preserves attachedRoot on a cross-chain-attached bone, and leaves it absent elsewhere', () => {
+    const doc = maximalDoc();
+    const restored = deserializeDoc(serializeDoc(doc));
+    const attach = restored.parts.find((p) => p.id === WRIST_ATTACH)!;
+    expect(attach.attachedRoot).toBe(true);
+    expect(attach.parentId).toBe(ELBOW);
+    // A cross-chain attach's origin is deliberately NOT at its parent's tip (90,55) —
+    // the whole point of the flag.
+    expect(attach.pivot).toEqual({ x: 70, y: 55 });
+    expect(attach.rest).toEqual({ rotate: 4, tx: 6, ty: 9, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 });
+    for (const p of restored.parts) {
+      if (p.id !== WRIST_ATTACH) expect(p.attachedRoot).toBeUndefined();
+    }
   });
 
   it('preserves part kind, rest skew/negative-scale, pivotHint, and boneTip per part', () => {

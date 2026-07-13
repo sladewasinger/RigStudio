@@ -110,6 +110,28 @@ export interface RigPart {
   /** Another part's id to inherit motion from (bone hierarchy), or null. */
   parentId: string | null;
   /**
+   * Unified Skeleton (Phase 1, 2026-07-13): true when this BONE's parent is a bone
+   * belonging to a DIFFERENT chain (a cross-chain attach via the Layers panel — e.g. an
+   * arm chain's root bone parented onto the spine) rather than the classic same-chain
+   * shared joint. A normal chain-internal child bone's origin (`pivot`) always sits
+   * exactly at its parent's tip (`boneTip`) — see `boneChain`'s and the
+   * `carryChild*Origins` helpers' doc comments. An attached root is LOOSE: its origin
+   * need not (and generally does not) sit at the parent's tip — `rest.rotate/tx/ty`
+   * instead hold a fixed offset in the parent's frame, solved once at attach time so the
+   * bone's WORLD transform (and everything riding it — its own sub-chain, any bound
+   * skin) stays byte-stable (`view/rigOpsAttach.ts`'s world-preserving fold). `boneChain`
+   * treats an attachedRoot bone as the root of its OWN chain: it stops walking UP through
+   * one (so climbing from a descendant never crosses INTO the parent chain) and stops
+   * collecting DOWN past one from the far side (so the parent chain's own resolution
+   * excludes the attached sub-chain) — while POSE composition (which just follows
+   * `parentId`) is untouched, so the attached sub-chain still rides the parent's motion
+   * exactly like any other child. `view/ikDrag.ts`'s `ikBoneChain` stops at the same
+   * boundary (Phase 2 — IK solving ACROSS attachments — is a deferred decision, not
+   * built). Only meaningful on a `kind: 'bone'` part whose `parentId` resolves to another
+   * bone; `normalizeDoc` clears it otherwise (back-compat + repair).
+   */
+  attachedRoot?: boolean;
+  /**
    * Linear-blend skinning binding (art parts): geometry deforms by these bones
    * instead of riding a parent chain. Bind bakes static transforms into path data,
    * zeroes rest, and clears parentId; weights derive from bindSeg distances at

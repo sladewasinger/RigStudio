@@ -28,11 +28,31 @@ import { pointerInRoot } from './coords';
 import { poseTime, effectivePivot, fullPoseTransform } from './pose';
 import { renderPose } from './render';
 
-/** Bones ROOT→effector (outermost first) — the full chain a FABRIK IK drag rotates. The
- *  art a chain roots on is filtered out (only `kind === 'bone'` ancestors), so it's never
- *  mistaken for a joint. */
+/**
+ * Bones ROOT→effector (outermost first) — the full chain a FABRIK IK drag rotates. The
+ * art a chain roots on is filtered out (only `kind === 'bone'` ancestors), so it's never
+ * mistaken for a joint.
+ *
+ * UNIFIED SKELETON (Phase 1): stops at an `attachedRoot` boundary — IK never solves
+ * ACROSS a cross-chain attach (Phase 2, whether grabbing a hand should FABRIK through
+ * the spine, is an explicit deferred decision, not built). Walking nearest-parent-first
+ * so the first `attachedRoot` bone encountered is INCLUDED (it's the effector's own
+ * local chain root) but that bone's own ancestors — the OTHER chain — are excluded. When
+ * the effector itself is an attached root, its chain is just itself: no ancestor bone
+ * (all of which belong to the other chain) participates.
+ */
 export function ikBoneChain(effector: RigPart): RigPart[] {
-  return [...ancestorChain(effector).filter((a) => a.kind === 'bone'), effector];
+  if (effector.attachedRoot) return [effector];
+  const ancestors = ancestorChain(effector); // outermost first
+  const chain: RigPart[] = [];
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    const a = ancestors[i];
+    if (a.kind !== 'bone') continue;
+    chain.unshift(a);
+    if (a.attachedRoot) break; // a's own ancestors are a DIFFERENT chain — stop here
+  }
+  chain.push(effector);
+  return chain;
 }
 
 /**

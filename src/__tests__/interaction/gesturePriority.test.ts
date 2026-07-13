@@ -48,11 +48,12 @@ function placeChain(label: string, n: number): ReturnType<typeof partByLabel>[] 
 }
 
 /** The connected-chain invariant (CLAUDE.md "Bones system") — re-checked here since this
- *  file drives a real joint drag. */
+ *  file drives a real joint drag. SCOPED to chain-internal links: an `attachedRoot`
+ *  cross-chain attach is deliberately loose (Unified Skeleton Phase 1). */
 function assertNoGap(): void {
   const parts = state.doc?.parts ?? [];
   for (const child of parts) {
-    if (child.kind !== 'bone' || !child.parentId) continue;
+    if (child.kind !== 'bone' || !child.parentId || child.attachedRoot) continue;
     const parent = parts.find((p) => p.id === child.parentId && p.kind === 'bone');
     if (!parent || !parent.boneTip) continue;
     expectClose(child.pivot.x + child.rest.tx, parent.boneTip.x, 0.3, 'no gap: child origin x == parent tip x');

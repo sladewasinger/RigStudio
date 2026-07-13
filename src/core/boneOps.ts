@@ -7,6 +7,18 @@ import { RigPart, Vec2 } from './docTypes';
  * up parent links while they stay bones) plus every bone descended from that root
  * through bone-only links. Returned in doc-parts order (placement order == root first
  * for a normally-built chain). Pure over the parts array, so it is unit-testable.
+ *
+ * UNIFIED SKELETON (Phase 1): an `attachedRoot` bone is treated as the root of its OWN
+ * chain even though it has a bone `parentId` reaching into another chain — `rootOf`
+ * stops climbing the instant it lands on one, so a chain never crosses a cross-chain
+ * attach in either direction. Walking UP from a descendant of an attached sub-chain
+ * resolves to the attached root, not the parent chain's root (extending an arm chain
+ * must never re-target the body's art via auto-bind); walking DOWN from the parent
+ * chain's root excludes the attached sub-chain entirely (its members' `rootOf` resolves
+ * to the attached root, not the parent root, so the `rootOf(p).id === root.id` filter
+ * below drops them). POSE composition is untouched — it just follows `parentId` — so the
+ * attached sub-chain still rides the parent chain's motion; only chain-scoped ops (auto-
+ * bind targeting, freeze bind-refresh, the no-gap invariant) stop at the boundary.
  */
 export function boneChain(parts: RigPart[], boneId: string): RigPart[] {
   const byId = new Map(parts.map((p) => [p.id, p]));
@@ -15,7 +27,7 @@ export function boneChain(parts: RigPart[], boneId: string): RigPart[] {
   const rootOf = (b: RigPart): RigPart => {
     let r = b;
     const seen = new Set([r.id]);
-    while (r.parentId) {
+    while (!r.attachedRoot && r.parentId) {
       const par = byId.get(r.parentId);
       if (!par || par.kind !== 'bone' || seen.has(par.id)) break;
       r = par;
@@ -125,11 +137,16 @@ export function setBoneLength(parts: RigPart[], bone: RigPart, length: number): 
  * (the delta cancels algebraically), independent of any rounding applied to the delta
  * itself. Shared by the canvas tip-drag path (`rigOps.ts` `aimBoneAtTip`/
  * `carryChildOrigins`, which mirrors this) and the inspector length field above.
+ *
+ * UNIFIED SKELETON: skips a direct child flagged `attachedRoot` — its origin is
+ * deliberately LOOSE (not glued to this bone's tip; see the field's doc comment), so
+ * carrying it here would silently snap a cross-chain attach back onto the tip the moment
+ * this bone's length changes, destroying the fixed offset the attach fold solved for.
  */
 export function carryChildBoneOrigins(parts: RigPart[], bone: RigPart): void {
   if (!bone.boneTip) return;
   for (const child of parts) {
-    if (child.kind !== 'bone' || child.parentId !== bone.id) continue;
+    if (child.kind !== 'bone' || child.parentId !== bone.id || child.attachedRoot) continue;
     const newPivot = { x: bone.boneTip.x - child.rest.tx, y: bone.boneTip.y - child.rest.ty };
     if (child.boneTip) {
       const dx = newPivot.x - child.pivot.x;

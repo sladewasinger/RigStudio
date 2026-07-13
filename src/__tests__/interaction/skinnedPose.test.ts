@@ -28,11 +28,14 @@ beforeEach(resetRig);
  * bone's origin never drifts from its parent's tip, in either mode, after any gesture —
  * the bones ride the skinned part's own pose by construction, so a rotate/translate drag
  * on the part must never open a gap. Enforced after EVERY scenario in this file.
+ *
+ * SCOPED to chain-INTERNAL links (Unified Skeleton Phase 1): an `attachedRoot` bone is a
+ * deliberately LOOSE cross-chain attach, excluded rather than asserted against.
  */
 function assertNoGap(): void {
   const parts = state.doc?.parts ?? [];
   for (const child of parts) {
-    if (child.kind !== 'bone' || !child.parentId) continue;
+    if (child.kind !== 'bone' || !child.parentId || child.attachedRoot) continue;
     const parent = parts.find((p) => p.id === child.parentId && p.kind === 'bone');
     if (!parent || !parent.boneTip) continue;
     expectClose(child.pivot.x + child.rest.tx, parent.boneTip.x, 0.3, 'no gap: child origin x == parent tip x');

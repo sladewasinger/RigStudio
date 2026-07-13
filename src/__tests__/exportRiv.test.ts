@@ -793,3 +793,43 @@ describe('exportRiv exit time', () => {
     expect(d.tocTypes.get(PROP.TRANS_EXIT_TIME)).toBe(0); // uint
   });
 });
+
+// ---- Unified Skeleton (Phase 1): cross-chain bone attachment ----
+//
+// A bone exports as a plain Node in the parentId hierarchy either way — `attachedRoot`
+// is purely an EDITOR-side chain-resolution boundary (auto-bind targeting, the no-gap
+// invariant); the exporter has no concept of it and needs no change. This just confirms
+// a doc carrying the flag still exports cleanly and the attached bone's Node parents to
+// the bone it was dropped onto, exactly like any other bone-to-bone parentId link.
+describe('exportRiv Unified Skeleton attachment (Phase 1)', () => {
+  function attachedDoc(): RigDoc {
+    const spine = part('p_spine', {
+      kind: 'bone', label: 'spine', pivot: { x: 50, y: 20 }, boneTip: { x: 50, y: 40 },
+    });
+    const armRoot = part('p_arm_root', {
+      kind: 'bone', label: 'arm_root', pivot: { x: 70, y: 40 }, boneTip: { x: 90, y: 40 },
+      parentId: 'p_spine', attachedRoot: true,
+      // A loose offset — NOT sitting at the spine bone's tip (50,40) — is the whole
+      // point of the flag; the exporter must not care either way.
+      rest: { rotate: 4, tx: 6, ty: 2, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+    });
+    return {
+      name: 'attach_test', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+      parts: [spine, armRoot], rootPivot: { x: 50, y: 80 },
+      clips: [{ name: 'idle', duration: 1000, tracks: [] }],
+    };
+  }
+
+  it('exports without error', () => {
+    expect(() => exportRiv(attachedDoc())).not.toThrow();
+  });
+
+  it("parents the attached bone's Node to the bone it was cross-chain attached onto", () => {
+    const d = decodeRiv(exportRiv(attachedDoc()));
+    const spineNode = d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'spine')!;
+    const armNode = d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'arm_root')!;
+    expect(spineNode).toBeTruthy();
+    expect(armNode).toBeTruthy();
+    expect(armNode.props[PROP.PARENT_ID]).toBe(spineNode.index);
+  });
+});

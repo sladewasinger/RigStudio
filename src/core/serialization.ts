@@ -161,6 +161,10 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     // comment) so a hand-edited or legacy file can't smuggle a truthy-but-wrong-typed
     // value through to render.ts's display:none-equivalent toggle.
     part.hidden = part.hidden === true ? true : undefined;
+    // Unified Skeleton attach flag: same clean true/undefined treatment as `hidden`
+    // above; the STRUCTURAL half of the repair (parent must actually resolve to a bone)
+    // runs below once `boneKindIds` exists.
+    part.attachedRoot = part.attachedRoot === true ? true : undefined;
     part.parentId = part.parentId ?? null;
     part.boneTip = part.boneTip ?? null;
     healDegenerateBoneTip(part); // heals a present-but-degenerate tip in place; a no-op
@@ -179,6 +183,14 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
   const boneKindIds = new Set(doc.parts.filter((p) => p.kind === 'bone').map((p) => p.id));
   for (const part of doc.parts) {
     if (part.parentId && !ids.has(part.parentId)) part.parentId = null;
+    // Unified Skeleton: `attachedRoot` is only meaningful on a bone whose parent
+    // resolves to ANOTHER bone (a cross-chain attach) — a hand-edited file, or one from
+    // before the parent link above was repaired, could carry it on a part whose parent
+    // is missing/non-bone/absent; `boneChain` would otherwise treat it as an orphaned
+    // "root of nothing" rather than falling back to the plain hierarchy it actually is.
+    if (part.attachedRoot && (part.kind !== 'bone' || !part.parentId || !boneKindIds.has(part.parentId))) {
+      part.attachedRoot = undefined;
+    }
     if (part.skin) {
       // Drop a skin.bones entry when its id doesn't resolve to a BONE part (missing
       // entirely, or retyped/ungrouped away from kind:'bone' since bind time) or its

@@ -43,11 +43,15 @@ beforeEach(resetRig);
  * bone's tip — one shared joint that NEVER opens a gap, in either mode, after any gesture.
  * In the bone position model a child keeps zero rest translate, so its origin equals its
  * parent's tip in the parent's frame. Enforced after EVERY scenario in this file.
+ *
+ * SCOPED to chain-INTERNAL links (Unified Skeleton Phase 1): an `attachedRoot` bone is a
+ * deliberately LOOSE cross-chain attach — a shoulder isn't at the spine's tip — so it's
+ * excluded rather than asserted against.
  */
 function assertNoGap(): void {
   const parts = state.doc?.parts ?? [];
   for (const child of parts) {
-    if (child.kind !== 'bone' || !child.parentId) continue;
+    if (child.kind !== 'bone' || !child.parentId || child.attachedRoot) continue;
     const parent = parts.find((p) => p.id === child.parentId && p.kind === 'bone');
     if (!parent || !parent.boneTip) continue;
     expectClose(child.pivot.x + child.rest.tx, parent.boneTip.x, 0.3, 'no gap: child origin x == parent tip x');

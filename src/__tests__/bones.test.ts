@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { boneChain, normalizeDoc, RigDoc, SkinOverride } from '../core/model';
+import { boneChain, normalizeDoc, RigDoc, serializeDoc, SkinOverride } from '../core/model';
 import {
   artDescendantsOf, chainAnchorPart, distToSegment, expandBindTarget, overrideWeightRow,
   segIntersectsBox, skinWeights,
@@ -56,6 +56,41 @@ describe('boneChain', () => {
     // Self-parent cycle must not hang.
     const b = makePart('b', { kind: 'bone', parentId: 'b' });
     expect(boneChain(makeDoc([b]).parts, 'b').map((p) => p.id)).toEqual(['b']);
+  });
+
+  // Unified Skeleton (Phase 1): an `attachedRoot` bone is the root of its OWN chain even
+  // though its `parentId` reaches into another chain — auto-bind must never re-target the
+  // parent chain's art, or vice versa. Both directions covered on a fabricated parts array:
+  // spine(s1→s2) with arm(a1→a2) cross-chain attached at a1→s2, a1.attachedRoot = true.
+  it('stops climbing UP at an attachedRoot: a descendant of the attached sub-chain resolves to it, not the parent chain root', () => {
+    const s1 = makePart('s1', { kind: 'bone' });
+    const s2 = makePart('s2', { kind: 'bone', parentId: 's1' });
+    const a1 = makePart('a1', { kind: 'bone', parentId: 's2', attachedRoot: true });
+    const a2 = makePart('a2', { kind: 'bone', parentId: 'a1' });
+    const parts = makeDoc([s1, s2, a1, a2]).parts;
+    // From ANY bone in the arm sub-chain, the chain is exactly the arm — never the spine.
+    expect(boneChain(parts, 'a1').map((p) => p.id)).toEqual(['a1', 'a2']);
+    expect(boneChain(parts, 'a2').map((p) => p.id)).toEqual(['a1', 'a2']);
+  });
+
+  it('stops collecting DOWN past an attachedRoot: the parent chain excludes the attached sub-chain', () => {
+    const s1 = makePart('s1', { kind: 'bone' });
+    const s2 = makePart('s2', { kind: 'bone', parentId: 's1' });
+    const a1 = makePart('a1', { kind: 'bone', parentId: 's2', attachedRoot: true });
+    const a2 = makePart('a2', { kind: 'bone', parentId: 'a1' });
+    const parts = makeDoc([s1, s2, a1, a2]).parts;
+    // From either spine bone, the chain is exactly the spine — the arm never leaks in,
+    // whether resolved from the spine's root or a bone further down it.
+    expect(boneChain(parts, 's1').map((p) => p.id)).toEqual(['s1', 's2']);
+    expect(boneChain(parts, 's2').map((p) => p.id)).toEqual(['s1', 's2']);
+  });
+
+  it('an attachedRoot bone with no attached children is just itself, even mid-chain', () => {
+    const s1 = makePart('s1', { kind: 'bone' });
+    const a1 = makePart('a1', { kind: 'bone', parentId: 's1', attachedRoot: true });
+    const parts = makeDoc([s1, a1]).parts;
+    expect(boneChain(parts, 'a1').map((p) => p.id)).toEqual(['a1']);
+    expect(boneChain(parts, 's1').map((p) => p.id)).toEqual(['s1']);
   });
 });
 
@@ -294,5 +329,45 @@ describe('normalizeDoc override pruning', () => {
   it('keeps a null b (100% a)', () => {
     const doc = normalizeDoc(docWithSkin({ p1: { '2': { a: 'b2', b: null, t: 0 } } }));
     expect(doc.parts[0].skin!.overrides!.p1['2']).toEqual({ a: 'b2', b: null, t: 0 });
+  });
+});
+
+describe('normalizeDoc attachedRoot pruning (Unified Skeleton Phase 1)', () => {
+  it('keeps attachedRoot on a bone whose parent resolves to another bone', () => {
+    const spine = makePart('spine', { kind: 'bone' });
+    const arm = makePart('arm', { kind: 'bone', parentId: 'spine', attachedRoot: true });
+    const doc = normalizeDoc(makeDoc([spine, arm]));
+    expect(doc.parts.find((p) => p.id === 'arm')!.attachedRoot).toBe(true);
+  });
+
+  it('clears attachedRoot when the parent id is missing/dangling', () => {
+    const arm = makePart('arm', { kind: 'bone', parentId: 'ghost', attachedRoot: true });
+    const doc = normalizeDoc(makeDoc([arm]));
+    const restored = doc.parts.find((p) => p.id === 'arm')!;
+    expect(restored.parentId).toBeNull(); // the existing dangling-parent repair
+    expect(restored.attachedRoot).toBeUndefined();
+  });
+
+  it('clears attachedRoot when the parent resolves but is not a bone', () => {
+    const body = makePart('body', { kind: 'art', paths: [makePath('p')] });
+    const arm = makePart('arm', { kind: 'bone', parentId: 'body', attachedRoot: true });
+    const doc = normalizeDoc(makeDoc([body, arm]));
+    expect(doc.parts.find((p) => p.id === 'arm')!.attachedRoot).toBeUndefined();
+  });
+
+  it('clears attachedRoot on a non-bone part (hand-edited file) even with a valid bone parent', () => {
+    const bone = makePart('bone', { kind: 'bone' });
+    const art = makePart('art', {
+      kind: 'art', parentId: 'bone', paths: [makePath('p')], attachedRoot: true,
+    });
+    const doc = normalizeDoc(makeDoc([bone, art]));
+    expect(doc.parts.find((p) => p.id === 'art')!.attachedRoot).toBeUndefined();
+  });
+
+  it('never serializes a bare `false` — absent stays absent in the JSON, matching the `hidden` flag convention', () => {
+    const bone = makePart('bone', { kind: 'bone' });
+    const doc = normalizeDoc(makeDoc([bone]));
+    const parsed = JSON.parse(serializeDoc(doc)) as { doc: RigDoc };
+    expect('attachedRoot' in parsed.doc.parts[0]).toBe(false);
   });
 });

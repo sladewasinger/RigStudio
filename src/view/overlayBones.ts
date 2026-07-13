@@ -91,7 +91,22 @@ export function renderPivotGhosts(
   }
 }
 
-/** Bone lines: connect each parented part's joint to its parent's joint. */
+/**
+ * Bone lines: connect each parented part's joint to its parent's joint — EXCEPT a
+ * UNIFIED SKELETON cross-chain attach (`RigPart.attachedRoot`), which draws from the
+ * PARENT'S TIP instead of the parent's origin. Reasoning behind that choice: a normal
+ * chain-internal child's origin sits exactly at its parent's TIP (the connected-chain
+ * invariant), so for every ordinary bone-to-bone edge parent-origin→child-origin and
+ * parent-TIP→child-origin land in the same visual neighborhood anyway (mediated by the
+ * bone's own kite glyph, which already spans origin→tip) — but an attached root's origin
+ * is deliberately LOOSE, not required to sit at that tip. Drawing the line from where a
+ * normal chain WOULD connect (the parent's tip) to where the attach actually landed makes
+ * the "not glued" offset visible at a glance instead of reading as just another ordinary
+ * joint line — the GOTCHA's required visible counterpart for the invariant this feature
+ * relaxes. Styled inline (not a stylesheet class — this module doesn't own style.css)
+ * with `vector-effect="non-scaling-stroke"` so the stroke stays screen-constant under
+ * zoom, per the other GOTCHA.
+ */
 export function renderBoneLines(
   doc: RigDoc, t: number | null, size: number, holder: SVGGElement,
 ): void {
@@ -100,15 +115,25 @@ export function renderBoneLines(
     if (isEffectivelyHidden(part)) continue; // Layers eye
     const parent = doc.parts.find((p) => p.id === part.parentId);
     if (!parent) continue;
-    const a = effectivePivot(parent, t);
+    const attached = part.kind === 'bone' && !!part.attachedRoot && parent.kind === 'bone';
+    const a = attached ? (effectiveTip(parent, t) ?? effectivePivot(parent, t)) : effectivePivot(parent, t);
     const b = effectivePivot(part, t);
     const line = document.createElementNS(SVG_NS, 'line');
     line.setAttribute('x1', String(a.x));
     line.setAttribute('y1', String(a.y));
     line.setAttribute('x2', String(b.x));
     line.setAttribute('y2', String(b.y));
-    line.setAttribute('class', 'bone-line');
-    line.setAttribute('stroke-dasharray', `${size * 0.5} ${size * 0.5}`);
+    if (attached) {
+      line.setAttribute('class', 'attachment-link');
+      line.setAttribute('stroke-dasharray', `${size * 0.35} ${size * 0.35}`);
+      line.setAttribute('vector-effect', 'non-scaling-stroke');
+      line.setAttribute('stroke', 'rgba(255, 209, 102, 0.65)');
+      line.setAttribute('stroke-width', '1');
+      line.setAttribute('fill', 'none');
+    } else {
+      line.setAttribute('class', 'bone-line');
+      line.setAttribute('stroke-dasharray', `${size * 0.5} ${size * 0.5}`);
+    }
     holder.appendChild(line);
   }
 }

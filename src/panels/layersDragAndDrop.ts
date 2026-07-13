@@ -19,6 +19,16 @@
  * fires at all: the rejection is a structural non-event, not a branch that could
  * accidentally mutate. Same-part path reordering is untouched (byte-identical to the
  * pre-split behavior).
+ *
+ * A PART drop that reparents (`wireDropTarget`'s un-parent strip, `wirePartRowDrop`'s
+ * "into" zone) tries the view facade's `reattachRootBone` FIRST (Unified Skeleton Phase
+ * 1: a chain-root bone dropped onto another chain's bone, or an already-attached root
+ * dropped back to the un-parent strip, reparents world-preservingly instead of jumping)
+ * and falls back to plain `setParent` when it declines (every other drag combination —
+ * see that function's doc comment for the exact gesture table) — `reattachRootBone(...)
+ * || setParent(...)` is safe to chain unconditionally: a decline never mutates, and a
+ * cycle refusal inside `reattachRootBone` leaves `setParent`'s own cycle check to fail
+ * (and message) identically.
  */
 
 import {
@@ -27,7 +37,16 @@ import {
 } from '../core/model';
 import { checkpoint } from '../core/history';
 import { dialog } from '../ui/dialogs';
-import { renderPose, syncPartPathDom, reorderCanvas, movePathToPart, pathMoveRefusal } from '../view';
+import {
+  renderPose, syncPartPathDom, reorderCanvas, movePathToPart, pathMoveRefusal,
+  reattachRootBone,
+} from '../view';
+
+/** Reparent `draggedId` onto `newParentId` for a Layers drop — see the module doc. */
+function reparentForDrop(draggedId: string, newParentId: string | null): boolean {
+  const dragged = state.doc?.parts.find((p) => p.id === draggedId);
+  return (!!dragged && reattachRootBone(dragged, newParentId)) || setParent(draggedId, newParentId);
+}
 
 /** Opens a part's folder in the tree (layers.ts owns the `expanded` set). */
 export type ExpandPart = (partId: string) => void;
@@ -57,7 +76,7 @@ export function wireDropTarget(el: HTMLElement, newParentId: string | null, expa
     const childId = ev.dataTransfer?.getData('text/rig-part');
     if (!childId || childId === newParentId) return;
     checkpoint();
-    if (!setParent(childId, newParentId)) {
+    if (!reparentForDrop(childId, newParentId)) {
       void dialog.alert('Cannot parent a part to its own descendant.');
       return;
     }
@@ -115,7 +134,7 @@ export function wirePartRowDrop(row: HTMLElement, part: RigPart, expand: ExpandP
     if (!draggedId || draggedId === part.id) return;
     checkpoint();
     const ok = zone === 'into'
-      ? setParent(draggedId, part.id)
+      ? reparentForDrop(draggedId, part.id)
       : movePartRelativeTo(draggedId, part.id, zone);
     if (!ok) {
       void dialog.alert('That drop would create a parenting cycle.');

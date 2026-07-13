@@ -41,11 +41,13 @@ function boneLen(b: ReturnType<typeof partByLabel>): number {
   return b.boneTip ? Math.hypot(b.boneTip.x - b.pivot.x, b.boneTip.y - b.pivot.y) : 0;
 }
 
-/** The connected-chain invariant — a child bone's origin never leaves its parent's tip. */
+/** The connected-chain invariant — a child bone's origin never leaves its parent's tip.
+ *  SCOPED to chain-internal links: an `attachedRoot` cross-chain attach is deliberately
+ *  loose (Unified Skeleton Phase 1), so it's excluded rather than asserted against. */
 function assertNoGap(): void {
   const parts = state.doc?.parts ?? [];
   for (const child of parts) {
-    if (child.kind !== 'bone' || !child.parentId) continue;
+    if (child.kind !== 'bone' || !child.parentId || child.attachedRoot) continue;
     const parent = parts.find((p) => p.id === child.parentId && p.kind === 'bone');
     if (!parent || !parent.boneTip) continue;
     expectClose(child.pivot.x + child.rest.tx, parent.boneTip.x, 0.3, 'no gap: child origin x == parent tip x');
