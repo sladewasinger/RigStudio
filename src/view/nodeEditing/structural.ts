@@ -20,7 +20,7 @@ import {
   RigPath, RigPart, state, notify, selectedPart, freshId, dropSkinOverridesForPath,
 } from '../../core/model';
 import {
-  parsePath, serializePath, insertNodeAfter, PathPiece,
+  parsePath, serializePath, insertNodeAfter, PathPiece, PathCmd, arcToCubics,
   deleteSegment, closePath, joinPaths, isSingleSubpath, isClosedPath, nodeCount,
 } from '../../geometry/paths';
 import { checkpoint } from '../../core/history';
@@ -50,6 +50,46 @@ export function applyStructuralEdit(part: RigPart, path: RigPath, edit: PathPiec
   syncPartPathDom(part);
   ctx.selectedNodes.clear();
   ctx.selectedNode = null;
+}
+
+/**
+ * The BIND-BAKE's nodeTypes companion (`view/rigOpsBind.ts` is the one caller): the
+ * bake runs every path through `pathToCubics`, which expands a literal 'A' into k
+ * cubics — a command-count change, so the one-char-per-command string must be spliced
+ * in the same pass or every node op on the bound path desyncs afterward. This lives
+ * HERE (not in rigOpsBind) so the chokepoint module stays the sole writer of
+ * `nodeTypes` — the enforcement test caught the first draft writing it from the bake.
+ * It is deliberately NOT `applyStructuralEdit`: the bake manages its own DOM sync and
+ * override semantics (fresh binds have no overrides; re-binds skip the bake entirely),
+ * so only the lockstep splice applies. The (k−1) synthesized split points get 'c'
+ * (free corner: the splits are tangent-smooth by construction, but 'c' never imposes
+ * mirror behavior on a later handle drag); the arc's ORIGINAL char stays on its
+ * endpoint, so typed nodes survive the bake exactly. Mirrors `pathToCubics`'s
+ * current-point walk — including Z resetting to the subpath start — so the counts
+ * cannot drift from what the bake actually emits. Untyped (null/absent) stays null
+ * (collinearity detection — never fabricate flags); a stale-length string first gets
+ * the SAME lazy normalization every node op applies (`ensureNodeTypes` — Inkscape's
+ * occasional extra closing char, e.g. the sample's left_leg 'cssssscc', trims rather
+ * than nuking the whole typed string). Pinned by `interaction/arcBindNodeTypes.test.ts`.
+ */
+export function spliceNodeTypesForBake(path: RigPath, cmds: PathCmd[]): void {
+  if ((path.nodeTypes ?? null) === null) { path.nodeTypes = null; return; }
+  const nodeTypes = ensureNodeTypes(path);
+  let out = '';
+  let i = 0;
+  let cx = 0, cy = 0, sx = 0, sy = 0;
+  for (const c of cmds) {
+    if (c.cmd === 'Z') { cx = sx; cy = sy; continue; }
+    const ch = nodeTypes[i++];
+    if (c.cmd === 'A') {
+      out += 'c'.repeat(arcToCubics(cx, cy, c).length - 1) + ch;
+    } else {
+      out += ch;
+      if (c.cmd === 'M') { sx = c.x; sy = c.y; }
+    }
+    cx = c.x; cy = c.y;
+  }
+  path.nodeTypes = out;
 }
 
 export function editNodeStructure(d: Extract<DragState, { kind: 'node' }>, op: 'insert' | 'delete'): void {

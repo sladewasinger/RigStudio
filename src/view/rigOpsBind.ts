@@ -9,6 +9,7 @@ import {
   state, selectedParts, ancestorChain, boneChain, RigPart, SkinBone,
 } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
+import { spliceNodeTypesForBake } from './nodeEditing/structural';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from '../geometry/transforms';
 import { ctx, round3 } from './context';
 import {
@@ -87,7 +88,13 @@ export function bindPartsToBones(artsIn: RigPart[], bones: RigPart[]): void {
     const { full, rootPivot } = preBake.get(part.id)!;
     for (const path of part.paths) {
       const m = multiply(full, matrixOfTransform(path.transform));
-      const cmds = pathToCubics(parsePath(path.d)).map((c) => {
+      const parsed = parsePath(path.d);
+      // nodeTypes lockstep: pathToCubics below expands a literal 'A' into MULTIPLE
+      // cubics, so the one-char-per-command string must be spliced in the same pass
+      // (the chokepoint wave's flagged latent desync — a bound arc path used to keep
+      // its old, now-too-short string). The write lives in the chokepoint module.
+      spliceNodeTypesForBake(path, parsed);
+      const cmds = pathToCubics(parsed).map((c) => {
         if (c.cmd === 'C') {
           const p1 = applyMat(m, c.x1, c.y1);
           const p2 = applyMat(m, c.x2, c.y2);
