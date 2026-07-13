@@ -578,20 +578,18 @@ Origin: the user rejected "documented exception" status for the two remaining
 monoliths and mandated named design patterns over proximity/convention (now a
 CLAUDE.md convention: "Think in named patterns, not conventions").
 
-- [ ] **view/interactions/ — gesture-pipeline redesign** (Chain of Responsibility
-  with a STATIC priority table): `priority.ts` exports the ordered
-  `GESTURE_PIPELINES` list (boneTip, boneChain, pivot, gizmo, nodes, skinnedArt,
-  boneGlyph, artwork, blank — top row wins, order readable at a glance);
-  router resolves the press ONCE into a shared `HitContext` (element/role/part/
-  node key — kills per-branch re-sniffing), walks the table until a pipeline's
-  `claim()` returns non-null, then routes move/release to the claimant. Each
-  pipeline file is feature-complete (claim guards + drag math + commit,
-  ~50–150 lines); shared gesture mechanics (threshold, checkpoint-once-per-
-  gesture deferral, pointer capture, snap + Ctrl axis locks) in `lifecycle.ts`
-  applied uniformly by the router. Table stays STATIC — armed modes (pen tool)
-  are high-priority rows whose claim checks armed state; no runtime push/pop.
-  Convert ONE pipeline at a time with full gates between each; the 168-scenario
-  interaction suite is the net. ikDrag.ts stays the IK math engine.
+- [x] **view/interactions/ — gesture-pipeline redesign** (5ef6ae5) — done exactly
+  per the approved design: 11-row static `GESTURE_PIPELINES` table (final order:
+  boneChain, gizmo, boneTip, pan, non-primary-button guard, handles, node,
+  pivot, nodesBendMarquee, artwork, blank — each row commented with why it
+  precedes the next), shared `HitContext`, uniform `lifecycle.ts`, nine
+  feature-complete pipeline modules (max 219 code lines). Converted one row at
+  a time against a shrinking legacy scaffold, interaction suite green after
+  every step. Priority pinned by `gesturePriority.test.ts` (mutation-checked:
+  swapping pivot/artwork fails 9 scenarios across 4 files). Documented
+  deviations: skinnedArt/boneGlyph are sub-cases inside artwork's claim (they
+  share its once-only selection side effect); node vs nodesBendMarquee split
+  because pivot sits between them in the real cascade order.
 - [ ] **view/nodeEditing chokepoint + split**: make the lockstep invariant
   (path commands ↔ nodeTypes string ↔ skin-override indexes) STRUCTURAL via one
   `applyStructuralEdit(path, edit)` door every command-count-changing op must
