@@ -590,6 +590,20 @@ exportLottie 327), audit queued below.
   resets app-state, doc was never wrong. Fix: structural ops (group/ungroup/
   delete/reparent) must repair or clear entered-group state; reproduce first.
 
+## Context-menu polish (user-requested 2026-07-12)
+
+- [ ] **Suppress the native browser context menu app-wide** — a document-level
+  `contextmenu` preventDefault: where no in-app menu applies, NO menu appears
+  (never the browser's). EXCEPTION: text-entry elements (inputs/textareas —
+  the API-key field, rename editors, prompt box) keep the native menu, since
+  suppressing it there kills right-click copy/paste.
+- [ ] **Right-click menus on PATHS, not just parts** — path rows in the Layers
+  panel and paths on canvas (entered-part/node-editing contexts) get an in-app
+  context menu: rename (once the layers wave lands), delete path, raise/lower
+  within the part, move to part… (the new cross-part move as a menu action),
+  and "extract path → own part" (absorbs the existing standalone roadmap item
+  as a menu entry).
+
 ## Pattern-driven redesign pass (user-approved 2026-07-12 — runs after H1b lands)
 
 Origin: the user rejected "documented exception" status for the two remaining
