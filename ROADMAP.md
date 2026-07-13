@@ -411,16 +411,20 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
 
 ## Post-A bone feel fixes (user-reported — build AFTER the A program, BEFORE H)
 
-- [ ] **Freeze origin-drag rotates unselected bones** — origin/joint handles only
-  hit-test on the SELECTED bone, so a click-drag on an unselected bone's origin
-  falls through to the body-drag (rotate) pipeline; user must select first. Fix:
-  in freeze mode the origin/joint press on ANY bone selects + starts the joint
-  drag in one gesture. Rotation stays on body/gizmo-ring drags.
-- [ ] **Grab-point-relative IK (no tip snap)** — the IK drag always uses the TIP
-  as effector, so grabbing the bone body teleports the tip to the cursor. Fix:
-  the grabbed point (tip, or any body point) is the effector anchor and follows
-  the cursor exactly; grabbing mid-body reads as "translate this bone, chain
-  solves parents along" — same FABRIK, cursor-anchored at the grab offset.
+- [x] **Freeze origin-drag rotates unselected bones** (10c0ee9) — freeze mode now
+  renders a joint marker for EVERY bone (visible counterpart, screen-constant,
+  zoom-sweep-tested), each carrying `data-part-id`; the press resolves ITS bone,
+  selects it, and starts the joint drag in the same gesture. Rotation stays on
+  body/gizmo-ring drags; outside freeze behavior is byte-unchanged (regression
+  pin F7c). Scenarios F7–F9.
+- [x] **Grab-point-relative IK (no tip snap)** (10c0ee9) — `view/ikDrag.ts`
+  (extracted pipeline; interactions.ts 958→915) maps the actual press position
+  into the grabbed bone's frame: a tip grab is tip-as-effector, a mid-body grab
+  drives THAT point (tip trails rigidly — first-move continuity asserted), a
+  tip-handle press with the IK tool now solves the whole chain, and skinned-art
+  grabs anchor at the grabbed surface point too. Same FABRIK; `chainStepDelta`
+  in geometry/ik.ts handles the off-axis write-back. Scenarios IK1–IK4; B24
+  tightened 8px→3px.
 
 ## AI Animate System v2 (program planned 2026-07-11 with Austin — build in order)
 

@@ -80,7 +80,7 @@ from the console; `window.__smPanel` drives the state-machine editor determinist
 |---|---|
 | `core/model.ts` | Document model (`RigDoc`/`RigPart`/`Clip`/`Track`/`Keyframe`), part hierarchy helpers (`ancestorChain`, `setParent`, cycle-safe), rest pose, app state singleton (`editorMode`: `setup`\|`animate`, multi-selection, playback speed/ping-pong/onion flags), pub/sub (`subscribe`/`notify`), pose sampling (`sampleChannel`, 4 easings), keyframe clipboard (`copyKeys`/`pasteKeysAt`/`copyPoseAt`), project (de)serialization (`serializeDoc`/`deserializeDoc`/`normalizeDoc`) |
 | `io/importSvg.ts` | SVG file → `RigDoc`. Unwraps Inkscape layers, then RECURSIVE: every `<g>` at any depth becomes a part (exact SVG structure; label = inkscape:label else id; kind 'art' iff it has direct paths), parented per the nesting; each part's baked `transform` is the FULL composed ancestor chain (doc-space invariant — render-time parenting composes pose only); ellipse/circle/rect → path data; pivots per part from the *composed matrix's fixed point* or `inkscape:transform-center-x/y` as a `pivotHint` |
-| `view/index.ts` | **Pure re-export facade (33 lines)** over the `src/view/` modules — consumers import ONLY `./view`, never deep paths. The canvas responsibilities live in 13 layered modules: `view/context.ts` (shared mutable state `ctx`, DragState type, constants, micro-utils), `view/coords.ts` (screen↔doc conversion from live CTM/transform strings), `view/pose.ts` (pose composition, effective pivots, `partRootBoxes`), `view/focus.ts` (drill-down/dimming, `artworkUnderPointer`), `view/skinRender.ts` (LBS deformation + private cache), `view/overlay.ts` (selection boxes, handle sets, pivots, gizmos, node handles — render-time side effects live here on purpose), `view/snapping.ts` (candidate collection wiring), `view/render.ts` (`renderPose`, onion skins, `setPoseSampler`), `view/partDom.ts` (part-group/path DOM registry), `view/nodeEditing.ts` (node ops, drag math, structural join/delete), `view/rigOps.ts` (flip/nudge/bind/bone placement), `view/camera.ts` (viewBox zoom/pan/fit), `view/interactions.ts` (pointer routing, every drag pipeline, checkpoint deferral), `view/canvas.ts` (`buildCanvas`, render-then-measure pivot seeding) |
+| `view/index.ts` | **Pure re-export facade (33 lines)** over the `src/view/` modules — consumers import ONLY `./view`, never deep paths. The canvas responsibilities live in 15 layered modules: `view/context.ts` (shared mutable state `ctx`, DragState type, constants, micro-utils), `view/glyphs.ts` (pure SVG-fragment string builders: bone kite, joint dot), `view/coords.ts` (screen↔doc conversion from live CTM/transform strings), `view/pose.ts` (pose composition, effective pivots, `partRootBoxes`), `view/focus.ts` (drill-down/dimming, `artworkUnderPointer`), `view/skinRender.ts` (LBS deformation + private cache), `view/overlay.ts` (selection boxes, handle sets, pivots, gizmos, node handles — render-time side effects live here on purpose), `view/snapping.ts` (candidate collection wiring), `view/render.ts` (`renderPose`, onion skins, `setPoseSampler`), `view/partDom.ts` (part-group/path DOM registry), `view/nodeEditing.ts` (node ops, drag math, structural join/delete), `view/rigOps.ts` (flip/nudge/bind/bone placement), `view/camera.ts` (viewBox zoom/pan/fit), `view/ikDrag.ts` (the full-chain IK drag pipeline: chain resolution, grab-point anchoring, FABRIK write-back), `view/interactions.ts` (pointer routing, every drag pipeline, checkpoint deferral), `view/canvas.ts` (`buildCanvas`, render-then-measure pivot seeding) |
 | `timeline/timeline.ts` | Clip transport (play/pause/duplicate/rename/delete/duration, speed selector, ping-pong, onion toggle, fps readout), scrubber, keyframe lanes with click/shift-click/marquee selection, retime drag, a key-property row (time/value/easing) for the selection, copy/paste/nudge/column-select |
 | `panels/index.ts` | **Pure re-export facade** over `src/panels/`'s submodules — consumers import ONLY `./panels`, never deep paths. `panels/icons.ts` (the inline SVG icon set + `icon`/`iconButton` helpers), `panels/layers.ts` (Layers **tree** — parts nest under their parent, fold open to show child paths, drag-to-parent / drop-to-unparent), `panels/inspector.ts` (Setup: rest/pivot/parent fields; Animate: keyed channel fields; plus the skinning, align & distribute, node-operations, and object/style sections), `panels/ai.ts` (the Claude assistant panel, mounted at the bottom of the inspector), `panels/canvasTools.ts` (the tool switcher, snap toggle, and flip/group/ungroup/bind actions shown above the canvas). `panels/smPanel.ts` (state-machine editor) lives alongside these but is imported directly by its consumers (`main.ts`, `timeline/timeline.ts`), not re-exported by the facade |
 | `core/history.ts` | Snapshot-based undo/redo; call `checkpoint()` BEFORE any doc mutation, one per user gesture |
@@ -160,12 +160,19 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   INERT: the `interactions.ts` pointerdown branch returns without starting a drag — a
   hard no-op, NOT a fall-through that would translate the part underneath — and the
   cursor drops its move affordance (`#canvas.freeze-mode` scoping in `style.css`). LEAF
-  bone tips are pure rotation/length edits and stay live regardless. Toggle with `Y`
+  bone tips are pure rotation/length edits and stay live regardless. INSIDE freeze,
+  EVERY bone renders a joint marker (`overlay.ts` `.pivot-handle.other` via
+  `glyphs.ts`'s shared `jointDotHtml`, screen-constant, `data-part-id` on each) and a
+  press on ANY of them — selected or not — selects that bone AND starts the joint drag
+  in the same gesture (post-A fix: the press used to resolve `selectedPart()` only, so
+  an unselected bone's origin fell through to the body-rotate pipeline). Toggle with `Y`
   (guarded like the tool keys), the canvas-tools ❄ button, or Escape (its own early
   tier, ahead of bone-placement/group-exit). Freeze ON shows an UNMISSABLE banner +
   canvas tint, driven by the `.freeze-mode` class that `renderPose` toggles on `#canvas`.
   Interaction-tested (`freeze.test.ts`): the art-pivot and chain-joint drags are
-  byte-level no-ops outside freeze and work inside; mutation-checked by removing the gate.
+  byte-level no-ops outside freeze and work inside; mutation-checked by removing the
+  gate; F7–F9 pin the one-gesture select+drag, the all-bones markers, and their zoom
+  stability.
 - **Flips are negative rest scale** pinned at the part's rendered bbox center — never
   a geometry rewrite — so both exporters inherit them through the existing rest-scale
   paths. The scale-drag clamp applies to drag factors, not stored values; don't
@@ -249,9 +256,9 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   the rAF loop; the ONLY view.ts hook is `setPoseSampler(fn|null)` (renderPose
   samples through it when set). Canvas pointer events during preview are consumed
   by capture-phase listeners on `#canvas` — selection/drag never fire.
-- **The `src/view/` layering is binding**: context ← coords/pose/focus ← skinRender
-  ← overlay/snapping ← render ← partDom/nodeEditing/rigOps/camera ← interactions ←
-  canvas. A `view/*` module NEVER imports `../view` (the facade) nor a higher layer;
+- **The `src/view/` layering is binding**: context/glyphs ← coords/pose/focus ←
+  skinRender ← overlay/snapping ← render ← partDom/nodeEditing/rigOps/camera/ikDrag ←
+  interactions ← canvas. A `view/*` module NEVER imports `../view` (the facade) nor a higher layer;
   consumers import ONLY `./view` (no deep paths). The facade is permanent — new
   public symbols are added to their module AND re-exported there. Overlay render-time
   side effects (handleMode reset, stale node-selection pruning) belong inside the
@@ -414,16 +421,26 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   CURRENT pose (bend bias — no flips for reachable targets), straightens toward
   unreachable targets, and is deterministic (fixed iterations, no randomness).
   `solveTwoBone`/`solveAim` stay exported only for the unit tests that pin them (and as
-  the reference the 2-joint FABRIK path is validated against). Two entry gestures
-  (`interactions.ts`): grabbing a BONE glyph makes that bone the effector; grabbing the
-  SKINNED ART uses the art's own `skin.bones` (deepest-in-chain = the effector). Either
-  way the chain is `[...bone ancestors (kind==='bone' only), effector]` (the art a chain
-  roots on is filtered out, never mistaken for a joint), and the effector's TIP is driven
-  to the pointer. **Write-back math:** a bone's `rest.rotate` is RELATIVE (its parent's
+  the reference the 2-joint FABRIK path is validated against). The drag pipeline lives in
+  `view/ikDrag.ts` (chain resolution, grab bookkeeping, write-back); `interactions.ts`
+  only routes pointer events into it. **GRAB-POINT-RELATIVE** (post-A fix — the reported
+  "tip snaps to my cursor" bug): the effector is wherever the user actually pressed.
+  `startIkDrag` maps the press into the grabbed bone's own frame (`grabLocal`), so a tip
+  grab is the classic tip-as-effector case, while a mid-body grab drives THAT material
+  point to the pointer and the tip trails rigidly beyond it — the chain polyline's last
+  segment is origin→grab-point, whatever its length. Three entry gestures: a BONE glyph
+  press, a direct `.bone-tip-handle` press while the IK tool is active (previously that
+  circle always ran the single-bone `aimBoneAtTip` reshape regardless of tool), and a
+  SKINNED-ART press (the art's own `skin.bones`, deepest-in-chain = grabbed bone, same
+  grab-point anchoring). Either way the chain is `[...bone ancestors (kind==='bone'
+  only), effector]` (the art a chain roots on is filtered out, never mistaken for a
+  joint). **Write-back math:** a bone's `rest.rotate` is RELATIVE (its parent's
   rotation reframes it), so bones are aimed ROOT-FIRST — each bone rotated so its solved
   segment direction matches, re-reading its CURRENT origin/axis (which already reflects
   the parents written earlier this pass) rather than a stale snapshot; because rotating a
-  parent reframes its whole subtree, connectivity needs no per-bone carry. ONLY
+  parent reframes its whole subtree, connectivity needs no per-bone carry; the per-bone
+  angle step is `ik.ts`'s `chainStepDelta`, valid for OFF-AXIS grab points too (only the
+  angle about the origin matters, never the axis length). ONLY
   `rest.rotate` (Edit) / a keyed rotate at the playhead (Animate) changes — never
   `pivot`/`boneTip` — so every bone length stays byte-exact and the shared-joint
   connection (child origin == parent tip) is untouched. Skinned parts are otherwise gated
