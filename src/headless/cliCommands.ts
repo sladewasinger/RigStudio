@@ -1,8 +1,8 @@
 /**
- * Command implementations for the `rig` CLI (import / validate / export-riv). Kept
- * separate from `cli.ts` (the thin process-argv/stdout/exitCode wrapper) so tests can
- * call these directly — real fs I/O against a scratch dir, but no spawned process, no
- * asserting on real stdio/exit codes.
+ * Command implementations for the `rig` CLI (import / validate / export-riv /
+ * render-frames). Kept separate from `cli.ts` (the thin process-argv/stdout/exitCode
+ * wrapper) so tests can call these directly — real fs I/O against a scratch dir, but no
+ * spawned process, no asserting on real stdio/exit codes.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,6 +12,7 @@ import { exportRiv } from '../io/riv';
 import { importSvgHeadless } from './importSvgHeadless';
 import { diffJson } from './diff';
 import { partTreeSummary } from './partTree';
+import { renderFrames } from './renderFrames';
 
 export interface CommandResult {
   code: 0 | 1;
@@ -25,6 +26,9 @@ Commands:
   import <art.svg> [-o out.rig.json]       Import an SVG into a .rig.json project
   validate <file.rig.json>                 Check a project file (normalization + round-trip stability)
   export-riv <file.rig.json> [-o out.riv]  Export a project to a Rive .riv binary
+  render-frames <file.rig.json> --clip <name> [-o outdir] [--times 0,250,500 | --count N] [--width N]
+                                            Rasterize frames of a clip to PNGs (default frame
+                                            selection: the AI filmstrip's keyframe-cluster algorithm)
 `;
 
 function ok(stdout: string): CommandResult {
@@ -189,6 +193,96 @@ export function runExportRiv(args: string[]): CommandResult {
   return ok(stdout);
 }
 
+// ---- render-frames ----
+
+interface RenderFramesArgs {
+  positional: string[];
+  out: string | null;
+  clip: string | null;
+  times: number[] | null;
+  count: number | null;
+  width: number | null;
+}
+
+function parseRenderFramesArgs(args: string[]): RenderFramesArgs {
+  const positional: string[] = [];
+  let out: string | null = null;
+  let clip: string | null = null;
+  let times: number[] | null = null;
+  let count: number | null = null;
+  let width: number | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-o' || a === '--out') out = args[++i] ?? null;
+    else if (a === '--clip') clip = args[++i] ?? null;
+    else if (a === '--times') {
+      times = (args[++i] ?? '')
+        .split(',')
+        .map((s) => Number(s.trim()))
+        .filter((n) => Number.isFinite(n));
+    } else if (a === '--count') count = Number(args[++i]);
+    else if (a === '--width') width = Number(args[++i]);
+    else positional.push(a);
+  }
+  return { positional, out, clip, times, count, width };
+}
+
+/** Default output directory: alongside the input file, named after it plus the clip. */
+function defaultOutDir(inputPath: string, clipName: string): string {
+  const base = path.basename(inputPath).replace(/\.[^.]+$/, '');
+  const safeClip = clipName.replace(/[^a-zA-Z0-9_-]+/g, '_');
+  return path.join(path.dirname(inputPath), `${base}-${safeClip}-frames`);
+}
+
+export function runRenderFrames(args: string[]): CommandResult {
+  const { positional, out, clip: clipName, times, count, width } = parseRenderFramesArgs(args);
+  const usage =
+    'Usage: rig render-frames <file.rig.json> --clip <name> '
+    + '[-o outdir] [--times 0,250,500 | --count N] [--width N]';
+  const filePath = positional[0];
+  if (!filePath) return fail(usage);
+  if (!clipName) return fail(`Missing required --clip <name>\n\n${usage}`);
+  const resolved = path.resolve(filePath);
+  if (!fs.existsSync(resolved)) return fail(`File not found: ${resolved}`);
+
+  const text = fs.readFileSync(resolved, 'utf8');
+  let doc: RigDoc;
+  try {
+    doc = deserializeDoc(text);
+  } catch (e) {
+    return fail(`Not a valid Rig Studio project (${resolved}): ${messageOf(e)}`);
+  }
+
+  let result: ReturnType<typeof renderFrames>;
+  try {
+    result = renderFrames(doc, clipName, {
+      times: times ?? undefined,
+      count: count ?? undefined,
+      width: width ?? undefined,
+    });
+  } catch (e) {
+    return fail(`render-frames failed: ${messageOf(e)}`);
+  }
+
+  const outDir = path.resolve(out ?? defaultOutDir(resolved, clipName));
+  fs.mkdirSync(outDir, { recursive: true });
+  const lines = result.frames.map((frame) => {
+    fs.writeFileSync(path.join(outDir, frame.fileName), frame.png);
+    return `  ${frame.timeMs}ms -> ${frame.fileName}`;
+  });
+
+  const dims = result.frames[0] ? `${result.frames[0].width}x${result.frames[0].height}` : 'n/a';
+  let stdout =
+    `Rendered ${result.frames.length} frame(s) of "${clipName}" (${dims}) to ${outDir}\n`
+    + `${lines.join('\n')}\n`;
+  if (result.hasSkinnedParts) {
+    stdout +=
+      '\nNote: this document has skinned part(s) — they render RIGID in headless mode '
+      + '(bind-pose geometry, no linear-blend deformation).\n';
+  }
+  return ok(stdout);
+}
+
 // ---- dispatch ----
 
 export function dispatch(argv: string[]): CommandResult {
@@ -197,6 +291,7 @@ export function dispatch(argv: string[]): CommandResult {
     case 'import': return runImport(rest);
     case 'validate': return runValidate(rest);
     case 'export-riv': return runExportRiv(rest);
+    case 'render-frames': return runRenderFrames(rest);
     case undefined:
     case '-h':
     case '--help':

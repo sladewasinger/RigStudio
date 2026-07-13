@@ -1,19 +1,23 @@
 /**
- * Pose evaluation: the transform strings and matrices that place each part in the scene.
- *
- * A part's rendered transform is its ancestors' poses (outermost first) followed by its
- * own pose, then the baked SVG transform, then the innermost scale/skew. The innermost
- * SCALE is keyable (channels 'sx'/'sy', absolute with rest.sx/sy as the unkeyed
- * fallback — model.channelValue), so Animate playback/scrub shows part scale exactly as
- * the .riv export replays it; SKEW (kx/ky) stays REST-ONLY (not a channel). Keyed
- * channels are ABSOLUTE; the rest pose only fills unkeyed channels (model.channelValue).
- * `ctx.poseSampler`, when set by the state-machine editor, overrides normal sampling.
+ * Pose evaluation: the canvas's view onto the shared pose kernel now in
+ * `geometry/pose.ts` (H1b extraction — see that file for the actual math and its doc
+ * comments, moved there verbatim). This module is a THIN delegator adding only the two
+ * things geometry/pose.ts can't know about:
+ *   - `poseTime()`: Setup mode shows the bare rest pose (t = null); Animate samples
+ *     `state.currentTime`.
+ *   - `ctx.poseSampler`: the state-machine preview's channel-sampling override
+ *     (`view/context.ts`) — threaded into every geometry/pose.ts call below as its
+ *     optional `sampler` argument, so the running SMInstance can hijack sampling without
+ *     either module importing the other.
+ * `groupDescendants`/`groupUnionBox`/`partRootBoxes` also stay here in full: they measure
+ * LIVE DOM boxes (`ctx.partGroups`' `getBBox()`), which has no headless equivalent.
  */
 
 import {
-  state, RigPart, sampleChannel, channelValue, ancestorChain, isEffectivelyHidden,
+  state, RigPart, ancestorChain, isEffectivelyHidden,
 } from '../core/model';
-import { Mat, applyMat, invertMat, matrixOfTransform } from '../geometry/transforms';
+import { Mat, applyMat, matrixOfTransform } from '../geometry/transforms';
+import * as pose from '../geometry/pose';
 import { ctx } from './context';
 
 /** The time to sample animation at, or null when Setup mode shows the bare rest pose. */
@@ -22,124 +26,74 @@ export function poseTime(): number | null {
 }
 
 export function rootPoseTransform(t: number | null): string {
-  const doc = state.doc!;
-  const rtx = ctx.poseSampler ? ctx.poseSampler('root', 'tx') : t === null ? 0 : sampleChannel('root', 'tx', t);
-  const rty = ctx.poseSampler ? ctx.poseSampler('root', 'ty') : t === null ? 0 : sampleChannel('root', 'ty', t);
-  const rsx = ctx.poseSampler ? ctx.poseSampler('root', 'sx') : t === null ? 1 : sampleChannel('root', 'sx', t);
-  const rsy = ctx.poseSampler ? ctx.poseSampler('root', 'sy') : t === null ? 1 : sampleChannel('root', 'sy', t);
-  const rp = doc.rootPivot;
-  return (
-    `translate(${rtx},${rty}) translate(${rp.x},${rp.y}) ` +
-    `scale(${rsx},${rsy}) translate(${-rp.x},${-rp.y})`
-  );
+  return pose.rootPoseTransform(t, ctx.poseSampler ?? undefined);
 }
 
 /** A part's own pose transform: keyed channels are absolute, rest fills the gaps. */
 export function ownPoseTransform(part: RigPart, t: number | null): string {
-  const rot = ctx.poseSampler ? ctx.poseSampler(part.id, 'rotate') : channelValue(part, 'rotate', t);
-  const tx = ctx.poseSampler ? ctx.poseSampler(part.id, 'tx') : channelValue(part, 'tx', t);
-  const ty = ctx.poseSampler ? ctx.poseSampler(part.id, 'ty') : channelValue(part, 'ty', t);
-  return `translate(${tx},${ty}) rotate(${rot},${part.pivot.x},${part.pivot.y})`;
+  return pose.ownPoseTransform(part, t, ctx.poseSampler ?? undefined);
 }
 
 /** The pivot mapped into the part's pre-baked local space (where rest scale applies). */
 export function localPivotOf(part: RigPart, pivot = part.pivot): { x: number; y: number } {
-  return applyMat(invertMat(matrixOfTransform(part.transform)), pivot.x, pivot.y);
+  return pose.localPivotOf(part, pivot);
 }
 
-/**
- * A part's effective scale x/y right now: the ABSOLUTE keyed value when 'sx'/'sy' is
- * keyed in the active clip, otherwise rest.sx/sy (channelValue's rule). This is the SAME
- * innermost slot the .riv export scales at (an absolute Node scaleX/scaleY anchored at
- * the pivot), so editor and runtime agree. Defers to the state-machine preview sampler
- * when installed — mirrors effectiveZ/effectiveOpacity.
- */
+/** A part's effective scale x/y right now — see geometry/pose.ts. Defers to the
+ *  state-machine preview sampler when installed. */
 export function effectiveScaleX(part: RigPart, t: number | null): number {
-  return ctx.poseSampler ? ctx.poseSampler(part.id, 'sx') : channelValue(part, 'sx', t);
+  return pose.effectiveScaleX(part, t, ctx.poseSampler ?? undefined);
 }
 
 export function effectiveScaleY(part: RigPart, t: number | null): number {
-  return ctx.poseSampler ? ctx.poseSampler(part.id, 'sy') : channelValue(part, 'sy', t);
+  return pose.effectiveScaleY(part, t, ctx.poseSampler ?? undefined);
 }
 
-/**
- * Scale AND skew, applied innermost (after the baked transform) around the local pivot:
- * the artwork reshapes along its own axes and the joint stays exactly in place. Scale is
- * time-sampled (keyed sx/sy absolute, rest fallback) so Animate scrub shows keyed scale;
- * SKEW is rest-only (kx/ky are not channels). Pass t = null for the bare rest pose
- * (Setup). `pivot` overrides the stored pivot (pivot drags evaluate candidate positions).
- */
+/** Scale AND skew, applied innermost around the local pivot — see geometry/pose.ts.
+ *  `pivot` overrides the stored pivot (pivot drags evaluate candidate positions). */
 export function innerLocalTransform(part: RigPart, t: number | null, pivot = part.pivot): string {
-  const sx = effectiveScaleX(part, t);
-  const sy = effectiveScaleY(part, t);
-  const { kx, ky } = part.rest;
-  if (sx === 1 && sy === 1 && kx === 0 && ky === 0) return '';
-  const pl = localPivotOf(part, pivot);
-  const ops = [`translate(${pl.x},${pl.y})`];
-  if (sx !== 1 || sy !== 1) ops.push(`scale(${sx},${sy})`);
-  if (kx !== 0) ops.push(`skewX(${kx})`);
-  if (ky !== 0) ops.push(`skewY(${ky})`);
-  ops.push(`translate(${-pl.x},${-pl.y})`);
-  return ops.join(' ');
+  return pose.innerLocalTransform(part, t, pivot, ctx.poseSampler ?? undefined);
 }
 
-/**
- * A part's effective draw-order OFFSET right now (keyed `z` is ABSOLUTE + stepped, rest
- * fallback 0). This governs paint-order SORTING only (render.ts's applyDrawOrder) — it
- * never enters the rendered transform. Mirrors the pose.ts pattern of deferring to the
- * state-machine preview sampler when one is installed.
- */
+/** A part's effective draw-order OFFSET right now — see geometry/pose.ts. Governs
+ *  paint-order SORTING only (render.ts's applyDrawOrder); never enters the transform. */
 export function effectiveZ(part: RigPart, t: number | null): number {
-  return ctx.poseSampler ? ctx.poseSampler(part.id, 'z') : channelValue(part, 'z', t);
+  return pose.effectiveZ(part, t, ctx.poseSampler ?? undefined);
 }
 
-/**
- * A part's effective opacity right now (keyed `opacity` is ABSOLUTE and CONTINUOUS — it
- * eases normally, unlike the stepped `z` channel — rest fallback `part.rest.opacity`).
- * NOT clamped here — render.ts clamps at the point it writes the DOM attribute; this stays
- * a plain sample so callers that need the raw value (e.g. future export code) get it.
- * Mirrors effectiveZ's poseSampler-first pattern.
- */
+/** A part's effective opacity right now — see geometry/pose.ts. NOT clamped here —
+ *  render.ts clamps at the point it writes the DOM attribute. */
 export function effectiveOpacity(part: RigPart, t: number | null): number {
-  return ctx.poseSampler ? ctx.poseSampler(part.id, 'opacity') : channelValue(part, 'opacity', t);
+  return pose.effectiveOpacity(part, t, ctx.poseSampler ?? undefined);
 }
 
 /** Ancestor poses composed with the part's own pose (bone hierarchy). */
 export function fullPoseTransform(part: RigPart, t: number | null): string {
-  const pieces = ancestorChain(part).map((a) => ownPoseTransform(a, t));
-  pieces.push(ownPoseTransform(part, t));
-  return pieces.join(' ');
+  return pose.fullPoseTransform(part, t, ctx.poseSampler ?? undefined);
 }
 
 /** The complete transform string a part group renders with. */
 export function groupTransformOf(part: RigPart, t: number | null): string {
-  return [fullPoseTransform(part, t), part.transform, innerLocalTransform(part, t)]
-    .filter(Boolean)
-    .join(' ');
+  return pose.groupTransformOf(part, t, ctx.poseSampler ?? undefined);
 }
 
 /** Matrix of the ancestors' poses only (maps a part's rest space into root space). */
 export function chainMatOf(part: RigPart, t: number | null): Mat {
-  return matrixOfTransform(ancestorChain(part).map((a) => ownPoseTransform(a, t)).join(' '));
+  return pose.chainMatOf(part, t, ctx.poseSampler ?? undefined);
 }
 
 export function ownTranslateOf(part: RigPart, t: number | null): { x: number; y: number } {
-  return { x: channelValue(part, 'tx', t), y: channelValue(part, 'ty', t) };
+  return pose.ownTranslateOf(part, t);
 }
 
 /** Where the part's joint actually sits right now, in root coordinates. */
 export function effectivePivot(part: RigPart, t: number | null): { x: number; y: number } {
-  const m = chainMatOf(part, t);
-  const ot = ownTranslateOf(part, t);
-  return applyMat(m, part.pivot.x + ot.x, part.pivot.y + ot.y);
+  return pose.effectivePivot(part, t, ctx.poseSampler ?? undefined);
 }
 
 /** A bone's tip in root coordinates (follows the bone's own rotation), or null. */
 export function effectiveTip(part: RigPart, t: number | null): { x: number; y: number } | null {
-  if (!part.boneTip) return null;
-  return applyMat(
-    matrixOfTransform(fullPoseTransform(part, t)), part.boneTip.x, part.boneTip.y,
-  );
+  return pose.effectiveTip(part, t, ctx.poseSampler ?? undefined);
 }
 
 /** Every part inside `group` at any depth (excludes the group itself) — any kind (art,
