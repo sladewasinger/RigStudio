@@ -80,6 +80,36 @@ check before it counts.
 - `npm run <script> -- -flag value` can mangle flags; invoke CLIs directly
   (`npx tsx src/headless/cli.ts ...`).
 
+## Markdown discipline (user complaint 2026-07-13: "what is this double header?")
+
+- **Headings are SINGLE-LINE.** Never wrap a long heading across lines with a
+  repeated `##` prefix — markdown renders each `##` line as its own heading
+  (stacked double headers). Long single-line headings are fine; long
+  parentheticals go on an italic line below the heading.
+- Escaped characters: `\|` belongs only inside tables; never write `\` where
+  `/` is meant. Re-read the RENDERED result mentally, not just the source.
+
+## Portability (running this process on another machine)
+
+- Everything the process needs is IN THE REPO: `CLAUDE.md` (auto-loaded
+  conventions), this file + `ORCHESTRATOR_PLAYBOOK.md` (the process and its
+  kickoff prompt), and the ENFORCEMENT TESTS (ratchet, chokepoint, headless
+  boundary, boot-layout, priority pins) which run in `npm test` on any
+  machine — the discipline is structural, not remembered.
+- Start a fresh machine's session with the playbook's kickoff prompt PLUS:
+  "Read docs/ORCHESTRATOR_PLAYBOOK.md and docs/PROJECT_PROCESS.md and follow
+  them."
+- **KNOWN machine-specific landmines**: `scripts/exportPipTakePill.ts`
+  hardcodes absolute paths into the Dosey checkout
+  (`C:/Users/Austin/AndroidStudioProjects/Dosey/...`) — on a machine without
+  that checkout, `npm run export:take-pill` (and therefore the hash gate)
+  FAILS; adjust the paths or make the Dosey writes conditional before relying
+  on the gate there. Port habits (the user's own dev server on 5173) and
+  PowerShell-version quirks may also differ per machine.
+- The preview window can start with a 0×0 viewport (elementFromPoint returns
+  null, rects degenerate): resize with explicit width/height and reload
+  before live-testing.
+
 ## Where things are pinned
 
 - Architecture + conventions + GOTCHAs + per-wave status: `CLAUDE.md`.
