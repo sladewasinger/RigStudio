@@ -542,8 +542,10 @@ precedent, zero behavior change, gated on the full suites:
   stateMachine behind an index.ts facade (all < 300 code lines); test decoder
   promoted to `__tests__/rivDecoder.ts`. Verified BYTE-IDENTICAL output
   (take-pill .riv SHA-256 unchanged before/after).
-- [ ] **core/ split** — model.ts → doc types + part helpers / channels + sampling
-  / SM types / serialization + normalizeDoc / app-state.
+- [x] **core/ split** (c6185ef) — model.ts → 9 modules (docTypes/smTypes/appState/
+  channels/boneOps/partHierarchy/structuralOps/serialization/idGen) behind the
+  permanent `model.ts` facade — zero consumer edits, export surface verified
+  identical (68 names), take-pill .riv byte-identical.
 - [ ] **panels/sm/** — smPanel.ts → graph canvas, side panels, preview engine.
 - [x] **panels/ai/** (f902260, done as part of A4) — ai.ts → panel/apply/preview/
   previewBar/fields/requests/state/threadStrip/threads behind an index.ts facade.
