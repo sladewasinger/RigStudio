@@ -538,19 +538,21 @@ timeline.ts 817, overlay.ts 801, rigOps.ts 769 (interactions/nodeEditing are the
 two documented exceptions). Target shapes, each behind a facade per the view/
 precedent, zero behavior change, gated on the full suites:
 
-- [ ] **io/riv/** — exportRiv.ts → writer primitives (varuint/ToC), the pinned
-  key table, scene mapping, animation emit, state-machine emit, + the test
-  decoder promoted to a shared test util.
+- [x] **io/riv/** (c180e36) — exportRiv.ts → writer/keys/scene/animation/
+  stateMachine behind an index.ts facade (all < 300 code lines); test decoder
+  promoted to `__tests__/rivDecoder.ts`. Verified BYTE-IDENTICAL output
+  (take-pill .riv SHA-256 unchanged before/after).
 - [ ] **core/ split** — model.ts → doc types + part helpers / channels + sampling
   / SM types / serialization + normalizeDoc / app-state.
 - [ ] **panels/sm/** — smPanel.ts → graph canvas, side panels, preview engine.
-- [ ] **panels/ai/** — ai.ts → panel UI, apply pipeline, preview engine, filmstrip.
+- [x] **panels/ai/** (f902260, done as part of A4) — ai.ts → panel/apply/preview/
+  previewBar/fields/requests/state/threadStrip/threads behind an index.ts facade.
 - [ ] **inspector sections** → per-section modules (rest/bone/skin/artboard/node-ops).
 - [ ] **timeline/** internals, **view/overlay.ts** (chrome families), **view/rigOps.ts**
   (placement/bind/freeze clusters) as smaller follow-ups.
-- [ ] **Size-ratchet test** (`architecture.test.ts`) lands FIRST — immediately
-  after the in-flight A3 wave — grandfathering current counts; new files >~300
-  lines fail; grandfathered files may not grow.
+- [x] **Size-ratchet test** (`architecture.test.ts`) landed 2026-07-11 —
+  CODE-line counts (comments/blanks free per user ruling), grandfathered
+  ceilings shrink-only, new files fail >300, stale-entry honesty check.
 
 ## Headless engine + MCP server (planned with Austin 2026-07-11 — NOT scheduled;
 ## build after/alongside the AI program, sharing its components)
