@@ -615,10 +615,10 @@ CLAUDE.md convention: "Think in named patterns, not conventions").
      sync only by "mirrors X" comments — extract one shared view-rect
      zoom/pan module both consume. (view/camera.ts is related but has
      deliberately different clamp semantics; not merged.)
-  4. **io/exportLottie.ts — cohesive as-is, ZERO test coverage**: documented
-     invariants (z ignored, opacity ignored, hidden→empty shapes,
-     absolute/rest-fallback) pinned by nothing → dedicated test wave
-     (launched immediately, not gated on the redesign pass).
+  4. **io/exportLottie.ts — cohesive as-is, ZERO test coverage**: test wave
+     CANCELLED by user (2026-07-12) — Lottie's usefulness in this project is
+     in question and the exporter MAY BE DELETED later; leave the code as-is
+     and do not invest in Lottie coverage or features without asking first.
   5. **geometry/paths.ts — cohesive as-is**: one representation throughout;
      its cross-file invariant already sits behind nodeEditing's chokepoint.
   6. **panels/layers.ts — cohesive as-is**: one tree widget; drag pipelines
