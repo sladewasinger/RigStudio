@@ -572,6 +572,24 @@ view/interactions.ts + view/nodeEditing.ts (redesign QUEUED below — the old
 small pinned files (ai/claude 489, main 522, paths 434, graph 395, layers 347,
 exportLottie 327), audit queued below.
 
+## Live bug queue (user-reported 2026-07-12, next main-tree wave after nodeEditing)
+
+- [ ] **Group-like selection for art-with-children** — every group behavior
+  (click-selects-ancestor, dblclick drill-down, entered-group tracking, union
+  selection box, group handle sets w/ descendant scale distribution) keys on
+  `kind === 'group'`; an ART part carrying child parts (face→eyes, the
+  recursive importer's normal shape) gets none of them. Fix: one `groupLike`
+  predicate (group OR art-with-child-parts; bones excluded) applied at all
+  sites (artwork pipeline, dblclick, focus, overlayHandles, handles pipeline).
+  User's acceptance: click eyes on canvas → selects face w/ union box; dblclick
+  eye → drills into face, selects eyes; Layers face click → union box.
+- [ ] **Ctrl+G leaves the canvas dimmed** (user: "pip semi-transparent until
+  refresh") — suspected stale `ctx.enteredGroups` app-state after structural
+  edits: grouping while drilled in (or restructuring around an entered id)
+  leaves focusContext dimming everything outside a stale subtree; refresh
+  resets app-state, doc was never wrong. Fix: structural ops (group/ungroup/
+  delete/reparent) must repair or clear entered-group state; reproduce first.
+
 ## Pattern-driven redesign pass (user-approved 2026-07-12 — runs after H1b lands)
 
 Origin: the user rejected "documented exception" status for the two remaining
