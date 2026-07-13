@@ -17,7 +17,7 @@ import { renderPose } from '../../view';
 import {
   bootRig, resetRig, state, notify, partByLabel, partGroupEl, gestureDrag, docToClient,
   clientCenterOf, overlayEl, overlayCount, expectClose, selectByLabel, repaint, pressKey,
-  medialPoints, placeBoneChain, assertScreenConstant,
+  medialPoints, placeBoneChain, assertScreenConstant, enterNodeMode,
 } from './harness';
 
 beforeAll(bootRig);
@@ -364,5 +364,58 @@ describe('scenario F9 — freeze origin markers are screen-constant (GOTCHA guar
     pressKey('y');
     repaint();
     assertScreenConstant('.pivot-handle.other .pivot-ring');
+  });
+});
+
+describe('scenario F10 — freeze origin-drag on an unselected bone survives node-editing mode (regression)', () => {
+  it('a press on an unselected bone\'s origin while the owning part is node-edited selects it AND moves the joint — never bends the outline', () => {
+    // Node editing shows the edited part's own bone chain too (CLAUDE.md "bones visible
+    // in node mode"), so freeze-editing a joint while fine-tuning the mesh is a real,
+    // expected workflow — but overlay.ts's node-mode branch renders bone GLYPHS
+    // (appendNullGlyph) without ever calling renderFreezeJointMarkers, so an unselected
+    // bone's origin has NO [data-role="pivot"] element there at all, regardless of
+    // freeze. The press falls through PIVOT_PIPELINE (nothing to claim) into
+    // NODE_BEND_MARQUEE_PIPELINE, which — because a bone's origin usually sits close to
+    // the limb's own silhouette — frequently finds a nearby segment and BENDS the path
+    // instead (verified live: dragging left_leg's root-bone origin in this state
+    // rewrites path.d while pivot/rest.tx/ty never move).
+    //
+    // Anchored on left_leg (select it FIRST, hierarchy-as-assignment — unlike this
+    // file's own `placeChain` helper, which deliberately clears selection for a
+    // free-form root): node mode's `chainBonesOfPart` only draws bones actually
+    // PARENTED under the edited part, so the chain must really hang off left_leg for
+    // its marker (and glyph) to appear there at all.
+    modelSelectPart(partByLabel('left_leg').id);
+    notify();
+    repaint();
+    const [b1] = placeBoneChain(medialPoints('left_leg', 2));
+    enterNodeMode('left_leg'); // selects left_leg, state.mode = 'nodes', editorMode stays 'setup'
+    pressKey('y'); // freeze ON
+    repaint();
+    expect(state.freezeMode).toBe(true);
+    expect(state.mode).toBe('nodes');
+    expect(state.selectedPartId, 'left_leg (not the bone) is the node-edited part').not.toBe(b1.id);
+
+    // MUTATION-CHECK NOTE: before the fix, no data-role="pivot" element exists for the
+    // unselected bone while node-editing — this querySelector finds nothing, and the
+    // press instead lands on the bone glyph / the edited outline (bend) or empty space
+    // (marquee), leaving the bone's own fields untouched either way.
+    const marker = overlayEl().querySelector(`[data-role="pivot"][data-part-id="${b1.id}"]`);
+    expect(marker, 'a freeze-mode origin marker exists for the unselected bone even in node-editing mode')
+      .toBeTruthy();
+    const from = clientCenterOf(marker!);
+    const pivot0 = { ...b1.pivot };
+    const leftLeg = partByLabel('left_leg');
+    const dBefore = leftLeg.paths.map((p) => p.d);
+
+    gestureDrag(from, { x: from.x + 34, y: from.y - 26 }, { steps: 10 });
+
+    const cur = state.doc!.parts.find((p) => p.id === b1.id)!;
+    const legAfter = partByLabel('left_leg');
+    expect(state.selectedPartId, 'the press selected the bone in the SAME gesture').toBe(b1.id);
+    const moved = Math.hypot(cur.pivot.x - pivot0.x, cur.pivot.y - pivot0.y);
+    expect(moved, 'the joint (pivot) actually moved').toBeGreaterThan(0.3);
+    expect(legAfter.paths.map((p) => p.d), 'the outline geometry was never bent')
+      .toEqual(dBefore);
   });
 });

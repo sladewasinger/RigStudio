@@ -170,12 +170,21 @@ export function renderBoneChainPreview(holder: SVGGElement, size: number): void 
  * branch can select + start the joint drag in one press without requiring pre-selection.
  * The primary/selected bone still gets its own richer crosshair, so it's skipped here to
  * avoid a doubled marker. Caller guards this to freeze mode + Setup.
+ *
+ * `pool` restricts which bones get a marker — overlay.ts's node-editing branch passes
+ * the edited part's own chain (the only bones it draws GLYPHS for there; "everything
+ * else" stays dimmed/non-interactive by that mode's own design) instead of the default
+ * `doc.parts`, which is every bone in the whole rig (the normal Edit-mode render). Fixes
+ * the node-editing regression where this function was never called at all: a bone's
+ * origin sat right on the edited outline with no `data-role="pivot"` to claim the press,
+ * so it fell through to the node-bend/marquee pipeline and warped the mesh instead of
+ * moving the joint.
  */
 export function renderFreezeJointMarkers(
-  doc: RigDoc, t: number | null, size: number, rootTransform: string,
+  doc: RigDoc, t: number | null, size: number, rootTransform: string, pool: RigPart[] = doc.parts,
 ): void {
   if (!ctx.overlay) return;
-  for (const bone of doc.parts) {
+  for (const bone of pool) {
     if (bone.kind !== 'bone' || bone.id === state.selectedPartId) continue;
     if (isEffectivelyHidden(bone)) continue;
     const op = effectivePivot(bone, t);

@@ -422,6 +422,54 @@ describe('scenario US6 — freeze origin drag on an ATTACHED ROOT translates it,
   });
 });
 
+describe('scenario US6b — freeze origin drag on an UNSELECTED attached root (US6\'s gap)', () => {
+  it("pressing the unselected attached root's origin marker (nothing pre-selected) selects it and translates its loose offset — never touches the cross-chain parent", () => {
+    // US6 above proves the write-side classification (pivot.ts's attachedRoot exemption)
+    // is correct, but it PRE-SELECTS armRoot before dragging, so it never exercises the
+    // one-gesture select+drag path (10c0ee9's Post-A fix) for this bone kind. Reproduced
+    // both live (a real browser) and here with NOTHING selected beforehand — at HEAD this
+    // already passes: overlayBones.ts's renderFreezeJointMarkers loops every bone in
+    // `doc.parts` (attached roots included) with no attachedRoot-specific exclusion, so
+    // the marker exists and pivot.ts's claim()/move() attachedRoot exemption (kept in
+    // lockstep between the two functions) fires correctly on the very first press. Kept
+    // as a permanent regression pin for that one-gesture path on this bone kind, since
+    // US6 alone leaves it untested.
+    const { spine2, armRoot } = setupAttachedRig();
+    modelSelectPart(null);
+    notify();
+    pressKey('y'); // freeze ON
+    repaint();
+    expect(state.freezeMode).toBe(true);
+    expect(state.selectedPartId, 'nothing selected before the press').toBeNull();
+
+    const spine2RotBefore = spine2.rest.rotate;
+    const spine2TipBefore = { ...spine2.boneTip! };
+    const armRootPivotBefore = { ...armRoot.pivot };
+    const armRootTxBefore = armRoot.rest.tx;
+    const armRootTyBefore = armRoot.rest.ty;
+
+    const marker = overlayEl().querySelector(`[data-role="pivot"][data-part-id="${armRoot.id}"]`);
+    expect(marker, 'a freeze-mode origin marker exists for the UNSELECTED attached root').toBeTruthy();
+    const from = clientCenterOf(marker!);
+
+    gestureDrag(from, { x: from.x + 40, y: from.y - 25 }, { steps: 10 });
+
+    expect(state.selectedPartId, 'the press selected the attached root in the SAME gesture')
+      .toBe(armRoot.id);
+    // The cross-chain PARENT is byte-untouched (the exact regression 4a999e0 pinned for
+    // the pre-selected case — this asserts it holds for the unselected press too).
+    expect(spine2.rest.rotate, 'spine2 rotation byte-untouched').toBe(spine2RotBefore);
+    expect(spine2.boneTip, 'spine2 tip byte-untouched').toEqual(spine2TipBefore);
+    // The attached root itself moved by its LOOSE offset (rest.tx/ty), pivot untouched —
+    // a translate, never a rotate.
+    expect(armRoot.pivot, 'pivot stays the unchanged local anchor').toEqual(armRootPivotBefore);
+    const rootOffsetMoved = Math.hypot(
+      armRoot.rest.tx - armRootTxBefore, armRoot.rest.ty - armRootTyBefore,
+    );
+    expect(rootOffsetMoved, 'the loose offset actually changed (translate)').toBeGreaterThan(0.5);
+  });
+});
+
 describe("scenario US7 — outside freeze, an attached root's origin marker is inert", () => {
   it('a press-drag on the arm root\'s origin marker outside freeze is a byte-level no-op', () => {
     const { armRoot } = setupAttachedRig();

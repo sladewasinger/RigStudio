@@ -70,13 +70,23 @@ export function renderOverlay(): void {
       // else" that node editing dims away — draw them (undimmed, still selectable via
       // Layers) exactly like the main loop below does. Also surface the skin-suspend
       // hint (render.ts) so it's clear the art is showing its base shape right now.
+      const chainBones = chainBonesOfPart(doc.parts, part);
       let selectedBoneTip: SVGGElement | null = null;
-      for (const bone of chainBonesOfPart(doc.parts, part)) {
+      for (const bone of chainBones) {
         if (isEffectivelyHidden(bone)) continue; // Layers eye
         const tipWrap = appendNullGlyph(bone, t, rootTransform, size, setup);
         if (tipWrap) selectedBoneTip = tipWrap;
       }
       if (selectedBoneTip) ctx.overlay.appendChild(selectedBoneTip);
+      // FREEZE FIX (regression): this branch used to skip renderFreezeJointMarkers
+      // entirely, so freeze-editing a bone's origin while node-editing its owning part
+      // (a real workflow — see the chain-bones comment above) had no marker to claim
+      // the press; it fell through to the node-bend/marquee pipeline and warped the
+      // mesh instead of moving the joint. Scoped to this part's own chain, matching the
+      // glyph loop just above (every other bone in the rig stays non-interactive here).
+      if (state.freezeMode) {
+        renderFreezeJointMarkers(doc, t, size, rootTransform, chainBones);
+      }
       if (nodeEditSkinSuspendId() === part.id) drawSkinSuspendHint(part, size);
     }
     drawSnapMarker();
