@@ -706,16 +706,16 @@ gates + roadmap tick.
 ## Editing ergonomics wave (user-requested 2026-07-12 — runs right after the
 ## layers-branch integration; items 2–3 build on the integrated layers.ts)
 
-- [ ] **Keyframe selection drives part selection** — clicking a keyframe in the
+- [x] **Keyframe selection drives part selection** (e623d4a) — clicking a keyframe in the
   Animate timeline selects the track's TARGET part (layers highlights it +
   auto-expands ancestors, inspector shows it — "extremely hard to see what I'm
   editing" with unnamed bones otherwise). Multi-key/marquee selection selects
   the union of target parts (multi-selection exists). Tracks targeting the
   synthetic `root` skip part selection. Key retime drags don't re-fire
   selection churn beyond the initial click.
-- [ ] **Layers hover tooltips** — part and path rows carry `title` = the full
+- [x] **Layers hover tooltips** (e623d4a) — part and path rows carry `title` = the full
   label, so truncated names reveal on hover.
-- [ ] **Layers panel horizontally resizable** — a draggable splitter on the
+- [x] **Layers panel horizontally resizable** (e623d4a, panels/layersResize.ts) — a draggable splitter on the
   layers/canvas boundary with persisted width (localStorage, like the
   timeline's height splitter in timeline/tlState.ts — same pattern, same
   persistence discipline: editor pref, never doc state), min/max clamped.
@@ -795,7 +795,9 @@ CLAUDE.md convention: "Think in named patterns, not conventions").
   literal-arc paths (task chip spawned).
 - [x] **Pattern audit over the six pinned files** (done 2026-07-12, read-only).
   Verdicts, ranked by payoff:
-  1. **main.ts — REORGANIZE**: keydown handler (~60% of the file) → a binding
+  1. **main.ts — DONE** (a1cee54): registry + cascades in ui/shortcuts*.ts,
+     help rows generated, B key added, main.ts 522→243 and off the list.
+     Original spec follows: keydown handler (~60% of the file) → a binding
      Registry + two explicit Chain-of-Responsibility arrays (DELETE_HANDLERS /
      ESCAPE_HANDLERS) in a new `ui/shortcuts.ts`; help.ts's keyboard rows
      GENERATED from the registry (killing the sync convention, which the audit
