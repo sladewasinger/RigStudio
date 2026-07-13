@@ -552,8 +552,14 @@ precedent, zero behavior change, gated on the full suites:
   clean cherry-pick.
 - [x] **panels/ai/** (f902260, done as part of A4) — ai.ts → panel/apply/preview/
   previewBar/fields/requests/state/threadStrip/threads behind an index.ts facade.
-- [ ] **inspector sections** → per-section modules (rest/bone/skin/artboard/node-ops).
-- [ ] **timeline/** internals, **view/overlay.ts** (chrome families), **view/rigOps.ts**
+- [x] **inspector sections** (f5690b0) → 9 modules in `panels/inspectorSections/`
+  (shared/transform/bone/stacking/skin/align/nodeOps/object/panel) behind a
+  1-line facade; built in a parallel worktree, rebased with main's 146-line
+  z/opacity/scale/A0 delta ported hunk-by-hunk.
+- [x] **timeline/ internals** (f4bc4b0) → tlState/transport/lanes/keyProps/panel
+  behind a 7-line facade (graph.ts untouched); parallel worktree, rebased with
+  the stepped-z easing hunk ported.
+- [ ] **view/overlay.ts** (chrome families), **view/rigOps.ts**
   (placement/bind/freeze clusters) as smaller follow-ups.
 - [x] **Size-ratchet test** (`architecture.test.ts`) landed 2026-07-11 —
   CODE-line counts (comments/blanks free per user ruling), grandfathered
