@@ -546,7 +546,10 @@ precedent, zero behavior change, gated on the full suites:
   channels/boneOps/partHierarchy/structuralOps/serialization/idGen) behind the
   permanent `model.ts` facade — zero consumer edits, export surface verified
   identical (68 names), take-pill .riv byte-identical.
-- [ ] **panels/sm/** — smPanel.ts → graph canvas, side panels, preview engine.
+- [x] **panels/sm/** (fef677c) — smPanel.ts → 9 modules (state/graphCamera/
+  graphInteract/graph/preview/props/header/globals/panel) behind a 2-line
+  facade; export surface identical (5 names); built in a parallel worktree,
+  clean cherry-pick.
 - [x] **panels/ai/** (f902260, done as part of A4) — ai.ts → panel/apply/preview/
   previewBar/fields/requests/state/threadStrip/threads behind an index.ts facade.
 - [ ] **inspector sections** → per-section modules (rest/bone/skin/artboard/node-ops).
