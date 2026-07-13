@@ -709,7 +709,21 @@ gates + roadmap tick.
   Ctrl+S, confirm the file on disk changed, Save As, check the recents
   dropdown + the installed-PWA flow — only a human can drive the OS dialogs.
 
+**STANDING DESIGN PRINCIPLE (user direction 2026-07-13, "parts and groups
+should act the same… like Inkscape"):** parts stay in the MODEL (a part is
+the unit of animation/export — the Rive Node; paths stay cheap geometry) but
+disappear from the MENTAL MODEL: containers and leaves, uniform Inkscape-like
+behavior everywhere. Group vs art-with-children vs plain art must never
+behave differently for selection/drill/boxes/ordering; navigation works the
+same in both modes (only EDITING ops are Edit-gated); "extract path → own
+part" is the promotion path when geometry needs a timeline life. New UX
+should be checked against this principle.
+
 **DEFERRED FOR AUSTIN (decisions his to make — nothing below gets built):**
+- Keyable PATH-level paint channels (per-path fill/stroke opacity/color
+  animation): Rive supports it (our keyed-opacity export already targets
+  per-paint SolidColor) and the model could grow path channels — real
+  feature scope, his call whether the timeline should ever list paths.
 - Unified skeleton Phase 2: whether IK solves ACROSS attachments (grab a hand,
   FABRIK through the spine). Ships OFF; the full-body-solve flag is his call.
 - Unified skeleton Phase 3: pen-tool placement creating attached roots directly.
