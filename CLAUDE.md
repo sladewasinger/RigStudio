@@ -39,6 +39,17 @@ A debug hook exists on `window.__rigStudio` (`state`, `exportLottie`, `exportRiv
 `renderPose`, `serializeDoc`, `loadProjectText`, `setEditorMode`) for driving the app
 from the console; `window.__smPanel` drives the state-machine editor deterministically.
 
+## Working on this repo (any machine, any session)
+
+The development PROCESS — orchestrator role, wave pipeline, verification
+doctrine (reproduce-then-fix, mutation-checked tests), gates, port etiquette,
+machine landmines — is documented in `docs/ORCHESTRATOR_PLAYBOOK.md` (generic)
+and `docs/PROJECT_PROCESS.md` (this repo's specifics). READ BOTH BEFORE
+SUBSTANTIAL WORK and follow them; they are maintained as part of every wave.
+The discipline is also STRUCTURAL: the enforcement tests (size ratchet,
+nodeTypes chokepoint, headless boundary, boot layout, gesture priority) run
+inside `npm test` and fail violations regardless of who forgot what.
+
 ## Code architecture
 
 - **Self-documenting code**: names over comments. Comments exist only for
