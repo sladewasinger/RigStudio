@@ -22,7 +22,6 @@ const NEW_FILE_MAX = 300;
  *  stateMachine.ts and dialogs.ts fell off the original raw-line list once comments
  *  became free — documentation-heavy files are the goal, not a violation. */
 const GRANDFATHERED = new Map<string, number>([
-  ['ai/claude.ts', 489],
   ['geometry/paths.ts', 434],
   ['io/exportLottie.ts', 327],
   ['main.ts', 522],

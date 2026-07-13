@@ -115,9 +115,13 @@ function followThroughNote(profile: RigProfile): string {
 
 /** True (returning the target id) when a `ty` track moves a large share of its own
  *  value range within a short share of the clip's duration — both axes are relative,
- *  so this never hardcodes an absolute doc-unit speed. */
-function fastVerticalTarget(clip: Clip): string | null {
+ *  so this never hardcodes an absolute doc-unit speed. Bone-DEFORMED parts are skipped
+ *  (`deformedIds`): sx/sy on a skinned part is forbidden (renders nothing in-editor,
+ *  and the request validator drops such tracks) — suggesting squash-and-stretch there
+ *  would ask the model for exactly what gets thrown away. */
+function fastVerticalTarget(clip: Clip, deformedIds: ReadonlySet<string>): string | null {
   for (const track of clip.tracks) {
+    if (deformedIds.has(track.target)) continue;
     if (track.channel !== 'ty' || track.keyframes.length < 2) continue;
     const values = track.keyframes.map((k) => k.value);
     const range = Math.max(...values) - Math.min(...values);
@@ -194,7 +198,10 @@ export function buildPolishInstruction(profile: RigProfile, clip: Clip): string 
     );
   }
 
-  const fastTarget = fastVerticalTarget(clip);
+  const deformedIds: ReadonlySet<string> = new Set(
+    profile.chains.flatMap((c) => c.deforms.map((d) => d.id)),
+  );
+  const fastTarget = fastVerticalTarget(clip, deformedIds);
   if (fastTarget) {
     lines.push(
       `Squash-and-stretch (SUBTLE, volume-preserving only): ${labelOf(profile, fastTarget)} ` +

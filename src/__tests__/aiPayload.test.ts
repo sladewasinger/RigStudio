@@ -8,8 +8,9 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  buildScenePayload, SYSTEM, TARGETING_RULES, frameBlocks, userContent, FilmstripFrame,
+  buildScenePayload, frameBlocks, userContent, FilmstripFrame,
 } from '../ai/claude';
+import { SYSTEM, TARGETING_RULES } from '../ai/prompts';
 import { makeClip, makeDoc, makePart, makeTrack } from './helpers';
 
 describe('buildScenePayload (AI request payload builder)', () => {

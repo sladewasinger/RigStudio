@@ -6,10 +6,15 @@
  *
  * Structured outputs (output_config.format with a JSON schema) guarantee the reply is a
  * valid Clip, so applying it is a straight JSON.parse. Critique mode is plain text.
+ *
+ * This module is the ORCHESTRATION half only — request payload assembly plus the two
+ * SDK calls. The declarative half (every system-prompt constant and the response JSON
+ * schema) lives in the `./prompts` leaf.
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { Channel, Clip, Keyframe, RigChanges, RigDoc, RigPart } from '../core/model';
+import { boneChain, Channel, Clip, Keyframe, RigChanges, RigDoc, RigPart } from '../core/model';
+import { buildClipSchema, CRITIQUE_SYSTEM, RIG_EDIT_NOTES, SYSTEM } from './prompts';
 
 const MODEL = 'claude-opus-4-8';
 
@@ -32,288 +37,13 @@ export interface AnimateResult {
   clip: RawClip;
   /** Structural edits (only when the user opted in), or null. */
   rig: RigChanges | null;
-  /** How many keyframe times `clampRawClip` had to clamp into `[0, duration]` — surfaced
-   *  in the panel's status text so the "duration pinned" clamp isn't silent. */
+  /** How many keyframe times `clampRawClip` had to clamp into `[0, duration]`, PLUS the
+   *  keyframes of any forbidden sx/sy-on-skinned-part tracks it dropped (the 2026-07-12
+   *  skinned-pose ruling) — surfaced in the panel's status text so neither enforcement
+   *  is silent. The panel's single "clamped N key times" note is the one reporting
+   *  channel both counts share; splitting the message is a panels/-side follow-up. */
   clampedCount: number;
 }
-
-/**
- * The clip response schema, parameterized over the two independent axes a request can
- * vary on (AI Animate System v2 A1): `withRig` (the existing "allow rig changes" opt-in)
- * and `withClipName` (Create-new mode only). Built as a function rather than fixed consts
- * so the four combinations share one source of truth for the tracks/keyframes shape.
- */
-function buildClipSchema(opts: { withRig: boolean; withClipName: boolean }): Record<string, unknown> {
-  const properties: Record<string, unknown> = {
-    name: { type: 'string' },
-    duration: {
-      type: 'integer',
-      description:
-        'Clip length in milliseconds — ECHO BACK the exact pinned duration stated in the ' +
-        'request; this response never resizes the clip (see the duration-pin rule below).',
-    },
-    tracks: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          target: {
-            type: 'string',
-            description:
-              "A part label from the rig (art/bone/group) — NEVER 'root' (deprecated; " +
-              'target a group part for whole-figure motion, see the targeting rule)',
-          },
-          channel: { type: 'string', enum: ['rotate', 'tx', 'ty', 'sx', 'sy', 'z', 'opacity'] },
-          keyframes: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                time: { type: 'integer' },
-                value: { type: 'number' },
-                easing: {
-                  type: 'string',
-                  enum: ['linear', 'easeIn', 'easeOut', 'easeInOut'],
-                },
-              },
-              required: ['time', 'value', 'easing'],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ['target', 'channel', 'keyframes'],
-        additionalProperties: false,
-      },
-    },
-  };
-  const required = ['name', 'duration', 'tracks'];
-
-  // "gains an optional clipName" (A1 spec): optional relative to the BASE schema — it
-  // only exists at all on Create-new requests, added on top of everything above — but
-  // required WITHIN that variant, matching this file's existing strict-schema convention
-  // (every schema below marks every property it declares as required; "optionality" for
-  // fields that can genuinely be absent is expressed with a nullable type instead, e.g.
-  // "parent"/"tip" on addBones). A create-mode response always needs a name to propose.
-  if (opts.withClipName) {
-    properties.clipName = {
-      type: 'string',
-      description:
-        'A short, fitting name for this NEW clip (e.g. "wave", "idle_breathing") — will ' +
-        "be sanitized and de-duplicated against the rig's existing clip names before use.",
-    };
-    required.push('clipName');
-  }
-
-  if (opts.withRig) {
-    properties.rig = {
-      type: 'object',
-      description:
-        'Structural rig edits, applied before the clip. Use empty arrays when the ' +
-        'motion needs no structural change.',
-      properties: {
-        addBones: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              label: { type: 'string', description: 'New unique snake_case name' },
-              pivot: {
-                type: 'object',
-                description: "The bone's origin (joint).",
-                properties: { x: { type: 'number' }, y: { type: 'number' } },
-                required: ['x', 'y'],
-                additionalProperties: false,
-              },
-              parent: {
-                type: ['string', 'null'],
-                description: 'Existing part label, an earlier new bone, or null',
-              },
-              tip: {
-                type: ['object', 'null'],
-                description:
-                  "The bone's far end, same coordinate space as pivot. Gives the bone a " +
-                  'visible length and lets it form a segment for auto-binding — set this ' +
-                  'whenever bindParts is used.',
-                properties: { x: { type: 'number' }, y: { type: 'number' } },
-                required: ['x', 'y'],
-                additionalProperties: false,
-              },
-              bindParts: {
-                type: 'array',
-                items: { type: 'string' },
-                description:
-                  'Art part labels to auto-bind (skin) to this bone and every bone it chains ' +
-                  'with (bones parented to bones, or parenting later bones to this one). Only ' +
-                  'existing ART parts with drawable geometry — never bone/group labels. Empty ' +
-                  'array when this bone is a plain joint with nothing bound to it.',
-              },
-            },
-            required: ['label', 'pivot', 'parent'],
-            additionalProperties: false,
-          },
-        },
-        reparent: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              part: { type: 'string' },
-              parent: { type: ['string', 'null'] },
-            },
-            required: ['part', 'parent'],
-            additionalProperties: false,
-          },
-        },
-        movePivots: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              part: { type: 'string' },
-              x: { type: 'number' },
-              y: { type: 'number' },
-            },
-            required: ['part', 'x', 'y'],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ['addBones', 'reparent', 'movePivots'],
-      additionalProperties: false,
-    };
-    required.push('rig');
-  }
-
-  return { type: 'object', properties, required, additionalProperties: false };
-}
-
-const RIG_EDIT_NOTES = `
-Structural edits (the user has enabled them): alongside the clip you may return "rig"
-changes — addBones creates JOINTS (a bone is a pivot other parts can parent to or that
-can auto-bind artwork — see below), reparent attaches parts to bones or other parts
-(children then ride the parent's motion), movePivots relocates a joint. Use them
-sparingly and only when the requested motion genuinely needs articulation the current
-rig lacks. New bone labels must be unique snake_case; keyframe tracks may target them.
-Bones may parent to bones added earlier in the same list, forming a CHAIN (e.g. a
-shoulder→elbow→wrist arm).
-
-Bones and binding (mirrors the editor's "Bones 2.0" system): give a bone both "pivot"
-(its origin/joint) and "tip" (its far end, same coordinate space as pivot) to make it a
-real segment, not just a bare joint. When a chain of bones (via "parent") overlaps a
-piece of existing artwork, that artwork can be BOUND to the chain — this deforms the
-artwork so it bends smoothly at each joint (like a real limb), which is how you split a
-single rigid shape into an articulated one WITHOUT the user hand-drawing separate parts.
-List the art part labels to bind on "bindParts" (only on the bones that should carry
-that binding — binding a chain member binds the whole chain it belongs to). Only use
-bindParts on existing ART parts that already have drawable geometry (never bone/group
-labels), and only when the motion genuinely needs the limb to bend, not just pivot as a
-whole (e.g. a wave that only needs the whole forearm to swing needs no binding — parent
-a wrist bone to the arm and key rotation; a wave that needs the forearm ITSELF to bend
-along its length needs bindParts on the bone chain running through it). A bone with no
-bindParts is a plain joint, as before.`;
-
-const RIG_SEMANTICS = `The rig is an SVG-space skeleton. Coordinate system: x grows right, y grows DOWN.
-Rotations are in degrees, POSITIVE = CLOCKWISE on screen, and each part rotates around
-its own pivot (its joint — e.g. an arm's pivot is the shoulder). Channels per part:
-- rotate: degrees, ABSOLUTE
-- tx / ty: translation in document units, ABSOLUTE (+y is down, so a jump is NEGATIVE ty)
-- sx / sy: per-part scale factors, ABSOLUTE and CONTINUOUS (rest 1 = unscaled). Scales the
-  part around its OWN pivot, along its own axes, and does NOT propagate to children — use it
-  to squash/stretch or grow/shrink a single part (e.g. blinking eyes flattening sy toward 0,
-  a breathing chest, a bouncing ball's contact squash). Volume-preserving squash pairs sx and
-  sy inversely. A part with no sx/sy track stays at its rest scale.
-- z: draw-order OFFSET (stacking rank), ABSOLUTE and STEPPED — easing is IGNORED, the part
-  jumps to the new rank exactly at the keyframe (no blending between ranks). 0 = the
-  authored stacking; a POSITIVE z lifts the part toward the viewer (draws in front of parts
-  at lower z), NEGATIVE pushes it behind. Use small integer-ish values. This is the tool for
-  reach-behind / pass-in-front moves: a hand that must swing BEHIND the torso then return in
-  FRONT keys z negative while behind and positive while in front; a part that never changes
-  its stacking needs no z track at all (omit it — 0 is the default).
-- opacity: 0 (fully transparent) to 1 (fully opaque), ABSOLUTE and CONTINUOUS — it eases
-  normally like rotate/tx/ty (unlike z, it blends smoothly between keys). Use it for
-  fade-in entrances, fade-out exits, or a part that should flicker/dissolve. A part with no
-  opacity track stays at its rest opacity (given as "rest" in the rig JSON — usually 1).
-Keyframed values are ABSOLUTE channel values, not offsets. A channel with NO keyframes
-holds the part's rest value (given as "rest" in the rig JSON) — so to move a part
-relative to how it currently stands, start your keyframes from its rest value; to keep
-a part still, simply omit its tracks.
-Some parts have a parent: their channels are RELATIVE to the parent's motion (rotating
-a parent carries every descendant with it — like a forearm riding an upper arm), so do
-not counter-animate children to compensate for parent motion.
-Whole-figure motion (a jump, squash-and-stretch, a big pose shift) targets a GROUP part
-that covers the figure, exactly like any other part — its own pivot, its own rotate/tx/
-ty/sx/sy, propagating to every descendant through the normal parent chain. See the
-targeting rule below for which group to pick and why 'root' is off-limits.
-Easing is stored on the keyframe a segment ARRIVES at: linear, easeIn (accelerate),
-easeOut (decelerate), easeInOut.`;
-
-/**
- * Hard targeting rule (AI Animate System v2 A0 — "root demotion"). Root used to move the
- * whole figure by carrying along every part with no track of its own — including a
- * shadow or a prop that was never meant to move (the "shadow follows the figure" bug).
- * Whole-figure motion now targets a GROUP part instead, which only carries its own
- * descendants, so anything deliberately outside it stays put by construction.
- */
-export const TARGETING_RULES = `Targeting rule — read carefully: NEVER set a track's "target" to
-"root". Instead:
-- For whole-figure motion (a jump, a walk, a big pose shift, squash-and-stretch), target
-  the GROUP part representing the figure: prefer the user's current SELECTION (given in
-  the scene JSON below) if it is a group covering the parts that should move; otherwise
-  pick the group in the part TREE (also given below, with nesting and kinds) that
-  contains exactly the parts the motion should carry.
-- For a single limb or part's motion, target that part directly by its label.
-- Parts deliberately outside the chosen group — a shadow, a prop, background scenery —
-  must receive NO tracks from a whole-figure move; that is the reason to target a group
-  instead of root in the first place.
-- The scene JSON's "currentClip" may already contain a track targeting "root" from an
-  older version of this clip — leave it exactly as-is (this app still renders and
-  exports it), but never add a NEW "root" track yourself.
-- Use the SELECTION and TREE to resolve vague references in the user's direction ("him",
-  "the figure", "the arm", "it") to actual part labels.`;
-
-/**
- * General statement of the A1 request contract — the CONCRETE numbers (which mode, the
- * pinned duration, any protected keyframes) are per-request values, so they travel in the
- * user message (see `buildRequestNotes`) rather than here; this paragraph just tells the
- * model the rules exist and that they're enforced regardless of compliance.
- */
-const REQUEST_MODES_NOTE = `Each request states its MODE — "create a new clip" (the current
-clip is reference context only, not modified) or "modify the current clip in place" — a
-PINNED duration your keyframe times must stay within (out-of-range times are clamped, the
-clip is never stretched), and sometimes a list of PROTECTED keyframes that must not change.
-Follow those per-request instructions exactly; the app also enforces them afterward
-regardless of what you return.`;
-
-export const SYSTEM = `You are the animation assistant inside Rig Studio, a 2D cutout-rig editor.
-
-${RIG_SEMANTICS}
-
-${TARGETING_RULES}
-
-${REQUEST_MODES_NOTE}
-
-Craft notes: use anticipation and follow-through; overlap limb timing slightly; ease
-in/out by default and linear only for mechanical motion; loop cleanly (first and last
-keyframe of every track should match unless asked otherwise); keep times multiples of
-10 ms. Angles beyond ±180° are allowed for wind-ups.
-
-You receive the rig description (including the current SELECTION and the part TREE) and
-the current clip as JSON (and possibly a rendered image of the current pose), plus the
-user's direction. Return the COMPLETE updated clip (all tracks, not a diff). Keep
-existing motion that the user didn't ask to change unless it conflicts with the request.`;
-
-const CRITIQUE_SYSTEM = `You are an animation director reviewing a clip made in Rig Studio,
-a 2D cutout-rig editor.
-
-${RIG_SEMANTICS}
-
-${TARGETING_RULES}
-
-Critique the clip like a seasoned animator doing dailies: arcs, timing and spacing,
-anticipation, follow-through and overlap, silhouette readability, weight, looping
-cleanliness. Point at concrete tracks/keyframe times when something is off and suggest
-specific fixes (times in ms, values in degrees/units). Be direct and useful, not
-flattering. Keep it under ~300 words.`;
 
 export type ContentBlock =
   | { type: 'text'; text: string }
@@ -371,9 +101,11 @@ export function frameBlocks(frames: FilmstripFrame[], totalDurationMs: number): 
  * (a flat parts array with parent-by-label already existed, but reading nesting back out
  * of it requires following pointers; the AI Animate System v2 A0 "targeting" fix wants
  * this legible without that step, so 'him'/'the figure'/'the arm' resolve sensibly and a
- * whole-figure move can target the right GROUP). `visited` guards against a corrupted
- * doc with a parent cycle (setParent()/normalizeDoc keep real docs cycle-free, but this
- * function must never hang on bad input it's merely reporting on).
+ * whole-figure move can target the right GROUP). Bones show here too, nested under the
+ * limb their chain is parented to (hierarchy-as-assignment), so the model can see which
+ * part each chain belongs to. `visited` guards against a corrupted doc with a parent
+ * cycle (setParent()/normalizeDoc keep real docs cycle-free, but this function must
+ * never hang on bad input it's merely reporting on).
  */
 function partTree(doc: RigDoc): string {
   const byParent = new Map<string | null, RigPart[]>();
@@ -394,6 +126,33 @@ function partTree(doc: RigDoc): string {
   };
   visit(null, 0);
   return lines.join('\n');
+}
+
+/**
+ * A skinned part's controlling bone chain, root→leaf (the 2026-07-12 skinned-pose
+ * ruling: these bones are the part's POSING HANDLES, and the scene payload must say
+ * so). Resolved through `boneChain` from each `skin.bones` entry — NOT from
+ * `skin.bones`'s own order, which is bind-time order and can lag a chain grown after
+ * binding — then ordered by parent-link DFS from each chain root so "root first" holds
+ * even if doc order was shuffled. Cycle-guarded like `partTree` (a corrupted doc
+ * yields a short/empty list, never a hang).
+ */
+function controllingBones(doc: RigDoc, part: RigPart): { id: string; label: string }[] {
+  const inChain = new Set<string>();
+  for (const sb of part.skin?.bones ?? []) {
+    for (const b of boneChain(doc.parts, sb.id)) inChain.add(b.id);
+  }
+  const members = doc.parts.filter((p) => inChain.has(p.id));
+  const out: { id: string; label: string }[] = [];
+  const seen = new Set<string>();
+  const visit = (b: RigPart): void => {
+    if (seen.has(b.id)) return;
+    seen.add(b.id);
+    out.push({ id: b.id, label: b.label });
+    for (const c of members) if (c.parentId === b.id) visit(c);
+  };
+  for (const m of members) if (!m.parentId || !inChain.has(m.parentId)) visit(m);
+  return out;
 }
 
 /**
@@ -421,6 +180,11 @@ export function buildScenePayload(doc: RigDoc, clip: Clip, selectedPartIds: stri
       parent: p.parentId ? labelOf(p.parentId) : null,
       rest: p.rest,
       bakedTransform: p.transform || 'none',
+      // Bones-awareness (2026-07-12 ruling): a skinned part advertises its posing
+      // mechanism — the prompt's skinned-parts rules key off these two fields.
+      ...(p.skin && p.skin.bones.length > 0
+        ? { skinned: true, bones: controllingBones(doc, p) }
+        : {}),
     })),
     currentClip: {
       name: clip.name,
@@ -481,9 +245,9 @@ export interface PromptProtectedKey {
 
 /**
  * Per-request instructions that vary by call (unlike the static SYSTEM prompt, which only
- * states that these rules exist — see `REQUEST_MODES_NOTE`): which mode this is, the
- * pinned duration, any protected keyframes, and the user's direction. Exported for the
- * unit suite's inspection; not itself a network call.
+ * states that these rules exist — see `REQUEST_MODES_NOTE` in `./prompts`): which mode
+ * this is, the pinned duration, any protected keyframes, and the user's direction.
+ * Exported for the unit suite's inspection; not itself a network call.
  */
 export function buildRequestNotes(
   mode: 'new' | 'modify',
@@ -522,19 +286,38 @@ export function buildRequestNotes(
  * NEVER trusted to resize the clip (no stretching) — every keyframe time is clamped into
  * `[0, duration]` instead, and the output's duration is forced to the pinned value. Pure
  * and exported so it's unit-testable without a network call.
+ *
+ * `skinnedLabels` (2026-07-12 skinned-pose ruling) additionally DROPS any sx/sy track
+ * targeting a skinned part: part scale renders nothing on skinned geometry in the editor
+ * (scale never propagates to children there) while Rive WOULD scale the node — a WYSIWYG
+ * violation, so the track is removed outright. rotate/tx/ty on skinned parts are
+ * legitimate whole-limb accents (the bones are parented under the part) and pass
+ * through untouched, as do sx/sy tracks on unskinned parts and every bone track. Each
+ * dropped keyframe counts toward `clampedCount` — the panel's existing clamp note is
+ * the one surfacing channel (see `AnimateResult.clampedCount`).
  */
-export function clampRawClip(raw: RawClip, duration: number): { clip: RawClip; clampedCount: number } {
+export function clampRawClip(
+  raw: RawClip,
+  duration: number,
+  skinnedLabels: ReadonlySet<string> = new Set(),
+): { clip: RawClip; clampedCount: number } {
   let clampedCount = 0;
-  const tracks = raw.tracks.map((t) => ({
-    ...t,
-    keyframes: [...t.keyframes]
-      .map((k) => {
-        const time = Math.min(duration, Math.max(0, k.time));
-        if (time !== k.time) clampedCount++;
-        return { ...k, time };
-      })
-      .sort((a, b) => a.time - b.time),
-  }));
+  const tracks = raw.tracks
+    .filter((t) => {
+      const forbidden = (t.channel === 'sx' || t.channel === 'sy') && skinnedLabels.has(t.target);
+      if (forbidden) clampedCount += t.keyframes.length;
+      return !forbidden;
+    })
+    .map((t) => ({
+      ...t,
+      keyframes: [...t.keyframes]
+        .map((k) => {
+          const time = Math.min(duration, Math.max(0, k.time));
+          if (time !== k.time) clampedCount++;
+          return { ...k, time };
+        })
+        .sort((a, b) => a.time - b.time),
+    }));
   return { clip: { ...raw, duration, tracks }, clampedCount };
 }
 
@@ -610,7 +393,13 @@ export async function animateWithClaude(
   if (!text) throw new Error('No response content.');
 
   const raw = JSON.parse(text) as RawClip & { rig?: RigChanges };
-  const { clip: clamped, clampedCount } = clampRawClip(raw, pinnedDuration);
+  // Skinned parts by LABEL (the response's frame of reference) for the sx/sy drop rule.
+  // Snapshot of the doc as sent — a rig-changes bind landing later this same request
+  // can't be known here, and the prompt already forbids scaling anything skinned.
+  const skinnedLabels = new Set(
+    doc.parts.filter((p) => p.skin && p.skin.bones.length > 0).map((p) => p.label),
+  );
+  const { clip: clamped, clampedCount } = clampRawClip(raw, pinnedDuration, skinnedLabels);
   // Track targets stay LABELS here — the caller applies rig changes first (new bones
   // don't have ids until then), then resolves targets against the updated doc.
   return { clip: clamped, rig: allowRigChanges ? (raw.rig ?? null) : null, clampedCount };

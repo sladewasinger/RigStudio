@@ -19,11 +19,17 @@ const NAMED_ROLES: PartRole[] = ['torso', 'head', 'face', 'limb', 'shadow', 'pro
 
 export function buildRigProfileBlock(profile: RigProfile): string {
   const lines: string[] = [];
+  // Chain-deformed (skinned) parts get a "bone-driven" tag on their role line and their
+  // chain spelled as the POSING HANDLES (2026-07-12 skinned-pose ruling): the model must
+  // read a deformed part as posed via its bones, never as a free-standing rigid part.
+  const deformedIds = new Set(profile.chains.flatMap((c) => c.deforms.map((d) => d.id)));
   if (profile.figureGroup) {
     lines.push(`- figure group (whole-figure target): ${profile.figureGroup.label}`);
   }
   for (const role of NAMED_ROLES) {
-    const labels = profile.roles.filter((r) => r.role === role).map((r) => r.label);
+    const labels = profile.roles
+      .filter((r) => r.role === role)
+      .map((r) => (deformedIds.has(r.id) ? `${r.label} (bone-driven)` : r.label));
     if (labels.length > 0) lines.push(`- ${role}: ${labels.join(', ')}`);
   }
   for (const pair of profile.symmetryPairs) {
@@ -34,12 +40,15 @@ export function buildRigProfileBlock(profile: RigProfile): string {
   }
   for (const ch of profile.chains) {
     const spine = ch.bones.map((b) => b.label).join(' -> ');
-    const deforming = ch.deforms.length > 0
-      ? `, deforming ${ch.deforms.map((d) => d.label).join(', ')}`
+    const deformLabels = ch.deforms.map((d) => d.label).join(', ');
+    const deforming = ch.deforms.length > 0 ? `, deforming ${deformLabels}` : '';
+    const handles = ch.deforms.length > 0
+      ? ` — the POSING HANDLES for ${deformLabels}: key rotate on these bones, root-first, to bend ${
+        ch.deforms.length === 1 ? 'it' : 'them'}`
       : '';
     lines.push(
       `- bone chain: ${spine} (${ch.bones.length} bone${ch.bones.length === 1 ? '' : 's'}, ` +
-        `total length ${ch.totalLength}${deforming})`,
+        `total length ${ch.totalLength}${deforming})${handles}`,
     );
   }
   if (lines.length === 0) return '';
