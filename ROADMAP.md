@@ -574,7 +574,7 @@ exportLottie 327), audit queued below.
 
 ## Live bug queue (user-reported 2026-07-12, next main-tree wave after nodeEditing)
 
-- [ ] **Group-like selection for art-with-children** — every group behavior
+- [x] **Group-like selection for art-with-children** (63a2b67) — every group behavior
   (click-selects-ancestor, dblclick drill-down, entered-group tracking, union
   selection box, group handle sets w/ descendant scale distribution) keys on
   `kind === 'group'`; an ART part carrying child parts (face→eyes, the
@@ -583,7 +583,8 @@ exportLottie 327), audit queued below.
   sites (artwork pipeline, dblclick, focus, overlayHandles, handles pipeline).
   User's acceptance: click eyes on canvas → selects face w/ union box; dblclick
   eye → drills into face, selects eyes; Layers face click → union box.
-- [ ] **Ctrl+G leaves the canvas dimmed** (user: "pip semi-transparent until
+- [x] **Ctrl+G leaves the canvas dimmed** (63a2b67 — repairEnteredGroups prunes
+  inside every focusContext call; reproduced at 8-9 dimmed parts pre-fix) (user: "pip semi-transparent until
   refresh") — suspected stale `ctx.enteredGroups` app-state after structural
   edits: grouping while drilled in (or restructuring around an entered id)
   leaves focusContext dimming everything outside a stale subtree; refresh
@@ -606,7 +607,9 @@ Node scale would — scale stays blocked on skinned parts.
   fields on a skinned part lock with the same hint (WYSIWYG: don't offer a
   channel the canvas won't show). Interaction scenarios + the hint counterpart.
   RUNS AFTER the live-bug wave (same pipeline files).
-- [ ] **AI bones-awareness** (launched in worktree): buildScenePayload marks
+- [x] **AI bones-awareness** (b36b048, incl. the ai/prompts.ts extraction —
+  claude.ts 489→289, grandfather entry gone — and the polish.ts
+  squash-guard for bone-deformed targets): buildScenePayload marks
   skinned parts (skinned: true + their bone chain ids/labels); TARGETING_RULES
   teaches the model: articulate a skinned limb via its BONE rotate channels
   (root-first, follow-through); part-level rotate/tx/ty = whole-limb accent
@@ -748,10 +751,8 @@ CLAUDE.md convention: "Think in named patterns, not conventions").
      mixed in as pseudo-shortcuts; (c) give the bone tool a REAL key — `B`
      arms bone-chain placement (guarded like the other tool keys V/T/R/I,
      no ctrl/meta/alt), registered + documented via the registry itself.
-  2. **ai/claude.ts — REORGANIZE**: extract the prompt constants + clip schema
-     to an `ai/prompts.ts` leaf (finishing the pattern threads.ts/
-     profileBlock.ts already established); claude.ts becomes pure orchestration
-     and exits the list. Low risk (pure data, already unit-tested).
+  2. **ai/claude.ts — DONE** (b36b048, folded into the bones-awareness wave):
+     ai/prompts.ts extracted; claude.ts 489→289, off the grandfather list.
   3. **timeline/graph.ts — REORGANIZE (cross-file)**: its pan/zoom is a
      byte-for-byte algorithmic duplicate of panels/sm/graphCamera.ts kept in
      sync only by "mirrors X" comments — extract one shared view-rect
