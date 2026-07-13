@@ -666,8 +666,8 @@ CLAUDE.md convention: "Think in named patterns, not conventions").
   CODE-line counts (comments/blanks free per user ruling), grandfathered
   ceilings shrink-only, new files fail >300, stale-entry honesty check.
 
-## Headless engine + MCP server (planned with Austin 2026-07-11 — NOT scheduled;
-## build after/alongside the AI program, sharing its components)
+## Headless engine + MCP server (planned 2026-07-11; IN PROGRESS 2026-07-12 —
+H1 is COMPLETE, H2 is next up after the live bug queue + redesign pass)
 
 Goal: agents (Claude Code, Codex, any MCP client) create and edit rigs/animations
 in chat without the website, producing .rig.json the editor opens (and .riv
