@@ -32,6 +32,27 @@ const canvasToolsEl = document.getElementById('canvas-tools')!;
 const inspectorEl = document.getElementById('inspector')!;
 const timelineEl = document.getElementById('timeline')!;
 
+// BOOT-ORDER FIX (2026-07-13 giant-chrome regression): #layout's CSS grid
+// (style.css) declares FOUR columns — `var(--layers-width,200px) 6px 1fr 260px` —
+// where the 6px column exists only for the `#layers-splitter` div that
+// `buildLayersPanel` (via `ensureLayersSplitter`, panels/layersResize.ts) inserts as
+// #layers' next sibling. That insertion normally happens on the first `notify()`.
+// But every doc-loading path (the autosave restore below, and afterDocReplaced for
+// New/Open/Load-sample) calls buildCanvas() — a synchronous render-then-measure pass
+// (view/canvas.ts's pivot seeding, plus the first renderPose()) — BEFORE its own
+// trailing notify(). If state.doc is already set the FIRST time buildCanvas() ever
+// runs in a page session (precisely the autosave-restore case just below), #layout
+// still has only 3 static children, so implicit grid auto-placement squeezes
+// #canvas-col into the splitter's 6px column instead of `1fr` — handleSize()/
+// screenScaleOf() (view/coords.ts) then bake wildly oversized radii into every
+// overlay chrome element (pivot ghosts, bone kites, gizmos) for that one render; they
+// stay wrong until the next renderPose() (any zoom/pan/click) recomputes them —
+// exactly the reported "giant translucent circles/blob, self-healing on first
+// interaction" bug. Calling buildLayersPanel() here — idempotent, doc-independent
+// (ensureLayersSplitter runs before its `if (!doc) return`) — inserts the splitter
+// and fixes the grid before ANY buildCanvas() call can ever measure it degenerate.
+buildLayersPanel(layersEl);
+
 const AUTOSAVE_KEY = 'rig-studio-autosave';
 
 /**
