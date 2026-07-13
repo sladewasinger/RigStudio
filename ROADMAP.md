@@ -514,16 +514,19 @@ girl_example.svg remains a nested-import test fixture only.)
   across parts. (Follow-on to the path-row select/reorder fix; cross-part path
   drags stay rejected until this exists.)
 
-Category B — nice-to-have (untracked):
-- [ ] **Find/search parts** in the Layers tree. (S–M)
-- [ ] **Project frame rate + frames/timecode display** — add doc.fps (exporters
-  hardcode 60), and a ms↔frames toggle on the timeline time readout. (M)
-- [ ] **Quick-save vs Save As** — remember last filename so Ctrl+S doesn't re-prompt
-  every time; keep Save As for renaming. (S)
-- [ ] **Recent files** menu (localStorage ring), beyond the single autosave slot. (M)
-- [ ] **Invert selection / Select None** menu + shortcut. (S)
-- [ ] **Empty-state call-to-action** on the canvas/Layers/Inspector when no doc is
-  loaded. (S)
+Category B — DONE 2026-07-13 (918dd3e + eb79af2) except recent-files:
+- [x] **Find/search parts** in the Layers tree (panels/layersSearch.ts —
+  flattened non-matches, ancestors kept, fold state untouched).
+- [x] **Project frame rate + frames/timecode display** — doc.fps seeded 60 by
+  normalizeDoc, threaded through BOTH exporters (fps=60 byte-identity pinned;
+  fps=30 decoder-pinned); timeline readout click-toggles ms↔frames (persisted).
+- [x] **Quick-save vs Save As** — filename remembered per doc name; Ctrl+Shift+S
+  Save As; found+fixed: save/selectAll bindings never checked shift. Browser
+  filename-memory only; real overwrite lands with D1 file handles.
+- [ ] **Recent files** menu — DEFERRED into D1 (its storage layer owns it).
+- [x] **Invert selection (Ctrl+I) / Select None (Ctrl+Shift+A)** via the registry.
+- [x] **Empty-state call-to-action** — CTAs proxy-click the real toolbar buttons
+  so every existing guard applies.
 
 (Already tracked — see v3 / v2.13: File→New, rulers/guides, zoom % + zoom-to-selection
 + 100% reset, copy/paste parts [note: Ctrl+C/V are keyframe-only, no-op in Edit mode],
