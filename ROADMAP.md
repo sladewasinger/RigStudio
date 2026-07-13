@@ -691,6 +691,17 @@ hidden-part exclusion — verified against the @rive-app/canvas harness) → H2
 MCP server → Category B → D1 (File System Access + PWA). Every wave: full
 gates + roadmap tick.
 
+**AUSTIN'S REVIEW LIST (shipped with flags — eyeball when back):**
+- Node-editor seam unification design (61ea081): one merged glyph, M side is
+  primary, del-seg opens the pair one-click.
+- Group-like scale semantics (63a2b67): art-with-children's own paths scale
+  along with descendants, pivot-anchored.
+- .riv keyed-z + opacity VISUALS (7155013): decoder+runtime verified, but
+  on-screen stacking/fade blending needs a real player look (rive.rip) —
+  pixel readback is impossible headless.
+- Take-pill hash re-pin (dbac402): canonical order changed the bytes; verified
+  visually via render-frames; the Dosey checkout's riv+rig.json were rewritten.
+
 **DEFERRED FOR AUSTIN (decisions his to make — nothing below gets built):**
 - Unified skeleton Phase 2: whether IK solves ACROSS attachments (grab a hand,
   FABRIK through the spine). Ships OFF; the full-body-solve flag is his call.
