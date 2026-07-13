@@ -638,16 +638,22 @@ directly). Feasible because core/, geometry/, io/ are already DOM-free (the unit
 suite runs in Node); the user's scripts/ take-pill pipeline is the proof-of-
 concept seed.
 
-- [~] **H1. `rig-studio-core` headless package + CLI** — wave H1a DONE (b2b0cb3):
+- [x] **H1. `rig-studio-core` headless package + CLI** — COMPLETE. Wave H1a (b2b0cb3):
   `src/headless/index.ts` package entry (pure facade over the DOM-free
   core/geometry/io surface + `importSvgHeadless` via scoped jsdom DOMParser,
   importer untouched); CLI (`rig-studio` bin / `npx tsx src/headless/cli.ts`):
   `rig import` (nested part tree summary + .rig.json), `rig validate`
   (normalization drift + round-trip byte-stability, exit 0/1), `rig export-riv`.
   Module-graph test enforces headless never reaches view/panels/timeline/ui.
-  REMAINING (H1b): `rig render-frames --clip X` — needs a HEADLESS POSE COMPOSER
-  (pose composition currently lives in view/pose.ts, DOM-adjacent) + resvg/sharp
-  rasterization; gives agents visual feedback, shares A3's filmstrip framing.
+  Wave H1b (4a3322f): `rig render-frames --clip X` — the pose math extracted
+  VERBATIM to `geometry/pose.ts` (view/pose.ts is a thin delegator injecting
+  ctx.poseSampler; one shared kernel, no editor/headless drift, pinned by
+  poseSharedKernel.test.ts), `headless/composePose.ts` (posed standalone SVG:
+  z-sorted draw order, sampled opacity, hidden excluded, artboard frame;
+  skinned parts RIGID like both exporters, stated in CLI output),
+  `headless/renderFrames.ts` (@resvg/resvg-js PNGs, A3-cluster default times
+  via the extracted `core/filmstripTimes.ts`). E2E-proven by real subprocess +
+  PNG centroid tracking that returns byte-identical at the loop point.
   Known caveats carried forward: geometric auto-bind uses DOM isPointInFill
   (headless binding = pure point-in-fill or explicit part targets), and much of
   core/channels + applyRigChanges read/write the `state` singleton — headless
