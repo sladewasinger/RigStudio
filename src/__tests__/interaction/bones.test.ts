@@ -15,13 +15,14 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { canUndo, undo } from '../../core/history';
+import { parsePath } from '../../geometry/paths';
 import {
   selectPart as modelSelectPart, setKeyframe, notify,
   serializeDoc, deserializeDoc,
 } from '../../core/model';
 import {
   startBonePlacement, renderPose, setNodeBinding, recomputeAutoWeights, resetView,
-  unbindSelectedSkin,
+  unbindSelectedSkin, deleteSelectedNodes, selectedNodeCount,
 } from '../../view';
 import { groupAction } from '../../panels';
 import {
@@ -1106,6 +1107,59 @@ describe('scenario B30 — binding NESTED art keeps it under its group (hoisting
       drift = Math.max(drift, Math.abs(before[i] - after[i]));
     }
     expectClose(drift, 0, 0.05, 'nested art render-neutral across bind (≤0.05px)');
+  });
+});
+
+describe('scenario B31 — a structural node edit drops the skinned part\'s node-binding override', () => {
+  /**
+   * Pins nodeEditing's chokepoint (`applyStructuralEdit`) from the node-editing
+   * redesign: a command-count-changing edit (here, deleting a node) on a path that
+   * carries a per-node weight override MUST drop that override — it's keyed by
+   * command index, and the edit just shifted every later index. Mutation-checked: the
+   * full unit + interaction suites (708 tests as of this wave) stayed green with the
+   * chokepoint's `dropSkinOverridesForPath` call commented out, so this scenario is
+   * the one that actually pins the drop.
+   */
+  /** True drawing-command (node) count parsed straight from `path.d` — NOT
+   *  `path.nodeTypes.length`, which can be stale (e.g. the sample rig's own
+   *  "Inkscape occasionally writes an extra closing char" quirk CLAUDE.md notes;
+   *  `ensureNodeTypes` silently renormalizes it on the next structural edit). */
+  function trueNodeCount(pathId: string): number {
+    const d = partByLabel(LIMB).paths.find((p) => p.id === pathId)!.d;
+    return parsePath(d).filter((c) => c.cmd !== 'Z').length;
+  }
+
+  it('deleting an overridden node clears the override but leaves the bone binding intact', () => {
+    const bones = placeChain(LIMB, 3);
+    const path = partByLabel(LIMB).paths.find((p) => (p.nodeTypes?.length ?? 0) >= 4)!;
+    expect(path, 'left_leg has a path with >= 4 nodes to work with').toBeTruthy();
+
+    enterNodeMode(LIMB, path.id);
+    const handles = Array.from(
+      overlayEl().querySelectorAll(`.node-handle[data-path-id="${path.id}"][data-field="x"]`),
+    ) as SVGElement[];
+    expect(handles.length, 'node handles present for the scoped path').toBeGreaterThan(3);
+    // The LAST handle is never the M (start) node, which deleteSelectedNodes refuses.
+    const target = clientCenterOf(handles[handles.length - 1]);
+    click(target.x, target.y);
+    expect(selectedNodeCount(), 'exactly one node selected by the click').toBe(1);
+
+    expect(setNodeBinding(bones[0].id, null, 1), 'override recorded').toBe(true);
+    const before = partByLabel(LIMB).skin!.overrides;
+    expect(before?.[path.id], 'the override sits on the target path').toBeTruthy();
+    const nodesBefore = trueNodeCount(path.id);
+
+    // The SAME selected node, structurally deleted: a command-count-changing edit on
+    // exactly the path carrying the just-created override.
+    expect(deleteSelectedNodes(), 'node deleted').toBe(true);
+
+    const after = partByLabel(LIMB);
+    expect(trueNodeCount(path.id), 'the path actually lost exactly one node').toBe(nodesBefore - 1);
+    expect(
+      after.skin!.overrides?.[path.id],
+      'the override on the structurally-edited path is gone',
+    ).toBeUndefined();
+    expect(after.skin!.bones.length, 'the bone binding itself is untouched').toBe(3);
   });
 });
 

@@ -12,7 +12,7 @@ import { ctx, DragState, nodeKey, parseNodeKey } from '../../context';
 import { pointerInPathSpace, handleSize } from '../../coords';
 import {
   nodeIndexOf, ensureNodeTypes, segmentStart, pointOnSegment, segmentHit, subpathStart,
-  applyMirrorConstraint,
+  applyMirrorConstraint, applyStructuralEdit,
 } from '../../nodeEditing';
 import { renderOverlay } from '../../overlay';
 import { capturePointer } from '../lifecycle';
@@ -80,7 +80,11 @@ export const NODE_BEND_MARQUEE_PIPELINE: GesturePipeline = {
     if (c.cmd === 'Z') {
       // The implicit closing line becomes a REAL segment: an explicit cubic back
       // to the subpath start, in front of the Z (which then closes a zero-length
-      // gap). This is how a handle-less closing edge grows handles.
+      // gap). This is how a handle-less closing edge grows handles. Command count
+      // changes (+1), so this goes through the structural chokepoint (drops any
+      // skin overrides on this path, resyncs the DOM) exactly like every other
+      // count-changing edit in nodeEditing/ — the rest of this handler's control-
+      // point solve below is index-preserving and writes path.d directly, as usual.
       const s0 = subpathStart(cmds, d.cmdIndex);
       if (!s0) return;
       const closing: PathCmd = {
@@ -90,15 +94,15 @@ export const NODE_BEND_MARQUEE_PIPELINE: GesturePipeline = {
         x: s0.x, y: s0.y,
       };
       cmds.splice(d.cmdIndex, 0, closing);
+      let nodeTypes: string | null = null;
       if (path.nodeTypes) {
         // The new node duplicates the subpath start; give it a corner flag at the
         // exact position so every later node keeps its type.
         const types = ensureNodeTypes(path); // pre-splice length — recompute below
         const ni = nodeIndexOf(cmds, d.cmdIndex);
-        path.nodeTypes = types.slice(0, ni) + 'c' + types.slice(ni);
+        nodeTypes = types.slice(0, ni) + 'c' + types.slice(ni);
       }
-      ctx.selectedNodes.clear(); // command indexes shifted
-      ctx.selectedNode = null;
+      applyStructuralEdit(d.part, path, { cmds, nodeTypes });
       c = closing;
     }
     if (c.cmd === 'L') {

@@ -28,7 +28,6 @@ const GRANDFATHERED = new Map<string, number>([
   ['main.ts', 522],
   ['panels/layers.ts', 347],
   ['timeline/graph.ts', 395],
-  ['view/nodeEditing.ts', 560],
 ]);
 
 function sourceFiles(dir: string): string[] {
