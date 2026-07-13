@@ -13,10 +13,14 @@ npm test                  # unit project (node) — includes the size-ratchet te
 npm run test:interaction  # headless-Chromium real-gesture suite (~3 s)
 npm run export:take-pill  # headless end-to-end; then hash the output:
 #   out/pip_take_pill.riv SHA-256 must equal
-#   4351052ebd49a4d7f1f5e50f30757bbe7faf8f9c226e3ee67c1db2441102dc47
+#   3754fc453a80f04c575f6ddbecba7e99a67d7fd4be8e2e0e932fe6aa5004d6f1
 #   for any wave that claims byte-identical export behavior (refactors).
 #   Feature waves that legitimately change export bytes re-pin the hash in
-#   their commit message.
+#   their commit message. (Re-pinned 2026-07-13 by the layer-order wave:
+#   normalizeDoc now canonicalizes part order and the take-pill fixture was
+#   itself non-canonical — the reorder was verified VISUALLY via headless
+#   render-frames: pill in-hand, in FRONT of the face at the 356ms crossing,
+#   swallowed at the mouth. Prior pin: 4351052e...02dc47.)
 ```
 
 Current expected counts live in git history (each wave's commit message

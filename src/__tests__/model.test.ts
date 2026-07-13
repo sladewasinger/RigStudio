@@ -21,6 +21,7 @@ import {
   drawOrder,
   duplicateParts,
   groupParts,
+  isCanonicalPartOrder,
   isEffectivelyHidden,
   keyAt,
   movePartRelativeTo,
@@ -646,13 +647,23 @@ describe('setParent / ancestorChain', () => {
     resetState(makeDoc([makePart('a'), makePart('b'), makePart('c')]));
   });
 
-  it('allows a valid reparent and detaching via null', () => {
+  it('allows a valid reparent and detaching via null, keeping doc.parts canonical', () => {
+    // setParent also moves the reparented part's whole subtree to stay canonical (CLAUDE.md
+    // "Layer order IS z-order"), so it's no longer safe to address a part by a fixed array
+    // index after a reparent — look it up by id instead, and assert canonicity directly.
+    const byId = (id: string) => state.doc!.parts.find((p) => p.id === id)!;
+
     expect(setParent('b', 'a')).toBe(true);
-    expect(state.doc!.parts[1].parentId).toBe('a');
+    expect(byId('b').parentId).toBe('a');
+    expect(isCanonicalPartOrder(state.doc!.parts)).toBe(true);
+
     expect(setParent('b', 'c')).toBe(true); // move to a different parent
-    expect(state.doc!.parts[1].parentId).toBe('c');
+    expect(byId('b').parentId).toBe('c');
+    expect(isCanonicalPartOrder(state.doc!.parts)).toBe(true);
+
     expect(setParent('b', null)).toBe(true);
-    expect(state.doc!.parts[1].parentId).toBeNull();
+    expect(byId('b').parentId).toBeNull();
+    expect(isCanonicalPartOrder(state.doc!.parts)).toBe(true);
   });
 
   it('refuses self-parenting and cycles', () => {
@@ -1438,8 +1449,10 @@ function maximalDoc(): RigDoc {
     // trip proves the two rects are independent (not one derived from the other).
     artboard: { enabled: true, x: -10, y: -5, w: 140, h: 130 },
     rootPivot: { x: 50, y: 90 },
-    // Draw order deliberately does NOT match the parent hierarchy or creation order —
-    // doc.parts array order IS paint order and must round-trip independently of it.
+    // Draw order (doc.parts array order) is CANONICAL (CLAUDE.md "Layer order IS
+    // z-order"): every part's own index precedes its whole, contiguous descendant block.
+    // Sibling order within that constraint is still a free authoring choice, arbitrary and
+    // independent of id naming — the round trip must preserve it exactly, whatever it is.
     parts: [
       {
         id: SKINNED_HAND, label: 'hand', kind: 'art', transform: '',
@@ -1465,25 +1478,10 @@ function maximalDoc(): RigDoc {
         })],
       },
       {
-        id: ELBOW, label: 'elbow', kind: 'bone', transform: '',
-        pivot: { x: 70, y: 55 }, pivotHint: null, boneTip: { x: 90, y: 55 },
-        rest: { rotate: 15, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
-        parentId: SHOULDER, skin: null, paths: [],
-      },
-      {
         id: GROUP1, label: 'body_group', kind: 'group', transform: '',
         pivot: { x: 50, y: 40 }, pivotHint: null, boneTip: null,
         rest: { rotate: 5, tx: 1, ty: -1, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: null, skin: null, paths: [],
-      },
-      {
-        id: LEFT_ARM, label: 'left_arm', kind: 'art', transform: '',
-        pivot: { x: 90, y: 55 }, pivotHint: null, boneTip: null,
-        rest: { rotate: -8, tx: 2, ty: 3, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
-        parentId: ELBOW, skin: null,
-        paths: [makePath2('arm_path_1', 'forearm', 'M 90,50 C 95,50 100,52 100,55 S 95,60 90,60 Z', 'css', {
-          fill: '#ffcc99', fillOpacity: 1, stroke: null, strokeWidth: 0, strokeOpacity: 1, transform: '',
-        })],
       },
       {
         id: TORSO, label: 'torso', kind: 'art', transform: 'translate(10,10)',
@@ -1506,6 +1504,21 @@ function maximalDoc(): RigDoc {
         pivot: { x: 50, y: 55 }, pivotHint: null, boneTip: { x: 70, y: 55 },
         rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: TORSO, skin: null, paths: [],
+      },
+      {
+        id: ELBOW, label: 'elbow', kind: 'bone', transform: '',
+        pivot: { x: 70, y: 55 }, pivotHint: null, boneTip: { x: 90, y: 55 },
+        rest: { rotate: 15, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+        parentId: SHOULDER, skin: null, paths: [],
+      },
+      {
+        id: LEFT_ARM, label: 'left_arm', kind: 'art', transform: '',
+        pivot: { x: 90, y: 55 }, pivotHint: null, boneTip: null,
+        rest: { rotate: -8, tx: 2, ty: 3, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+        parentId: ELBOW, skin: null,
+        paths: [makePath2('arm_path_1', 'forearm', 'M 90,50 C 95,50 100,52 100,55 S 95,60 90,60 Z', 'css', {
+          fill: '#ffcc99', fillOpacity: 1, stroke: null, strokeWidth: 0, strokeOpacity: 1, transform: '',
+        })],
       },
       {
         // Unified Skeleton (Phase 1): a cross-chain ATTACH — parented to ELBOW (another
@@ -1648,13 +1661,14 @@ describe('serializeDoc / deserializeDoc round trip', () => {
     expect(json2).toBe(json1); // stable round trip — no drift, no reordering, no new defaults
   });
 
-  it('preserves draw order (doc.parts array order) independently of the parent hierarchy', () => {
+  it('preserves draw order (doc.parts array order), including free sibling order', () => {
     const doc = maximalDoc();
     const restored = deserializeDoc(serializeDoc(doc));
     expect(restored.parts.map((p) => p.id)).toEqual(doc.parts.map((p) => p.id));
     expect(restored.parts.map((p) => p.id)).toEqual([
-      SKINNED_HAND, ELBOW, GROUP1, LEFT_ARM, TORSO, SHOULDER, WRIST_ATTACH,
+      SKINNED_HAND, GROUP1, TORSO, SHOULDER, ELBOW, LEFT_ARM, WRIST_ATTACH,
     ]);
+    expect(isCanonicalPartOrder(restored.parts)).toBe(true);
   });
 
   it('preserves attachedRoot on a cross-chain-attached bone, and leaves it absent elsewhere', () => {

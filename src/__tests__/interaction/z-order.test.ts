@@ -13,9 +13,11 @@
 
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { checkpoint, undo } from '../../core/history';
-import { setKeyframeAt, notify, selectPart as modelSelectPart } from '../../core/model';
 import {
-  bootRig, resetRig, state, setEditorMode, repaint, rootGEl,
+  setKeyframeAt, notify, selectPart as modelSelectPart, isCanonicalPartOrder,
+} from '../../core/model';
+import {
+  bootRig, resetRig, state, setEditorMode, repaint, rootGEl, partByLabel, simulateDragDrop,
 } from './harness';
 
 beforeAll(bootRig);
@@ -128,5 +130,133 @@ describe('scenario — Edit-mode stacking ▲/▼ mirror PageUp/PageDown', () =>
     notify();
     expect(stackingButtons().down.disabled).toBe(true);
     expect(stackingButtons().up.disabled).toBe(false);
+  });
+});
+
+// ---- "Layer order IS z-order" wave: canonical order, subtree-block moves, panel-vs-canvas ----
+
+/** The part ids of every currently-rendered row in the Layers panel, top-to-bottom DOM
+ *  order (parts only, not path rows) — the panel's own display order, which must NEVER
+ *  re-sort with z keys (only doc.parts/the canvas does). */
+function layersPartOrder(): string[] {
+  return Array.from(document.querySelectorAll('#layers .layer-row.part'))
+    .map((el) => (el as HTMLElement).dataset.partId)
+    .filter((id): id is string => !!id);
+}
+
+function partRow(label: string): HTMLElement {
+  const id = partByLabel(label).id;
+  const row = document.querySelector<HTMLElement>(`#layers .layer-row.part[data-part-id="${id}"]`);
+  if (!row) throw new Error(`no layers row for "${label}"`);
+  return row;
+}
+
+/** A client point near the TOP edge of `el`'s row (the 'above' drop zone — top quarter,
+ *  see layersDragAndDrop.ts's dropZoneOf). */
+function topOf(el: Element): { x: number; y: number } {
+  const r = el.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height * 0.1 };
+}
+
+describe('scenario — panel drag reorder moves a SUBTREE\'s whole paint block', () => {
+  it('dragging right_arm above body\'s row (the acceptance recipe) reorders doc.parts and the canvas', () => {
+    setEditorMode('setup');
+    notify(); // ensure the Layers panel is built
+    const before = state.doc!.parts.map((p) => p.id);
+    const rightArm = partByLabel('right_arm');
+    const body = partByLabel('body');
+    expect(before.indexOf(rightArm.id)).toBeLessThan(before.indexOf(body.id)); // arm currently BEHIND body
+
+    simulateDragDrop(partRow('right_arm'), partRow('body'), topOf(partRow('body')));
+
+    const after = state.doc!.parts.map((p) => p.id);
+    expect(isCanonicalPartOrder(state.doc!.parts)).toBe(true);
+    expect(after.indexOf(rightArm.id)).toBeGreaterThan(after.indexOf(body.id)); // now stacked ABOVE body
+    // The canvas DOM paint order followed the model (last = topmost).
+    expect(domPartOrder().indexOf(rightArm.id)).toBeGreaterThan(domPartOrder().indexOf(body.id));
+  });
+
+  it('dragging a part WITH CHILDREN (body) above another part WITH CHILDREN (face) moves both whole blocks intact', () => {
+    setEditorMode('setup');
+    notify();
+    const body = partByLabel('body');
+    const bodyChild = state.doc!.parts.find((p) => p.parentId === body.id)!; // Pip's nested body-in-body
+    const face = partByLabel('face');
+    const eyes = partByLabel('eyes');
+    expect(eyes.parentId).toBe(face.id);
+
+    simulateDragDrop(partRow('body'), partRow('face'), topOf(partRow('face')));
+
+    expect(isCanonicalPartOrder(state.doc!.parts)).toBe(true);
+    const ids = state.doc!.parts.map((p) => p.id);
+    // body's own child traveled WITH it (never left behind, never split from body).
+    expect(ids.indexOf(bodyChild.id)).toBe(ids.indexOf(body.id) + 1);
+    // face's own child (eyes) was never split from face by the incoming drop either —
+    // body's whole block landed entirely outside face's block.
+    expect(ids.indexOf(eyes.id)).toBe(ids.indexOf(face.id) + 1);
+    // body's block now sits above (higher index than) face's whole block.
+    expect(ids.indexOf(bodyChild.id)).toBeGreaterThan(ids.indexOf(eyes.id));
+    // Canvas DOM paint order matches the model exactly (same relative order for all parts).
+    expect(domPartOrder().filter((id) => ids.includes(id))).toEqual(ids);
+  });
+});
+
+describe('scenario — PageUp on a parent moves its whole subtree block, never splitting it', () => {
+  it('stepping "body" (which has a nested child) forward carries the child along, contiguous', () => {
+    setEditorMode('setup');
+    const body = partByLabel('body');
+    const bodyChild = state.doc!.parts.find((p) => p.parentId === body.id)!;
+    modelSelectPart(body.id);
+    notify();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true, cancelable: true }));
+
+    expect(isCanonicalPartOrder(state.doc!.parts)).toBe(true);
+    const ids = state.doc!.parts.map((p) => p.id);
+    // body is still IMMEDIATELY followed by its own child — the block moved as one unit.
+    expect(ids.indexOf(bodyChild.id)).toBe(ids.indexOf(body.id) + 1);
+    // The DOM paint order (canvas) reflects the same move.
+    expect(domPartOrder().indexOf(body.id)).toBeLessThan(domPartOrder().indexOf(bodyChild.id));
+  });
+});
+
+describe('scenario — keyed z re-sorts the CANVAS only; the Layers panel never re-sorts', () => {
+  it('the panel\'s row order stays fixed across a z-key scrub that visibly restacks the canvas', () => {
+    setEditorMode('animate');
+    notify();
+    const behind = state.doc!.parts[0];
+    const front = state.doc!.parts[1];
+    const panelBefore = layersPartOrder();
+
+    checkpoint();
+    setKeyframeAt(behind.id, 'z', 500, 5);
+    notify();
+    scrubTo(500);
+
+    // Canvas: restacked (pinned already above) — re-assert here for the paired contrast.
+    expect(domIndexOf(behind.id)).toBeGreaterThan(domIndexOf(front.id));
+    // Panel: completely unchanged DOM row order — it shows structure, never the animated
+    // z-sorted result.
+    expect(layersPartOrder()).toEqual(panelBefore);
+  });
+
+  it('Edit mode ignores keyed z entirely: canvas shows pure rest/authored order', () => {
+    setEditorMode('animate');
+    const behind = state.doc!.parts[0];
+    const front = state.doc!.parts[1];
+    const authoredOrder = state.doc!.parts.map((p) => p.id);
+
+    checkpoint();
+    setKeyframeAt(behind.id, 'z', 500, 5);
+    notify();
+    scrubTo(500);
+    expect(domIndexOf(behind.id)).toBeGreaterThan(domIndexOf(front.id)); // Animate: restacked
+
+    setEditorMode('setup'); // Edit mode: poseTime() is null, so effectiveZ ignores the key
+    repaint();
+    expect(domIndexOf(behind.id)).toBeLessThan(domIndexOf(front.id)); // back to authored order
+    expect(domPartOrder().filter((id) => authoredOrder.includes(id))).toEqual(
+      authoredOrder.filter((id) => domPartOrder().includes(id)),
+    );
   });
 });

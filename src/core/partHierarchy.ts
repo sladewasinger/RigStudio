@@ -56,11 +56,67 @@ export function isEffectivelyHidden(part: RigPart): boolean {
   return !!part.hidden || ancestorChain(part).some((a) => !!a.hidden);
 }
 
-/** Reparent a part; refuses cycles. Returns whether the change was applied. */
+/**
+ * Every id in `part`'s subtree: itself plus every recursive descendant, walked purely
+ * through the `parentId` field — independent of `parts`' current ARRAY position, which is
+ * the point: this stays correct even mid-repair, while `parts` is transiently non-
+ * canonical (see moveSubtreeAfter below). Used anywhere a structural op must move a
+ * part's WHOLE paint-order block together (CLAUDE.md/ROADMAP.md "Layer order IS z-order")
+ * instead of just the part's own single array slot — leaving children behind at their old
+ * position is exactly the bug this wave fixes.
+ */
+export function subtreeIds(part: RigPart, parts: RigPart[]): Set<string> {
+  const ids = new Set<string>([part.id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const p of parts) {
+      if (!ids.has(p.id) && p.parentId != null && ids.has(p.parentId)) {
+        ids.add(p.id);
+        grew = true;
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * Move `part`'s whole subtree (current relative order preserved) to sit immediately after
+ * `after`'s current whole subtree, or to the very end (new topmost overall) when `after`
+ * is null. The single place a reparent decides ARRAY position (see setParent) — always
+ * leaves `part`'s subtree contiguous with `part` itself at its minimum index, regardless
+ * of how scrambled `parts` was walking in (subtreeIds reads the parentId graph, not
+ * existing array contiguity, so a temporarily-split block self-heals through this call).
+ */
+function moveSubtreeAfter(part: RigPart, after: RigPart | null, parts: RigPart[]): RigPart[] {
+  const moveIds = subtreeIds(part, parts);
+  const block = parts.filter((p) => moveIds.has(p.id));
+  const rest = parts.filter((p) => !moveIds.has(p.id));
+  if (!after) return [...rest, ...block];
+  const afterIds = subtreeIds(after, parts);
+  let insertAt = rest.length;
+  for (let i = 0; i < rest.length; i++) if (afterIds.has(rest[i].id)) insertAt = i + 1;
+  rest.splice(insertAt, 0, ...block);
+  return rest;
+}
+
+/**
+ * Reparent a part; refuses cycles. On success, moves the part's WHOLE SUBTREE to become
+ * the new TOPMOST child of its new parent (or the new topmost root, when detaching to
+ * null) — see moveSubtreeAfter — so doc.parts stays in canonical paint order (CLAUDE.md
+ * "Layer order IS z-order"). Every reparent path funnels through here (the Layers drag,
+ * the inspector's parent dropdown, Unified Skeleton's reattachRootBone, AI structural
+ * edits), so this one chokepoint keeps all of them canonical without each caller having
+ * to know about array position. A no-op call (already the requested parent) never
+ * reshuffles order. Returns whether the change was applied.
+ */
 export function setParent(childId: string, parentId: string | null): boolean {
+  const doc = state.doc;
   const child = partById(childId);
   if (!child) return false;
   if (parentId === null) {
+    if (child.parentId === null) return true;
+    if (doc) doc.parts = moveSubtreeAfter(child, null, doc.parts);
     child.parentId = null;
     return true;
   }
@@ -68,16 +124,26 @@ export function setParent(childId: string, parentId: string | null): boolean {
   const parent = partById(parentId);
   if (!parent) return false;
   if (isAncestorOf(child, parent)) return false; // would create a cycle
+  if (child.parentId === parentId) return true;
+  if (doc) doc.parts = moveSubtreeAfter(child, parent, doc.parts);
   child.parentId = parentId;
   return true;
 }
 
 // ---- Bones, groups, structural edits ----
 
-/** Create a partless bone/group part. Bones are the joints of multi-joint chains. */
+/**
+ * Create a partless bone/group part, positioned as the new TOPMOST child of `parentId`
+ * (immediately after its current whole subtree — see moveSubtreeAfter) or the new topmost
+ * root when parentId is null/unresolved — so a freshly placed part is canonical from
+ * birth, regardless of what else has been drawn since its parent was created (the old
+ * unconditional tail-push only stayed correct when the parent happened to already be the
+ * very last thing in doc.parts).
+ */
 export function addNullPart(
   kind: 'bone' | 'group', pivot: Vec2, parentId: string | null, label?: string,
 ): RigPart {
+  const doc = state.doc!;
   const part: RigPart = {
     id: freshId('part'),
     label: label ?? freshId(kind),
@@ -89,15 +155,26 @@ export function addNullPart(
     parentId,
     paths: [],
   };
-  state.doc!.parts.push(part);
+  const parent = parentId ? partById(parentId) : null;
+  if (!parent) {
+    doc.parts.push(part);
+    return part;
+  }
+  const parentIds = subtreeIds(parent, doc.parts);
+  let insertAt = doc.parts.length;
+  for (let i = 0; i < doc.parts.length; i++) if (parentIds.has(doc.parts[i].id)) insertAt = i + 1;
+  doc.parts.splice(insertAt, 0, part);
   return part;
 }
 
 /**
  * Wrap the outermost of the given parts in a new group null pivoted at `pivot`.
  * Members whose ancestor is also selected stay attached to that ancestor. The group
- * adopts the members' common parent (or none) and slots in just above them in draw
- * order.
+ * adopts the members' common parent (or none); it starts just above the topmost member's
+ * own slot (roughly preserving where the grouped content read in the stack), then each
+ * outer member folds in via setParent, which pulls its WHOLE subtree in canonically —
+ * self-healing the group's cosmetic starting position even when it temporarily lands
+ * inside an existing block (setParent moves by the parentId graph, not array position).
  */
 export function groupParts(ids: string[], pivot: Vec2): RigPart | null {
   const doc = state.doc;
@@ -109,11 +186,10 @@ export function groupParts(ids: string[], pivot: Vec2): RigPart | null {
   const parents = new Set(outer.map((p) => p.parentId));
   const parentId = parents.size === 1 ? [...parents][0] : null;
   const group = addNullPart('group', pivot, parentId);
-  // addNullPart pushed it last; move it just above the topmost member instead.
-  doc.parts.pop();
-  const insertAt = Math.max(...outer.map((p) => doc.parts.indexOf(p))) + 1;
-  doc.parts.splice(insertAt, 0, group);
-  for (const p of outer) p.parentId = group.id;
+  doc.parts = doc.parts.filter((p) => p.id !== group.id);
+  const topmostIdx = Math.max(...outer.map((p) => doc.parts.indexOf(p)));
+  doc.parts.splice(topmostIdx + 1, 0, group);
+  for (const p of outer) setParent(p.id, group.id);
   return group;
 }
 
@@ -125,6 +201,12 @@ export function groupParts(ids: string[], pivot: Vec2): RigPart | null {
  * both tracks are resampled on the union of their key times (values exact at keys).
  * Refuses when the null itself is animated in any clip (remove its tracks first) or
  * when the part has artwork.
+ *
+ * CANONICAL ORDER is preserved BY CONSTRUCTION and needs no explicit fix-up: this only
+ * ever removes the dissolved part's own single array slot (children keep their current
+ * position, just re-parented one level up) — deleting one interior node from an already-
+ * contiguous, parent-first sequence can never introduce a gap or interleave a foreign
+ * subtree, on a canonical starting doc.
  */
 export function ungroupPart(id: string): boolean {
   const doc = state.doc;

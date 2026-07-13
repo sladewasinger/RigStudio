@@ -2,7 +2,7 @@
 
 import { RigPart, Vec2 } from './docTypes';
 import { selectedPart, selectPart, state } from './appState';
-import { addNullPart, partById, setParent } from './partHierarchy';
+import { addNullPart, partById, setParent, subtreeIds } from './partHierarchy';
 import { isUsableBoneTip } from './boneOps';
 import { freshId } from './idGen';
 
@@ -75,6 +75,13 @@ export function applyRigChanges(changes: RigChanges): Map<string, string> {
  * clip, and skin bindings (bones AND any per-node overrides pinned to them) referencing
  * deleted bones are dropped. Returns deleted ids so the canvas can unregister their
  * groups.
+ *
+ * CANONICAL ORDER is preserved BY CONSTRUCTION: this only ever REMOVES array elements
+ * (never moves a survivor) and re-adopts orphans to an ANCESTOR, never a sibling — on a
+ * canonical starting doc, excising any subset of interior nodes (with their children
+ * promoted to the nearest surviving ancestor) can't create a gap or interleave a foreign
+ * subtree, because every survivor's position relative to every other survivor is
+ * untouched; only the now-closer index gaps left by deletions shift things down uniformly.
  */
 export function deleteParts(ids: string[]): string[] {
   const doc = state.doc;
@@ -122,8 +129,11 @@ export function deleteParts(ids: string[]): string[] {
  * the copy is visibly offset from the source. No animation tracks are copied — a fresh
  * id has none by construction, since clip tracks are keyed by target id. Skinned parts
  * are skipped (their geometry is baked to a bind pose; a naive clone would double-bind
- * the same bones). Each copy is inserted immediately after its source, so the whole
- * duplicated set stays contiguous. Returns the new parts' ids, input order preserved.
+ * the same bones). Each copy is inserted immediately after its source's WHOLE SUBTREE
+ * (not just the source's own slot — the clone is a SIBLING, never the source's child, so
+ * landing it between a duplicated parent and its own real children would split the
+ * source's canonical block), so the whole duplicated set stays contiguous. Returns the
+ * new parts' ids, input order preserved.
  */
 export function duplicateParts(ids: string[]): string[] {
   const doc = state.doc;
@@ -139,7 +149,9 @@ export function duplicateParts(ids: string[]): string[] {
     clone.rest.tx += 12;
     clone.rest.ty += 12;
     clone.paths = part.paths.map((p) => ({ ...structuredClone(p), id: freshId('path') }));
-    const insertAt = doc.parts.indexOf(part) + 1;
+    const sourceIds = subtreeIds(part, doc.parts);
+    let insertAt = doc.parts.length;
+    for (let i = 0; i < doc.parts.length; i++) if (sourceIds.has(doc.parts[i].id)) insertAt = i + 1;
     doc.parts.splice(insertAt, 0, clone);
     newIds.push(clone.id);
   }
@@ -151,6 +163,99 @@ export function duplicateParts(ids: string[]): string[] {
 // lists topmost first, so "up the layer list" means "later in doc.parts". On top of that,
 // every part carries a keyable `z` OFFSET channel (stepped, absolute, rest 0) that lifts it
 // forward/back per frame; the rendered order sorts by (effective z, doc.parts index).
+//
+// Since the "Layer order IS z-order" wave, doc.parts is also always CANONICAL (see
+// isCanonicalPartOrder below): every part's own index precedes its whole, contiguous
+// descendant block. The layers panel's nested tree is a direct read of this same array, so
+// reordering a subtree in the panel really does move its whole paint block, and PageUp/
+// PageDown/the stacking row are SIBLING-scoped (a part can't be draw-order-stepped into a
+// different parent's block — that's what re-parenting is for). Every structural op keeps
+// the invariant: setParent/addNullPart/groupParts (partHierarchy.ts) move whole subtrees by
+// construction; duplicateParts above and moveSelectedInDrawOrder/movePartRelativeTo below do
+// the same here; deleteParts/ungroupPart are safe by construction (see their own doc
+// comments). normalizeDoc (serialization.ts) canonicalizes on load as legacy/hand-edit
+// repair.
+
+/**
+ * Whether `parts` is in CANONICAL paint order: a depth-first pre-order traversal where
+ * every part's own array index is immediately followed by its full descendant subtree —
+ * each child's block starts exactly where the previous sibling's block (or the parent
+ * itself, for the first child) ends, with no other subtree's content interleaved. A
+ * dangling parentId (points at no part in `parts`) is treated as a root — normalizeDoc
+ * repairs those separately; this checker stays meaningful even before that repair runs.
+ * Cycle-safe: a parentId cycle can never resolve to a valid contiguous range, so it
+ * reports false rather than recursing forever. PURE.
+ */
+export function isCanonicalPartOrder(parts: RigPart[]): boolean {
+  const indexOf = new Map(parts.map((p, i) => [p.id, i]));
+  const childrenOf = new Map<string, RigPart[]>();
+  for (const p of parts) {
+    if (p.parentId == null || !indexOf.has(p.parentId)) continue;
+    if (!childrenOf.has(p.parentId)) childrenOf.set(p.parentId, []);
+    childrenOf.get(p.parentId)!.push(p);
+  }
+  const visiting = new Set<string>(); // recursion-stack cycle guard
+  const covered = new Set<string>(); // every part reached from a declared root
+  const subtreeEnd = (part: RigPart): number | null => {
+    if (visiting.has(part.id)) return null; // cycle guard
+    visiting.add(part.id);
+    covered.add(part.id);
+    let end = indexOf.get(part.id)!;
+    for (const child of childrenOf.get(part.id) ?? []) {
+      if (indexOf.get(child.id)! !== end + 1) return null; // gap, or out of order
+      const childEnd = subtreeEnd(child);
+      if (childEnd == null) return null;
+      end = childEnd;
+    }
+    visiting.delete(part.id);
+    return end;
+  };
+  for (const part of parts) {
+    const isRoot = part.parentId == null || !indexOf.has(part.parentId);
+    if (isRoot && subtreeEnd(part) == null) return false;
+  }
+  // A pure parentId cycle with no declared root (every member points at another member,
+  // so isRoot is false for all of them) never gets visited above — reject it too, rather
+  // than vacuously reporting canonical because no root-driven check ever ran against it.
+  return covered.size === parts.length;
+}
+
+/**
+ * Repair `parts` into canonical paint order (see isCanonicalPartOrder above) — STABLE
+ * (preserves each part's relative order among its current siblings, and every subtree's
+ * internal order) and IDEMPOTENT (canonicalizing an already-canonical array returns the
+ * same order; a second call never moves anything further, since the output of the first
+ * call is itself canonical). A dangling/self-referential parentId is treated as a root
+ * (normalizeDoc's separate dangling-parent repair usually runs first, but this stays safe
+ * standalone); a parentId cycle (only reachable via a hand-edited file — setParent refuses
+ * to create one) is broken at whichever member the traversal reaches first, with the rest
+ * of the cycle appended, unmoved, at the end, so nothing is ever silently dropped. PURE
+ * (returns a new array; never mutates `parts` or any part in it).
+ */
+export function canonicalizePartOrder(parts: RigPart[]): RigPart[] {
+  const byId = new Map(parts.map((p) => [p.id, p]));
+  const childrenOf = new Map<string, RigPart[]>();
+  const roots: RigPart[] = [];
+  for (const p of parts) {
+    if (p.parentId != null && p.parentId !== p.id && byId.has(p.parentId)) {
+      if (!childrenOf.has(p.parentId)) childrenOf.set(p.parentId, []);
+      childrenOf.get(p.parentId)!.push(p);
+    } else {
+      roots.push(p);
+    }
+  }
+  const out: RigPart[] = [];
+  const visited = new Set<string>();
+  const emit = (part: RigPart): void => {
+    if (visited.has(part.id)) return;
+    visited.add(part.id);
+    out.push(part);
+    for (const child of childrenOf.get(part.id) ?? []) emit(child);
+  };
+  for (const root of roots) emit(root);
+  for (const p of parts) if (!visited.has(p.id)) emit(p); // leftover cycle members, if any
+  return out;
+}
 
 /**
  * Parts in paint order for a given effective-z map: sorted by (z ascending, doc.parts index
@@ -166,7 +271,18 @@ export function drawOrder(parts: RigPart[], zOf: (part: RigPart) => number): Rig
     .map((e) => e.part);
 }
 
-/** Whether the current selection (entered path, else part) can move a step in z. */
+/** Parts sharing `part`'s parent, in current relative sibling order — on a canonical
+ *  array this is exactly the sequence PageUp/PageDown/the stacking row step through:
+ *  distinct siblings' subtree blocks never interleave, so this flat filtered list is the
+ *  whole story regardless of how large any one sibling's own subtree is. */
+function siblingsOf(part: RigPart, parts: RigPart[]): RigPart[] {
+  return parts.filter((p) => p.parentId === part.parentId);
+}
+
+/** Whether the current selection (entered path, else part) can move a step in z. Part
+ *  moves are SIBLING-scoped (see siblingsOf): a part can't be draw-order-stepped past its
+ *  own parent's children into a different parent's block — that's what re-parenting is
+ *  for. */
 export function canMoveSelectedInDrawOrder(delta: 1 | -1): boolean {
   const doc = state.doc;
   const part = selectedPart();
@@ -175,11 +291,17 @@ export function canMoveSelectedInDrawOrder(delta: 1 | -1): boolean {
     const i = part.paths.findIndex((p) => p.id === state.selectedPathId);
     return i >= 0 && i + delta >= 0 && i + delta < part.paths.length;
   }
-  const i = doc.parts.indexOf(part);
-  return i + delta >= 0 && i + delta < doc.parts.length;
+  const sibs = siblingsOf(part, doc.parts);
+  const i = sibs.indexOf(part);
+  return i + delta >= 0 && i + delta < sibs.length;
 }
 
-/** Move the entered path (within its part) or the selected part one z step (+1 = up). */
+/**
+ * Move the entered path (within its part) or the selected part one z step (+1 = up). A
+ * part with children moves as ONE paint-order unit: its whole subtree block swaps places
+ * with its adjacent sibling's whole subtree block (see siblingsOf/subtreeIds) — neither
+ * block is ever split, and the move never crosses into a different parent's children.
+ */
 export function moveSelectedInDrawOrder(delta: 1 | -1): boolean {
   if (!canMoveSelectedInDrawOrder(delta)) return false;
   const doc = state.doc!;
@@ -187,18 +309,39 @@ export function moveSelectedInDrawOrder(delta: 1 | -1): boolean {
   if (state.selectedPathId) {
     const i = part.paths.findIndex((p) => p.id === state.selectedPathId);
     [part.paths[i], part.paths[i + delta]] = [part.paths[i + delta], part.paths[i]];
-  } else {
-    const i = doc.parts.indexOf(part);
-    [doc.parts[i], doc.parts[i + delta]] = [doc.parts[i + delta], doc.parts[i]];
+    return true;
   }
+  const sibs = siblingsOf(part, doc.parts);
+  const i = sibs.indexOf(part);
+  const neighbor = sibs[i + delta];
+  // `earlier`/`later` = which of the two currently sits at the lower/higher array index —
+  // always `part` then `neighbor` for delta=1 (siblingsOf preserves array order, so the
+  // NEXT sibling is always later), and the reverse for delta=-1.
+  const earlier = delta === 1 ? part : neighbor;
+  const later = delta === 1 ? neighbor : part;
+  const earlierIds = subtreeIds(earlier, doc.parts);
+  const laterIds = subtreeIds(later, doc.parts);
+  const startIdx = doc.parts.findIndex((p) => earlierIds.has(p.id));
+  const earlierBlock = doc.parts.filter((p) => earlierIds.has(p.id));
+  const laterBlock = doc.parts.filter((p) => laterIds.has(p.id));
+  const rest = doc.parts.filter((p) => !earlierIds.has(p.id) && !laterIds.has(p.id));
+  const insertAt = doc.parts.slice(0, startIdx).filter(
+    (p) => !earlierIds.has(p.id) && !laterIds.has(p.id),
+  ).length;
+  rest.splice(insertAt, 0, ...laterBlock, ...earlierBlock); // swap: later's block now leads
+  doc.parts = rest;
   return true;
 }
 
 /**
- * Drop a part just above/below another in the layers tree: it draws immediately on
- * top of ('above') or beneath ('below') `refId` and becomes its sibling — adopting
- * ref's parent, like dropping between rows in any layer tree. Refuses when adopting
- * that parent would create a cycle.
+ * Drop a part just above/below another in the layers tree: it draws immediately on top of
+ * ('above') or beneath ('below') `refId`'s WHOLE SUBTREE and becomes its sibling — adopting
+ * ref's parent, like dropping between rows in any layer tree. Moves the dragged part's
+ * WHOLE SUBTREE as one contiguous block (a part with children takes them along) and never
+ * splits `ref`'s own subtree either: "below" lands at ref's own index (always the minimum
+ * of its subtree, by canonical construction), while "above" lands one past the END of
+ * ref's subtree — so a ref with children never gets a foreign sibling spliced between it
+ * and them. Refuses when adopting that parent would create a cycle.
  */
 export function movePartRelativeTo(
   partId: string, refId: string, place: 'above' | 'below',
@@ -209,8 +352,19 @@ export function movePartRelativeTo(
   const ref = partById(refId);
   if (!part || !ref) return false;
   if (ref.parentId !== part.parentId && !setParent(partId, ref.parentId)) return false;
-  doc.parts.splice(doc.parts.indexOf(part), 1);
-  const refIdx = doc.parts.indexOf(ref);
-  doc.parts.splice(place === 'above' ? refIdx + 1 : refIdx, 0, part);
+  const moveIds = subtreeIds(part, doc.parts);
+  const block = doc.parts.filter((p) => moveIds.has(p.id));
+  const rest = doc.parts.filter((p) => !moveIds.has(p.id));
+  let insertAt: number;
+  if (place === 'below') {
+    insertAt = rest.indexOf(ref);
+  } else {
+    const refIds = subtreeIds(ref, doc.parts);
+    insertAt = -1;
+    for (let i = 0; i < rest.length; i++) if (refIds.has(rest[i].id)) insertAt = i + 1;
+  }
+  if (insertAt < 0) return false; // defensive: ref should always survive into `rest`
+  rest.splice(insertAt, 0, ...block);
+  doc.parts = rest;
   return true;
 }

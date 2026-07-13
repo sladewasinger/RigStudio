@@ -26,6 +26,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import {
   selectPart as modelSelectPart, notify, newStateMachine, setKeyframeAt,
+  isCanonicalPartOrder,
 } from '../../core/model';
 import { checkpoint, canUndo, canRedo } from '../../core/history';
 import { zoomBy, startBonePlacement, hasSelectedNode, selectAllNodes } from '../../view';
@@ -234,22 +235,34 @@ describe('Ctrl+A select-all', () => {
 });
 
 describe('PageUp / PageDown draw-order step', () => {
-  it('moves the selected part exactly one slot each way', () => {
-    const doc = state.doc!;
-    const idx = Math.floor(doc.parts.length / 2);
-    const part = doc.parts[idx];
+  it('moves the selected part exactly one SIBLING slot each way (subtree-aware, canonical)', () => {
+    // "Layer order IS z-order": PageUp/PageDown are SIBLING-scoped (a part steps past its
+    // own parent's other children, never into a different parent's block — that's what
+    // re-parenting is for) and move a part's WHOLE subtree as one block, not a flat
+    // array-adjacent swap. Pip's rig has multiple root-level parts, so pick two of those
+    // as an easy-to-reason-about sibling pair.
+    const originalOrder = state.doc!.parts.map((p) => p.id);
+    const roots = state.doc!.parts.filter((p) => !p.parentId);
+    expect(roots.length).toBeGreaterThanOrEqual(2);
+    const part = roots[0];
+    const sibling = roots[1];
+
     modelSelectPart(part.id);
     state.selectedPathId = null;
     notify();
 
     pressKeyEv('PageUp');
-    expect(state.doc!.parts[idx + 1]?.id).toBe(part.id);
+    let ids = state.doc!.parts.map((p) => p.id);
+    expect(isCanonicalPartOrder(state.doc!.parts)).toBe(true);
+    expect(ids.indexOf(part.id)).toBeGreaterThan(ids.indexOf(sibling.id)); // stepped forward past it
 
     pressKeyEv('PageDown');
-    expect(state.doc!.parts[idx]?.id).toBe(part.id);
+    ids = state.doc!.parts.map((p) => p.id);
+    expect(isCanonicalPartOrder(state.doc!.parts)).toBe(true);
+    expect(ids.indexOf(part.id)).toBeLessThan(ids.indexOf(sibling.id)); // back behind it
 
-    pressKeyEv('PageDown');
-    expect(state.doc!.parts[idx - 1]?.id).toBe(part.id);
+    // A full up-then-down round trip restores the exact original order.
+    expect(state.doc!.parts.map((p) => p.id)).toEqual(originalOrder);
   });
 });
 

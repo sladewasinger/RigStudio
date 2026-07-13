@@ -507,13 +507,20 @@ export function fullDblClick(x: number, y: number): void {
  * the view facade's endBoneChain (auto-bind runs ONCE) so the shared helper is robust
  * regardless of freeze/SM state; the DEDICATED chain-mode scenarios drive the real
  * Enter/Escape/double-click finishers themselves. Returns the committed bones, in order.
+ *
+ * Identifies the new bones by ID SET DIFFERENCE, not a trailing-slice of doc.parts: since
+ * "Layer order IS z-order", a freshly placed bone is inserted canonically NEXT TO its
+ * parent (addNullPart, core/partHierarchy.ts) — which usually is NOT the end of the array
+ * once the parent isn't itself the last thing drawn — rather than always appended at the
+ * tail. `.filter` preserves doc.parts' own order, which for a freshly placed chain is
+ * exactly creation order (each bone lands immediately after its own parent's subtree end).
  */
 export function placeBoneChain(clientPts: { x: number; y: number }[]): RigPart[] {
-  const before = state.doc!.parts.length;
+  const beforeIds = new Set(state.doc!.parts.map((p) => p.id));
   startBonePlacement();
   for (const p of clientPts) click(p.x, p.y);
   endBoneChain();
-  return state.doc!.parts.slice(before);
+  return state.doc!.parts.filter((p) => !beforeIds.has(p.id));
 }
 
 export function pressKey(key: string, mods: Mods = {}): void {

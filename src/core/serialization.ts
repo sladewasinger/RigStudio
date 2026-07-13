@@ -4,6 +4,7 @@ import { Mat } from '../geometry/transforms';
 import { Artboard, EASINGS, RigDoc, SkinBone, Vec2 } from './docTypes';
 import { SMState, StateMachine } from './smTypes';
 import { healDegenerateBoneTip } from './boneOps';
+import { canonicalizePartOrder } from './structuralOps';
 import { bumpIdCounter, freshId } from './idGen';
 
 /**
@@ -219,6 +220,14 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
       if (Object.keys(part.skin.overrides).length === 0) delete part.skin.overrides;
     }
   }
+  // Canonical paint order (CLAUDE.md "Layer order IS z-order"): every part's own index
+  // must precede its whole, contiguous descendant block. Legacy files predate this
+  // invariant, and a hand-edited one can violate it outright — repair it here, AFTER the
+  // dangling-parentId repair just above so a stray reference doesn't fool the canonicalizer
+  // into treating a should-be-root part as an orphaned cycle member. A no-op (returns the
+  // same order) on any doc that's already canonical, which includes every doc produced by
+  // the editor itself and by importSvg's depth-first registration.
+  doc.parts = canonicalizePartOrder(doc.parts);
   doc.clips = doc.clips?.length ? doc.clips : [{ name: 'idle', duration: 2000, tracks: [] }];
   for (const clip of doc.clips) {
     // Loop lives on the CLIP (v2.12; moved off SMState — see the legacy-migration block
