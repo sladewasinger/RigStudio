@@ -590,6 +590,32 @@ exportLottie 327), audit queued below.
   resets app-state, doc was never wrong. Fix: structural ops (group/ungroup/
   delete/reparent) must repair or clear entered-group state; reproduce first.
 
+## Skinned-part posing decision (user ruling 2026-07-12: "Allow rotate+translate")
+
+Code truth behind the ruling: a skinned part's keyed rotate/tx/ty WORKS — its
+bones are parented under it, bone world placement composes through the chain
+(which samples the part's keyed channels), and LBS recomputes from the bones —
+and .riv exports the same rigid transform, so editor and runtime agree. Part
+SCALE does not carry (editor scale never propagates to children) while Rive
+Node scale would — scale stays blocked on skinned parts.
+
+- [ ] **Editor: re-enable rotate + translate pose drags on skinned parts**
+  (Animate keys / Edit rest) — remove the skinned gate in the artwork pipeline
+  for those two manipulations only; IK stays the articulation gesture; scale
+  handles stay off with the skin hint explaining why; inspector keyed sx/sy
+  fields on a skinned part lock with the same hint (WYSIWYG: don't offer a
+  channel the canvas won't show). Interaction scenarios + the hint counterpart.
+  RUNS AFTER the live-bug wave (same pipeline files).
+- [ ] **AI bones-awareness** (launched in worktree): buildScenePayload marks
+  skinned parts (skinned: true + their bone chain ids/labels); TARGETING_RULES
+  teaches the model: articulate a skinned limb via its BONE rotate channels
+  (root-first, follow-through); part-level rotate/tx/ty = whole-limb accent
+  ON TOP (legitimate but never a substitute for joint articulation — the
+  gesture-file failure mode: left_arm rotated as one slab, right_arm got bones
+  AND a redundant −55° part rotation stacked); NEVER sx/sy on skinned parts.
+  Combined with the queued ai/prompts.ts extraction (audit rank 2) so frozen
+  claude.ts sheds its ceiling first.
+
 ## Context-menu polish (user-requested 2026-07-12)
 
 - [ ] **Suppress the native browser context menu app-wide** — a document-level
