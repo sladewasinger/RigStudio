@@ -483,13 +483,18 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   highlight (`.ik-active`) covers ALL participating bones; skin weights are cached, bone
   deltas recompute every `renderPose`. Per-bone rotation limits / pole targets are out of
   scope.
-- **Skinned-part UX.** A skinned part takes no translate/rotate/scale pose drag (its
-  geometry follows its bones — such handles would be lies), and IK is the only pose
-  gesture it accepts. Selecting one still draws a selection box + a canvas "skinned —
-  pose with its bones" hint (`overlay.ts` `.skin-hint`, inspector Skinning section) and
-  no scale/rotate handles, so the click never dead-ends. Because a skinned-part click
-  starts NO drag, its pointerdown calls `renderPose()` explicitly (`interactions.ts`
-  skinned branch) — otherwise the overlay stays stale until the next pan/zoom.
+- **Skinned-part UX (user ruling 2026-07-12: rotate+translate ALLOWED).** A skinned
+  part accepts the SAME rotate/translate pose drags as any part — its bones are
+  parented under it, so those channels carry the whole chain and the LBS-deformed art
+  follows (matching the .riv export's rigid Node transform); IK remains the
+  articulation gesture (its own first-checked sub-branch in the artwork pipeline).
+  SCALE and SKEW stay blocked: they don't propagate to children in the editor (the
+  bones wouldn't ride) while Rive Node scale WOULD — a WYSIWYG divergence — so no
+  scale/skew handles render (rotate corners DO, both modes), and the inspector locks
+  rest sx/sy/kx/ky + keyed sx/sy with an explanatory title. The `.skin-hint` and the
+  Skinning section explain the rule. The AI is taught the same model (bones-first
+  articulation; part-level rotate/tx/ty as a layered accent; sx/sy tracks on skinned
+  parts dropped by `clampRawClip`). Pinned by `interaction/skinnedPose.test.ts`.
 - **Export limitation (unchanged).** Skinned parts export RIGIDLY — LBS is not
   representable in Lottie/Rive transform replay. `io/` is untouched by Bones 2.0.
 

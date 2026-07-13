@@ -653,7 +653,7 @@ and .riv exports the same rigid transform, so editor and runtime agree. Part
 SCALE does not carry (editor scale never propagates to children) while Rive
 Node scale would — scale stays blocked on skinned parts.
 
-- [ ] **Editor: re-enable rotate + translate pose drags on skinned parts**
+- [x] **Editor: re-enable rotate + translate pose drags on skinned parts** (617df49)
   (Animate keys / Edit rest) — remove the skinned gate in the artwork pipeline
   for those two manipulations only; IK stays the articulation gesture; scale
   handles stay off with the skin hint explaining why; inspector keyed sx/sy
