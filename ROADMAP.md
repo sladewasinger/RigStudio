@@ -47,6 +47,17 @@ be drawn from.
 
 *Decisions that are Austin's to make — nothing below gets built without his call.*
 
+- **Keyed-z DrawRules vs childOrder slots** (U3, 3e4a71f): the .riv keyed-z
+  planner keeps pre-U3 GLOBAL-order semantics; a hand-INTERLEAVED doc that
+  also keys z can diverge editor-vs-runtime in three narrow ways (scope,
+  anchor granularity, mover granularity — full note in
+  `io/riv/drawRules.ts`'s header). Byte-identical for every synthesized doc;
+  interleaving only becomes user-reachable at U4. Decide: redesign the
+  planner slot-aware (per-run targets + sibling-scoped neighbor ranking), or
+  accept the documented divergence.
+- **Bone-deletion cascade vs attachments** (7d4f662): deleting a bone
+  cascades its same-chain subtree; `attachedRoot` children DETACH
+  world-preserving instead of dying. Say if attachments should cascade too.
 - **Keyable PATH-level paint channels** (per-path fill/stroke opacity/color
   animation): Rive supports it (our keyed-opacity export already targets
   per-paint SolidColor) and the model could grow path channels — real
@@ -80,7 +91,7 @@ restacking fidelity bug.*
   keyed `z` rule: PART slots stable-sort by z within their parent's slot
   list, PATH slots hold their rest positions (paths have no channels).
   Synthesized docs render byte-identically — pinned.
-- [ ] **U3 — exporters**: .riv global drawable order = the slot flatten
+- [x] **U3 — exporters** (done 2026-07-14, 3e4a71f): .riv global drawable order = the slot flatten
   (synthesized docs byte-identical, golden pin holds; interleaved docs get
   correct stacking). Lottie: DOCUMENTED LIMITATION only (frozen — one layer
   per part can't interleave; keeps the paths-first approximation).
@@ -192,6 +203,26 @@ Newest first. Programs/waves below are ordered by their actual git-log
 completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
+
+### U3 — .riv drawable order expresses childOrder slots
+
+*2026-07-14, 3e4a71f (main-tree wave). `io/riv/drawableOrder.ts`:
+`drawableEmissionOrder` = the U2 slot flatten (`flattenPaintOrder`, rest z)
+fully reversed at both levels into Rive's first-in-file = topmost convention;
+scene.ts's shape loop walks it; skin-plan + pin-anchor resolution memoized
+once per part at its first emitted run (per-run would mint duplicate anchor
+RootBones — mutation-checked). Synthesized/legacy docs emit BYTE-IDENTICALLY:
+the pre-change fixture SHA captured and pinned, both golden pins unmoved, and
+the reversal-dropped mutation fails the main golden pin itself. Interleaved
+docs get correct stacking — pixel-verified in `@rive-app/canvas`
+(riv-check.html's `interleavedStackCheck` sandwich; all six harness checks
+green). KeyedObject.objectId wiring confirmed order-independent. Keyed-z
+DrawRules deliberately keeps global-order semantics — the three narrow
+interleaved+keyed-z divergences (scope, anchor granularity, mover
+granularity) are documented in drawRules.ts's header and deferred (see the
+Deferred decisions ledger). Lottie: documented paths-first limitation only
+(frozen). The inspector stacking UI stays on global drawOrder (U4-adjacent,
+not in this wave). Gates: build clean, 797 unit / 306 interaction.*
 
 ### U2 — rendering honors childOrder (run-splitting)
 

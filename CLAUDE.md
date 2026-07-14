@@ -172,9 +172,14 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   paths = one DOM run-`<g>`, runs interleave with children; `ctx.partGroups` is now
   id→`SVGGElement[]`, bbox/measure helpers union across runs; animate-time keyed z
   re-sorts PART slots only, sibling-scoped — PATH slots never move); synthesized docs
-  render byte-identically (pinned). NOT YET slot-aware: both exporters + the stacking
-  UI (still the global two-bucket `drawOrder` — U3) and the importer/layers-panel
-  drag UX (U4); `renderOnion` ghosts stay flat per-part (approximation, flagged).
+  render byte-identically (pinned). U3 (3e4a71f): the .riv exporter's drawable order
+  is the same flatten reversed into first-in-file-topmost (`io/riv/drawableOrder.ts`;
+  skin/pin-anchor emission memoized once per part; synthesized docs byte-identical —
+  both golden pins unmoved; keyed-z DrawRules keeps global semantics, divergences
+  documented in `drawRules.ts` + deferred). NOT YET slot-aware: Lottie (frozen —
+  documented paths-first limitation), the inspector stacking UI (global `drawOrder`),
+  and the importer/layers-panel drag UX (U4); `renderOnion` ghosts stay flat per-part
+  (approximation, flagged).
 - **Coordinates are SVG document space:** +y down, positive rotation = clockwise.
   Every part rotates around its own pivot; `root` is a synthetic target for whole-figure
   translate + scale (jumps, squash-and-stretch) around `rootPivot`.
