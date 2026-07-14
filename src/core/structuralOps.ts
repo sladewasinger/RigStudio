@@ -5,6 +5,7 @@ import { selectedPart, selectPart, state } from './appState';
 import { addNullPart, partById, setParent, subtreeIds } from './partHierarchy';
 import { isUsableBoneTip } from './boneOps';
 import { freshId } from './idGen';
+import { reconcileChildOrder, seedChildOrderIfActive, slotAddChild } from './childOrder';
 
 /** Structural edits the AI assistant may request (opt-in). */
 export interface RigChanges {
@@ -96,6 +97,15 @@ export function deleteParts(ids: string[]): string[] {
     part.parentId = anc?.id ?? null;
   }
   doc.parts = doc.parts.filter((p) => !dead.has(p.id));
+  // childOrder: a batch delete can drop several dead children off ONE surviving parent's
+  // list and/or land several promoted orphans on another, all at once — rather than
+  // duplicating the reparent loop's ancestor-walk to compute each individual slot
+  // position, a doc-wide reconcile (childOrder.ts) re-derives every part's childOrder
+  // fresh from the now-final parentId graph: dangling (dead) child slots drop out,
+  // promoted orphans get appended, and part-slot order is re-derived from doc.parts
+  // (rule 4) — all in one pass, per-part idempotent, over parts whose childOrder is
+  // absent (LAZY rule) it's a no-op.
+  for (const part of doc.parts) reconcileChildOrder(part, doc.parts);
   for (const clip of doc.clips) {
     clip.tracks = clip.tracks.filter((t) => !dead.has(t.target));
   }
@@ -149,10 +159,26 @@ export function duplicateParts(ids: string[]): string[] {
     clone.rest.tx += 12;
     clone.rest.ty += 12;
     clone.paths = part.paths.map((p) => ({ ...structuredClone(p), id: freshId('path') }));
+    // structuredClone above copied `part.childOrder` VERBATIM — stale path ids (just
+    // replaced above) and any child-PART slots (children are never duplicated, so those
+    // ids aren't actually the clone's own children). seedChildOrderIfActive discards
+    // that stale copy and rejoins with the clone's own fresh path ids only, when the doc
+    // already uses childOrder; otherwise leaves it absent like any brand-new part on a
+    // never-normalized doc (childOrder.ts's LAZY rule).
+    seedChildOrderIfActive(clone, doc.parts, clone.paths.map((p) => p.id));
     const sourceIds = subtreeIds(part, doc.parts);
     let insertAt = doc.parts.length;
     for (let i = 0; i < doc.parts.length; i++) if (sourceIds.has(doc.parts[i].id)) insertAt = i + 1;
     doc.parts.splice(insertAt, 0, clone);
+    // The clone is a SIBLING inserted immediately after the source's whole subtree (see
+    // this function's own doc comment) — mirror that exact position in the parent's
+    // childOrder, right after the source's own slot (not necessarily the very end, if
+    // the source wasn't already topmost among its siblings).
+    const parent = part.parentId ? partById(part.parentId) : null;
+    if (parent) {
+      const sourceSlot = parent.childOrder?.findIndex((s) => s.kind === 'part' && s.id === part.id) ?? -1;
+      slotAddChild(parent, clone.id, sourceSlot < 0 ? undefined : sourceSlot + 1);
+    }
     newIds.push(clone.id);
   }
   return newIds;
@@ -309,6 +335,10 @@ export function moveSelectedInDrawOrder(delta: 1 | -1): boolean {
   if (state.selectedPathId) {
     const i = part.paths.findIndex((p) => p.id === state.selectedPathId);
     [part.paths[i], part.paths[i + delta]] = [part.paths[i + delta], part.paths[i]];
+    // The swapped pair need not be childOrder-adjacent (a child part could sit between
+    // their slots) — reconcile re-derives the path-slot run fresh from the now-swapped
+    // paths[] (the path-order authority) rather than hand-deriving the target index.
+    reconcileChildOrder(part, doc.parts);
     return true;
   }
   const sibs = siblingsOf(part, doc.parts);
@@ -330,6 +360,11 @@ export function moveSelectedInDrawOrder(delta: 1 | -1): boolean {
   ).length;
   rest.splice(insertAt, 0, ...laterBlock, ...earlierBlock); // swap: later's block now leads
   doc.parts = rest;
+  // `earlier`/`later` are SIBLINGS (see siblingsOf above) — only their shared parent's
+  // part-slot order could have changed; reconcile re-derives it from the now-swapped
+  // doc.parts (rule 4). A root-level swap has no parent childOrder to fix.
+  const parent = part.parentId ? partById(part.parentId) : null;
+  if (parent) reconcileChildOrder(parent, doc.parts);
   return true;
 }
 
@@ -366,5 +401,11 @@ export function movePartRelativeTo(
   if (insertAt < 0) return false; // defensive: ref should always survive into `rest`
   rest.splice(insertAt, 0, ...block);
   doc.parts = rest;
+  // `part` and `ref` are now siblings (setParent above, or already were); reconcile
+  // re-derives their shared parent's part-slot order from the just-finalized doc.parts
+  // (rule 4) rather than hand-deriving the above/below childOrder index. No parent
+  // childOrder to fix when both are root-level.
+  const parent = ref.parentId ? partById(ref.parentId) : null;
+  if (parent) reconcileChildOrder(parent, doc.parts);
   return true;
 }

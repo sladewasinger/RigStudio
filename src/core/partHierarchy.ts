@@ -5,6 +5,7 @@ import { Channel, Easing, RigPart, Track, Vec2 } from './docTypes';
 import { selectPart, state } from './appState';
 import { sampleKeyList } from './channels';
 import { freshId } from './idGen';
+import { reconcileChildOrder, seedChildOrderIfActive, slotAddChild, slotRemoveChild } from './childOrder';
 
 export function partById(id: string): RigPart | null {
   return state.doc?.parts.find((p) => p.id === id) ?? null;
@@ -138,10 +139,15 @@ export function setParent(childId: string, parentId: string | null): boolean {
   const doc = state.doc;
   const child = partById(childId);
   if (!child) return false;
+  // Captured BEFORE any mutation below — the slot leaves whichever parent held it (see
+  // the childOrder.ts CHOKEPOINT: this is the reparent half of rule 4, "setParent...
+  // drive BOTH" doc.parts and childOrder).
+  const oldParent = child.parentId ? partById(child.parentId) : null;
   if (parentId === null) {
     if (child.parentId === null) return true;
     if (doc) doc.parts = moveSubtreeAfter(child, null, doc.parts);
     child.parentId = null;
+    if (oldParent) slotRemoveChild(oldParent, childId);
     return true;
   }
   if (parentId === childId) return false;
@@ -151,6 +157,10 @@ export function setParent(childId: string, parentId: string | null): boolean {
   if (child.parentId === parentId) return true;
   if (doc) doc.parts = moveSubtreeAfter(child, parent, doc.parts);
   child.parentId = parentId;
+  if (oldParent) slotRemoveChild(oldParent, childId);
+  // moveSubtreeAfter always lands the child as the new TOPMOST child of `parent` (see its
+  // own doc comment) — append-at-end mirrors that exactly, no reconcile needed here.
+  slotAddChild(parent, childId);
   return true;
 }
 
@@ -179,6 +189,12 @@ export function addNullPart(
     parentId,
     paths: [],
   };
+  // A partless bone/group starts with no paths/children of its own — join the regime
+  // eagerly when the doc already uses one (see seedChildOrderIfActive's doc comment: a
+  // container part created mid-session, groupParts' new group chief among them,
+  // otherwise could never accumulate its own children's slots, since slotAddChild below
+  // is a no-op against a still-absent list). On a never-normalized doc, stays absent.
+  seedChildOrderIfActive(part, doc.parts);
   const parent = parentId ? partById(parentId) : null;
   if (!parent) {
     doc.parts.push(part);
@@ -188,6 +204,10 @@ export function addNullPart(
   let insertAt = doc.parts.length;
   for (let i = 0; i < doc.parts.length; i++) if (parentIds.has(doc.parts[i].id)) insertAt = i + 1;
   doc.parts.splice(insertAt, 0, part);
+  // New part is always the TOPMOST child (see this function's own doc comment) —
+  // append-at-end mirrors that exactly (no-op if `parent.childOrder` is still absent —
+  // childOrder.ts's LAZY rule).
+  slotAddChild(parent, part.id);
   return part;
 }
 
@@ -214,6 +234,13 @@ export function groupParts(ids: string[], pivot: Vec2): RigPart | null {
   const topmostIdx = Math.max(...outer.map((p) => doc.parts.indexOf(p)));
   doc.parts.splice(topmostIdx + 1, 0, group);
   for (const p of outer) setParent(p.id, group.id);
+  // The group's own array position above just landed at a COSMETIC spot (right after the
+  // topmost OUTER member, not necessarily the true topmost sibling of `parentId` once
+  // non-grouped siblings are accounted for) — reconcile re-derives the parent's part-slot
+  // order fresh from the now-final doc.parts truth (rule 4), rather than duplicating this
+  // function's own splice-index math a second time for childOrder.
+  const parent = parentId ? partById(parentId) : null;
+  if (parent) reconcileChildOrder(parent, doc.parts);
   return group;
 }
 
@@ -240,6 +267,19 @@ export function ungroupPart(id: string): boolean {
     if (clip.tracks.some((t) => t.target === id && t.keyframes.length > 0)) return false;
   }
 
+  // The dissolved group's own childOrder slot (if any) sat somewhere in its PARENT's
+  // interleaved list; each absorbed child below takes over that exact spot, in their
+  // existing relative order (ascending from `insertAt`) — mirrors "children keep their
+  // current [doc.parts array] position" from this function's own doc comment, at the
+  // childOrder level. Captured/removed BEFORE the absorption loop so the loop's repeated
+  // slotAddChild calls land at the right index (splice semantics: inserting at the
+  // just-vacated index repeatedly places each child immediately after the previous one).
+  const grandparent = part.parentId ? partById(part.parentId) : null;
+  let insertAt = grandparent?.childOrder
+    ? grandparent.childOrder.findIndex((s) => s.kind === 'part' && s.id === id)
+    : -1;
+  if (grandparent) slotRemoveChild(grandparent, id);
+
   const gr = part.rest.rotate;
   const gp = part.pivot;
   const gt = { x: part.rest.tx, y: part.rest.ty };
@@ -263,6 +303,10 @@ export function ungroupPart(id: string): boolean {
     child.rest.tx = newRest.x;
     child.rest.ty = newRest.y;
     child.parentId = part.parentId;
+    if (grandparent) {
+      slotAddChild(grandparent, child.id, insertAt < 0 ? undefined : insertAt);
+      if (insertAt >= 0) insertAt++;
+    }
 
     for (const clip of doc.clips) {
       const rot = clip.tracks.find((t) => t.target === child.id && t.channel === 'rotate');

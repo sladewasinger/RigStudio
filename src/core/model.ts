@@ -18,6 +18,10 @@
  *   structuralOps.ts  — AI rig-change application, delete/duplicate, draw order.
  *   serialization.ts  — serializeDoc/deserializeDoc/normalizeDoc, doc/state-machine
  *                        factories, the artboard frame helpers.
+ *   childOrder.ts     — the U1 unified-child-ordering CHOKEPOINT: slotAddPath/
+ *                        slotRemovePath/slotAddChild/slotRemoveChild/slotMoveWithin/
+ *                        reconcileChildOrder, plus the isChildOrderCoherent /
+ *                        childOrderAgreesWithCanonicalPartOrder integrity predicates.
  *   idGen.ts          — freshId/bumpIdCounter, shared by every module above.
  */
 
@@ -29,4 +33,5 @@ export * from './boneOps';
 export * from './partHierarchy';
 export * from './structuralOps';
 export * from './serialization';
+export * from './childOrder';
 export * from './idGen';

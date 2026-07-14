@@ -5,6 +5,7 @@ import { Artboard, EASINGS, RigDoc, SkinBone, Vec2 } from './docTypes';
 import { SMState, StateMachine } from './smTypes';
 import { healDegenerateBoneTip } from './boneOps';
 import { canonicalizePartOrder } from './structuralOps';
+import { reconcileChildOrder } from './childOrder';
 import { bumpIdCounter, freshId } from './idGen';
 
 /**
@@ -228,6 +229,14 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
   // same order) on any doc that's already canonical, which includes every doc produced by
   // the editor itself and by importSvg's depth-first registration.
   doc.parts = canonicalizePartOrder(doc.parts);
+  // Unified child ordering (U1): synthesize an absent childOrder (own paths[] order then
+  // direct doc.parts-sibling children — exactly today's two-bucket paint order, so an
+  // old file renders identically) and repair a present one (drop dangling/duplicate
+  // slots, re-derive each kind's relative order from its authority, append anything
+  // missing) — see core/childOrder.ts's reconcileChildOrder. Runs AFTER the dangling-
+  // parentId repair and canonicalizePartOrder above, so both authorities it reads
+  // (paths[], the parentId graph) are already trustworthy.
+  for (const part of doc.parts) reconcileChildOrder(part, doc.parts);
   doc.clips = doc.clips?.length ? doc.clips : [{ name: 'idle', duration: 2000, tracks: [] }];
   for (const clip of doc.clips) {
     // Loop lives on the CLIP (v2.12; moved off SMState — see the legacy-migration block

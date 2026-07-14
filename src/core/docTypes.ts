@@ -43,6 +43,14 @@ export type PivotHint =
   { kind: 'centerOffset'; dx: number; dy: number };
 
 /**
+ * One entry in a part's ordered, MIXED child list — see `RigPart.childOrder`. `id`
+ * resolves to a `RigPath.id` (within the SAME part's `paths[]`) when `kind === 'path'`,
+ * or another `RigPart.id` (a DIRECT child, `parentId === this part's id`) when
+ * `kind === 'part'`.
+ */
+export type ChildSlot = { kind: 'path' | 'part'; id: string };
+
+/**
  * The character's rest pose, edited in Setup mode. A channel with keyframes ignores
  * these (keyed values are ABSOLUTE); a channel without keyframes displays its rest
  * value. Scale is Setup-only (no scale keyframes on parts) and is applied along the
@@ -158,6 +166,20 @@ export interface RigPart {
    * Absent/false = visible (the default for every part that predates this field).
    */
   hidden?: boolean;
+  /**
+   * U1 (unified child ordering, 2026-07-13): this part's OWN paths and DIRECT child
+   * parts as ONE ordered, interleaved list — index 0 paints first (bottom), the last
+   * entry paints last (top), matching the doc-wide "last = topmost" convention
+   * (`doc.parts` sibling order, `RigPath[]` order). Optional: absent means "legacy /
+   * not yet synthesized" — `normalizeDoc` SYNTHESIZES it (own paths in `paths[]` order,
+   * then direct children in `doc.parts` sibling order — exactly today's two-bucket
+   * paint order, so an absent `childOrder` renders identically to a present, synthesized
+   * one) and every structural mutation keeps a PRESENT one in lockstep through the
+   * `core/childOrder.ts` CHOKEPOINT (`slotAddPath`/`slotRemovePath`/`slotAddChild`/
+   * `slotRemoveChild`/`slotMoveWithin`/`reconcileChildOrder`) — nothing else may write
+   * this field. U1 is model-only: nothing reads `childOrder` yet (U2 wires rendering).
+   */
+  childOrder?: ChildSlot[];
 }
 
 /**

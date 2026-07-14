@@ -10,6 +10,7 @@
 
 import {
   state, selectedParts, setKeyframe, channelValue, ancestorChain, RigPart,
+  slotAddPath, slotRemovePath,
 } from '../core/model';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
 import { ctx, linearOnly, round1, round2, round3, wrapToPi } from './context';
@@ -216,6 +217,7 @@ export function movePathToPart(
   const destRender = matrixOfTransform(groupTransformOf(dest, null));
   const reframe = multiply(invertMat(destRender), srcRender);
   const [path] = src.paths.splice(from, 1);
+  slotRemovePath(src, pathId); // childOrder.ts chokepoint — mirrors the paths[] splice above
   if (!nearIdentity(reframe)) {
     const m = multiply(reframe, matrixOfTransform(path.transform));
     path.transform = `matrix(${m.a},${m.b},${m.c},${m.d},${m.e},${m.f})`;
@@ -224,6 +226,7 @@ export function movePathToPart(
     ? dest.paths.length
     : Math.max(0, Math.min(destIndex, dest.paths.length));
   dest.paths.splice(at, 0, path);
+  slotAddPath(dest, pathId, at); // same interleaved index as the paths[] splice just above
   if (dest.kind === 'group') dest.kind = 'art';
   syncPartPathDom(src);
   syncPartPathDom(dest);

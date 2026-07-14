@@ -1546,12 +1546,18 @@ function maximalDoc(): RigDoc {
         paths: [makePath2('hand_path_1', 'palm', 'M 100,50 L 110,50 L 110,60 L 100,60 Z', 'zzzz', {
           fill: '#ffddaa', fillOpacity: 1, stroke: '#552200', strokeWidth: 1, strokeOpacity: 1, transform: '',
         })],
+        // childOrder (U1): own paths (paths[] order) then direct children (doc.parts
+        // sibling order) — matches today's two-bucket paint order exactly, on every
+        // part below, so the round trip proves an ALREADY-synthesized doc stays
+        // byte-stable (a separate test proves actual synthesis on a childOrder-less doc).
+        childOrder: [{ kind: 'path', id: 'hand_path_1' }],
       },
       {
         id: GROUP1, label: 'body_group', kind: 'group', transform: '',
         pivot: { x: 50, y: 40 }, pivotHint: null, boneTip: null,
         rest: { rotate: 5, tx: 1, ty: -1, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: null, skin: null, paths: [],
+        childOrder: [{ kind: 'part', id: TORSO }],
       },
       {
         id: TORSO, label: 'torso', kind: 'art', transform: 'translate(10,10)',
@@ -1568,18 +1574,24 @@ function maximalDoc(): RigDoc {
             fill: null, fillOpacity: 1, stroke: '#333333', strokeWidth: 0.5, strokeOpacity: 0.5, transform: '',
           }),
         ],
+        childOrder: [
+          { kind: 'path', id: 'torso_path_1' }, { kind: 'path', id: 'torso_path_2' },
+          { kind: 'part', id: SHOULDER },
+        ],
       },
       {
         id: SHOULDER, label: 'shoulder', kind: 'bone', transform: '',
         pivot: { x: 50, y: 55 }, pivotHint: null, boneTip: { x: 70, y: 55 },
         rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: TORSO, skin: null, paths: [],
+        childOrder: [{ kind: 'part', id: ELBOW }],
       },
       {
         id: ELBOW, label: 'elbow', kind: 'bone', transform: '',
         pivot: { x: 70, y: 55 }, pivotHint: null, boneTip: { x: 90, y: 55 },
         rest: { rotate: 15, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: SHOULDER, skin: null, paths: [],
+        childOrder: [{ kind: 'part', id: LEFT_ARM }, { kind: 'part', id: WRIST_ATTACH }],
       },
       {
         id: LEFT_ARM, label: 'left_arm', kind: 'art', transform: '',
@@ -1589,6 +1601,7 @@ function maximalDoc(): RigDoc {
         paths: [makePath2('arm_path_1', 'forearm', 'M 90,50 C 95,50 100,52 100,55 S 95,60 90,60 Z', 'css', {
           fill: '#ffcc99', fillOpacity: 1, stroke: null, strokeWidth: 0, strokeOpacity: 1, transform: '',
         })],
+        childOrder: [{ kind: 'path', id: 'arm_path_1' }],
       },
       {
         // Unified Skeleton (Phase 1): a cross-chain ATTACH — parented to ELBOW (another
@@ -1598,6 +1611,7 @@ function maximalDoc(): RigDoc {
         pivot: { x: 70, y: 55 }, pivotHint: null, boneTip: { x: 82, y: 68 },
         rest: { rotate: 4, tx: 6, ty: 9, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
         parentId: ELBOW, skin: null, paths: [], attachedRoot: true,
+        childOrder: [], // a leaf bone: no paths, no children of its own
       },
     ],
     clips: [

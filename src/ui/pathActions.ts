@@ -22,7 +22,7 @@
  */
 
 import {
-  state, notify, selectPart, RigPart, RigPath, addNullPart,
+  state, notify, selectPart, RigPart, RigPath, addNullPart, slotRemovePath,
 } from '../core/model';
 import { checkpoint } from '../core/history';
 import {
@@ -62,6 +62,7 @@ export function deletePathFromPart(part: RigPart, pathId: string): void {
   if (!canDeletePath(part, pathId)) return;
   checkpoint();
   part.paths = part.paths.filter((p) => p.id !== pathId);
+  slotRemovePath(part, pathId); // childOrder.ts chokepoint
   syncPartPathDom(part);
   if (state.selectedPathId === pathId) state.selectedPathId = null;
   renderPose();
