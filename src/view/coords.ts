@@ -41,9 +41,11 @@ export function rootToUser(p: { x: number; y: number }): { x: number; y: number 
   return applyMat(m, p.x, p.y);
 }
 
-/** The holder matrix a path's raw coordinates render through (root+group+path). */
+/** The holder matrix a path's raw coordinates render through (root+group+path). Reads
+ *  ANY one of the part's run groups — every run of a part shares the SAME composed
+ *  transform (U2: `ctx.partGroups` may hold more than one — see partDom.ts). */
 export function pathHolderMat(part: RigPart, path: RigPath): Mat {
-  const g = ctx.partGroups.get(part.id);
+  const g = ctx.partGroups.get(part.id)?.[0];
   return matrixOfTransform([
     ctx.rootGroup?.getAttribute('transform') ?? '',
     g?.getAttribute('transform') ?? '',

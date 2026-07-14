@@ -134,3 +134,77 @@ describe('composePose', () => {
     expect(svg).toContain('width="300" height="400"');
   });
 });
+
+// ---- U2: childOrder interleaving (flattenPaintOrder, shared with the live canvas) ----
+
+describe('composePose — U2 childOrder interleaving', () => {
+  it('a part\'s own paths interleave with a child as document-ordered runs (data-run)', () => {
+    const body = makePart('body', {
+      paths: [makePath('pA', { d: 'M 0,0 L 5,5' }), makePath('pB', { d: 'M 9,9 L 20,20' })],
+      childOrder: [
+        { kind: 'path', id: 'pA' },
+        { kind: 'part', id: 'x' },
+        { kind: 'path', id: 'pB' },
+      ],
+    });
+    const x = makePart('x', { parentId: 'body', paths: [makePath('x-path', { d: 'M 1,1 L 2,2' })] });
+    const clip = makeClip({ name: 'c' });
+    const doc = makeDoc([body, x], [clip]);
+
+    const svg = composePose(doc, clip, 0);
+    const idxRun0 = svg.indexOf('data-part-id="body" data-run="0"');
+    const idxX = svg.indexOf('data-part-id="x"');
+    const idxRun1 = svg.indexOf('data-part-id="body" data-run="1"');
+    expect(idxRun0).toBeGreaterThanOrEqual(0);
+    expect(idxX).toBeGreaterThan(idxRun0);
+    expect(idxRun1).toBeGreaterThan(idxX);
+
+    const run0Tag = svg.slice(idxRun0, svg.indexOf('</g>', idxRun0));
+    const run1Tag = svg.slice(idxRun1, svg.indexOf('</g>', idxRun1));
+    expect(run0Tag).toContain('d="M 0,0 L 5,5"');
+    expect(run0Tag).not.toContain('d="M 9,9 L 20,20"');
+    expect(run1Tag).toContain('d="M 9,9 L 20,20"');
+    expect(run1Tag).not.toContain('d="M 0,0 L 5,5"');
+  });
+
+  it('a non-interleaved (synthesized) part never gets a data-run attribute — byte-identical to pre-U2', () => {
+    const a = makePart('a', { paths: [makePath('a1'), makePath('a2')] });
+    const clip = makeClip({ name: 'c' });
+    const doc = makeDoc([a], [clip]);
+    expect(composePose(doc, clip, 0)).not.toContain('data-run');
+  });
+
+  it('keyed z on a child re-sorts SIBLING part slots only; the bracketing path runs hold', () => {
+    const body = makePart('body', {
+      paths: [makePath('pA'), makePath('pB')],
+      childOrder: [
+        { kind: 'path', id: 'pA' },
+        { kind: 'part', id: 'x' },
+        { kind: 'part', id: 'y' },
+        { kind: 'path', id: 'pB' },
+      ],
+    });
+    const x = makePart('x', { parentId: 'body' });
+    const y = makePart('y', { parentId: 'body' });
+    const clip = makeClip({
+      name: 'c',
+      duration: 1000,
+      tracks: [makeTrack('x', 'z', [[0, 0, 'linear'], [500, 5, 'linear']])],
+    });
+    const doc = makeDoc([body, x, y], [clip]);
+
+    const posAt = (svg: string, needles: string[]): number[] => needles.map((n) => svg.indexOf(n));
+    const isAscending = (idx: number[]): boolean => idx.every((v) => v >= 0)
+      && idx.every((v, k) => k === 0 || v > idx[k - 1]);
+
+    const svg0 = composePose(doc, clip, 0);
+    expect(isAscending(posAt(svg0, [
+      'data-part-id="body" data-run="0"', 'data-part-id="x"', 'data-part-id="y"', 'data-part-id="body" data-run="1"',
+    ]))).toBe(true);
+
+    const svg500 = composePose(doc, clip, 500);
+    expect(isAscending(posAt(svg500, [
+      'data-part-id="body" data-run="0"', 'data-part-id="y"', 'data-part-id="x"', 'data-part-id="body" data-run="1"',
+    ]))).toBe(true);
+  });
+});

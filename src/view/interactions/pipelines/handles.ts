@@ -10,7 +10,7 @@ import {
   state, RigPart, selectedPart, selectedParts, channelValue, ancestorChain, isGroupLike,
 } from '../../../core/model';
 import {
-  ctx, DragState, MIN_SCALE, MAX_SCALE, linearOnly, round1, round2,
+  DragState, MIN_SCALE, MAX_SCALE, linearOnly, round1, round2, partOwnBBox,
 } from '../../context';
 import { handleSize, pointerInRoot } from '../../coords';
 import { poseTime, groupTransformOf, chainMatOf, effectivePivot } from '../../pose';
@@ -96,9 +96,8 @@ export const HANDLES_PIPELINE: GesturePipeline = {
         capturePointer(ev);
         return d;
       }
-      const g = ctx.partGroups.get(part.id);
-      if (!g) return 'handled';
-      const box = g.getBBox();
+      const box = partOwnBBox(part.id); // union across every run (U2 interleaving)
+      if (!box) return 'handled';
       const pad = handleSize() * 0.6;
       const spots = handleSpots(box.x - pad, box.y - pad, box.x + box.width + pad, box.y + box.height + pad);
       const spot = spots[hit.scaleHandle];
@@ -131,9 +130,8 @@ export const HANDLES_PIPELINE: GesturePipeline = {
     // opposite edge pinned — Inkscape's rotate-mode side handles.
     if (hit.skewSide) {
       const part = selectedPart();
-      const g = part ? ctx.partGroups.get(part.id) : null;
-      if (!part || !g) return 'handled';
-      const box = g.getBBox();
+      const box = part ? partOwnBBox(part.id) : null; // union across every run
+      if (!part || !box) return 'handled';
       const pad = handleSize() * 0.6;
       const spots = handleSpots(box.x - pad, box.y - pad, box.x + box.width + pad, box.y + box.height + pad);
       const side = hit.skewSide as 'n' | 'e' | 's' | 'w';

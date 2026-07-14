@@ -18,7 +18,7 @@ import {
   poseTime, groupTransformOf, chainMatOf, effectivePivot, effectiveTip, fullPoseTransform,
   ownTranslateOf, groupDescendants,
 } from './pose';
-import { syncPartPathDom } from './partDom';
+import { syncPartPathDom, partOwnBBox } from './partDom';
 import { renderPose } from './render';
 
 // ---- Vector-editing operations (Setup mode) ----
@@ -34,8 +34,8 @@ export function flipSelected(axis: 'h' | 'v'): boolean {
   if (parts.length === 0) return false;
   const t = poseTime();
   for (const part of parts) {
-    const g = ctx.partGroups.get(part.id)!;
-    const box = g.getBBox();
+    const box = partOwnBBox(part.id); // union across every run (U2 interleaving)
+    if (!box) continue;
     const c = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     const before = applyMat(matrixOfTransform(groupTransformOf(part, t)), c.x, c.y);
     if (axis === 'h') part.rest.sx = -part.rest.sx;

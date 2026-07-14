@@ -154,9 +154,13 @@ export function slotMoveWithin(parent: RigPart, slotId: string, toIndex: number)
  * and appending any `wantOrder` id that had no existing slot (missing) at the end of the
  * `kind` run. Slots of the OTHER kind, and the overall interleaving, are left untouched —
  * this only ever changes the sequence in which `kind` shows up. The shared engine behind
- * `reconcileChildOrder`'s two passes (path kind, then part kind); see that function.
+ * `reconcileChildOrder`'s two passes (path kind, then part kind); see that function. Also
+ * reused directly by `core/paintOrder.ts` (U2) for the Animate-mode keyed-`z` PART-slot
+ * resort — z-sorting a part's children is exactly "reassign which id occupies each
+ * existing 'part'-slot position, in z order" instead of doc.parts order, so it needs the
+ * identical dangling/missing safety net this already provides.
  */
-function reassignKindOrder(order: ChildSlot[], kind: ChildSlot['kind'], wantOrder: string[]): ChildSlot[] {
+export function reassignKindOrder(order: ChildSlot[], kind: ChildSlot['kind'], wantOrder: string[]): ChildSlot[] {
   const wantSet = new Set(wantOrder);
   const queue = [...wantOrder];
   const rebuilt: ChildSlot[] = [];
@@ -170,12 +174,23 @@ function reassignKindOrder(order: ChildSlot[], kind: ChildSlot['kind'], wantOrde
   return rebuilt;
 }
 
+/** Own paths (paths[] order) THEN direct children (doc.parts sibling order) — exactly
+ *  today's two-bucket paint order. The ABSENT branch of `reconcileChildOrder`, factored
+ *  out so `effectiveChildOrder` (a pure READ, never writes the doc) can share it. */
+function synthesizeChildOrder(part: RigPart, allParts: RigPart[]): ChildSlot[] {
+  const wantPaths = part.paths.map((p) => p.id);
+  const wantChildren = allParts.filter((p) => p.parentId === part.id).map((p) => p.id);
+  return [
+    ...wantPaths.map((id): ChildSlot => ({ kind: 'path', id })),
+    ...wantChildren.map((id): ChildSlot => ({ kind: 'part', id })),
+  ];
+}
+
 /**
  * Synthesize-or-repair `part.childOrder` against the two authorities (`part.paths[]` for
  * path order, `allParts` filtered to `parentId === part.id` for part order — see the
  * file header's "two sources of truth" note):
- *  - ABSENT: synthesize from scratch, own paths (paths[] order) THEN direct children
- *    (doc.parts sibling order) — exactly today's two-bucket paint order.
+ *  - ABSENT: synthesize from scratch (`synthesizeChildOrder`).
  *  - PRESENT: repair in place — drop dangling/duplicate slots, reassign which id
  *    occupies each kind's existing positions to match the authority (rule 4), and
  *    append any id that never had a slot. The existing INTERLEAVING (where path-kind
@@ -184,19 +199,31 @@ function reassignKindOrder(order: ChildSlot[], kind: ChildSlot['kind'], wantOrde
  * Idempotent (a second call on its own output is a no-op) and safe to call liberally —
  * `normalizeDoc` calls it for EVERY part (the full synthesize/repair pass, see
  * serialization.ts), and the trickier structural ops (see the file header) call it again
- * afterward on just the affected part(s) as their positional correctness backstop.
+ * afterward on just the affected part(s) as their positional correctness backstop. U2
+ * (`view/nodeEditing/structural.ts`'s segment delete/join, which can add/remove whole
+ * `RigPath` objects) is the newest such backstop caller — see that file.
  */
 export function reconcileChildOrder(part: RigPart, allParts: RigPart[]): void {
-  const wantPaths = part.paths.map((p) => p.id);
-  const wantChildren = allParts.filter((p) => p.parentId === part.id).map((p) => p.id);
   if (!part.childOrder) {
-    part.childOrder = [
-      ...wantPaths.map((id): ChildSlot => ({ kind: 'path', id })),
-      ...wantChildren.map((id): ChildSlot => ({ kind: 'part', id })),
-    ];
+    part.childOrder = synthesizeChildOrder(part, allParts);
     return;
   }
+  const wantPaths = part.paths.map((p) => p.id);
+  const wantChildren = allParts.filter((p) => p.parentId === part.id).map((p) => p.id);
   part.childOrder = reassignKindOrder(reassignKindOrder(part.childOrder, 'path', wantPaths), 'part', wantChildren);
+}
+
+/**
+ * READ-ONLY counterpart to `reconcileChildOrder`: a part's childOrder if present, else
+ * the same synthesized paths-first-then-children list `reconcileChildOrder` would write —
+ * WITHOUT writing it. Renderers (`core/paintOrder.ts`'s `flattenPaintOrder`, consumed by
+ * both `view/render.ts`/`view/canvas.ts` and `headless/composePose.ts`) must never
+ * force a never-normalized doc's lazy `childOrder` into existence just by being painted
+ * (see the file header's LAZY rule — that would silently change a doc's serialized
+ * shape as a side effect of rendering it). PURE.
+ */
+export function effectiveChildOrder(part: RigPart, allParts: RigPart[]): ChildSlot[] {
+  return part.childOrder ?? synthesizeChildOrder(part, allParts);
 }
 
 /**

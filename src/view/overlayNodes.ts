@@ -6,7 +6,9 @@
  * (CLAUDE.md "Small, focused files") — pure chrome-building, no top-level orchestration.
  */
 
-import { ctx, SVG_NS, nodeKey, parseNodeKey } from './context';
+import {
+  ctx, SVG_NS, nodeKey, parseNodeKey, partOwnBBox, primaryPartGroup,
+} from './context';
 import { state, RigPart } from '../core/model';
 import { parsePath, PathCmd } from '../geometry/paths';
 import { handleSize } from './coords';
@@ -38,7 +40,7 @@ function seamShadowOf(cmds: PathCmd[], mIdx: number): number | null {
 }
 
 export function renderNodeHandles(part: RigPart): void {
-  const g = ctx.partGroups.get(part.id)!;
+  const g = primaryPartGroup(part.id)!; // any run's transform — see context.ts
   // With a path "entered", node editing scopes to it; otherwise every path is editable.
   const paths = state.selectedPathId
     ? part.paths.filter((p) => p.id === state.selectedPathId)
@@ -198,9 +200,9 @@ function addHandle(
  * — the art on screen is its base/bind shape, not its current pose.
  */
 export function drawSkinSuspendHint(part: RigPart, size: number): void {
-  const g = ctx.partGroups.get(part.id);
+  const g = primaryPartGroup(part.id); // any run's transform — see context.ts
   if (!g || !ctx.overlay) return;
-  const box = g.getBBox();
+  const box = partOwnBBox(part.id) ?? { x: 0, y: 0, width: 0, height: 0 }; // union across runs
   const rootTransform = ctx.rootGroup?.getAttribute('transform') ?? '';
   const groupTransform = g.getAttribute('transform') ?? '';
   const hint = document.createElementNS(SVG_NS, 'text');

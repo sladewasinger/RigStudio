@@ -18,7 +18,7 @@ import {
 } from '../core/model';
 import { Mat, applyMat, matrixOfTransform } from '../geometry/transforms';
 import * as pose from '../geometry/pose';
-import { ctx } from './context';
+import { ctx, partOwnBBox } from './context';
 
 /** The time to sample animation at, or null when Setup mode shows the bare rest pose. */
 export function poseTime(): number | null {
@@ -135,10 +135,10 @@ export function partRootBoxes(ids: string[]): Map<string, { x: number; y: number
   const t = poseTime();
   for (const id of ids) {
     const part = doc.parts.find((p) => p.id === id);
-    const g = part ? ctx.partGroups.get(id) : null;
-    if (!part || !g || part.paths.length === 0) continue;
+    if (!part || part.paths.length === 0) continue;
     if (isEffectivelyHidden(part)) continue; // Layers eye — excluded from bbox unions too
-    const box = g.getBBox();
+    const box = partOwnBBox(id); // union across every run (U2 interleaving)
+    if (!box) continue;
     const m = matrixOfTransform(groupTransformOf(part, t));
     const corners = [
       applyMat(m, box.x, box.y),

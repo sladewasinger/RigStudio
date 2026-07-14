@@ -19,6 +19,7 @@
 
 import {
   RigPath, RigPart, state, notify, selectedPart, freshId, dropSkinOverridesForPath,
+  reconcileChildOrder, slotRemovePath,
 } from '../../core/model';
 import {
   parsePath, serializePath, PathPiece, PathCmd, arcToCubics,
@@ -280,6 +281,12 @@ export function deleteSelectedSegment(): boolean {
     nodeTypes: piece.nodeTypes,
   }));
   part.paths.splice(idx + 1, 0, ...extra);
+  // U2 closes U1's documented gap here (core/childOrder.ts's file header): this splice
+  // can grow part.paths without a matching childOrder slot for each new piece — repair
+  // it BEFORE applyStructuralEdit's syncPartPathDom call below reads childOrder to
+  // rebuild the part's run-group DOM, or a genuinely new piece would render into no
+  // group at all. A no-op on a never-normalized doc (LAZY rule).
+  reconcileChildOrder(part, state.doc!.parts);
   applyStructuralEdit(part, path, pieces[0]);
   state.selectedPathId = null; // un-scope so both resulting pieces stay node-selectable
   renderPose();
@@ -327,6 +334,10 @@ export function joinSelectedNodes(mode: 'weld' | 'segment'): boolean {
   dropSkinOverridesForPath(part, removedId);
   invalidateSkinCache(part.id);
   part.paths = part.paths.filter((p) => p.id !== removedId);
+  // childOrder.ts chokepoint (U2 closes U1's documented gap) — mirrors movePathToPart's
+  // own slotRemovePath call; BEFORE applyStructuralEdit's syncPartPathDom reads
+  // childOrder to rebuild the run-group DOM. No-op on a never-normalized doc.
+  slotRemovePath(part, removedId);
   applyStructuralEdit(part, first.path, piece);
   state.selectedPathId = null;
   renderPose();

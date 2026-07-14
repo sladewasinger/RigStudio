@@ -9,7 +9,7 @@
  */
 
 import {
-  state, activeClip, Channel, RigDoc, RigPart, drawOrder, isEffectivelyHidden,
+  state, activeClip, Channel, RigDoc, RigPart, isEffectivelyHidden, flattenPaintOrder,
 } from '../core/model';
 import { canUndo, canRedo } from '../core/history';
 import { ctx, SVG_NS } from './context';
@@ -41,21 +41,22 @@ function warnSkinFailure(part: RigPart, err?: unknown): void {
 }
 
 /**
- * Render a part with its own transform and REST path data — no skin deformation. Used
- * both for the node-editing suspend case (handles must sit on the geometry node ops
- * actually edit) and as the render-resilience fallback when renderSkinnedPart fails
- * (exception or non-finite output): never mutates `path.d`, DOM `d` attribute only.
+ * Write REST path data (never mutates `path.d`, DOM `d` attribute only) for a part
+ * rendering WITHOUT skin deformation — used both for the node-editing suspend case
+ * (handles must sit on the geometry node ops actually edit) and as the render-resilience
+ * fallback when renderSkinnedPart fails (exception or non-finite output). Both callers
+ * only ever reach this for a SKINNED part (identity transform — its rest geometry is
+ * already ROOT-space, bind baked the full chain into path.d), so unlike the pre-U2
+ * version this never touches the group transform at all: the caller's per-run loop
+ * (renderPose, below) already applies it uniformly to every one of the part's run
+ * groups. Looks the path elements up through `ctx.rootGroup` (not any ONE run group)
+ * because a part's own paths may be split across MULTIPLE run groups (U2 interleaving) —
+ * `data-path-id` is unique doc-wide, so a wider search scope is still exact.
  */
-function renderPartRigid(part: RigPart, g: SVGGElement, t: number | null): void {
-  // A SKINNED part's rest geometry is ROOT-space (bind baked its full chain into path.d),
-  // so it renders with an identity transform exactly like the deformed path — its live
-  // parent chain (a preserved group, since bind no longer hoists the art out) must NOT be
-  // re-applied here or the art double-transforms. For FLAT skinned art the chain is already
-  // identity, so this is byte-identical to the old groupTransformOf. Non-skinned parts keep
-  // their full composed transform.
-  g.setAttribute('transform', part.skin ? '' : groupTransformOf(part, t));
+function renderPartRigidPaths(part: RigPart): void {
+  if (!ctx.rootGroup) return;
   for (const p of part.paths) {
-    g.querySelector(`[data-path-id="${p.id}"]`)?.setAttribute('d', p.d);
+    ctx.rootGroup.querySelector(`[data-path-id="${p.id}"]`)?.setAttribute('d', p.d);
   }
 }
 
@@ -111,15 +112,23 @@ export function renderPose(): void {
   // and the pivot/joint-handle cursor affordances (style.css). The #canvas container is
   // the svg's parent (buildCanvas appends it there).
   ctx.svg?.parentElement?.classList.toggle('freeze-mode', state.freezeMode);
-  ctx.rootGroup.setAttribute('transform', rootPoseTransform(t));
+  const root = ctx.rootGroup;
+  root.setAttribute('transform', rootPoseTransform(t));
   const focus = focusContext();
   const suspendSkinId = nodeEditSkinSuspendId();
   for (const part of doc.parts) {
-    const g = ctx.partGroups.get(part.id);
-    if (!g) continue;
-    // Drill-down focus: parts outside the editing context fade and stop catching
-    // pointer events (clicks fall through; node marquees sweep right over them).
-    g.classList.toggle('dimmed', !!focus && !focus.has(part.id));
+    // U2: a part may render as MORE THAN ONE run group (`ctx.partGroups`, see
+    // partDom.ts's module doc) when its own paths interleave with children in its
+    // childOrder — every group below gets the exact SAME transform/opacity/dimmed/
+    // hidden state, since they all represent the same part (flat siblings, no DOM
+    // nesting, no pose-math change). Content (skin deform / rigid path 'd' write)
+    // happens ONCE per part, through ctx.rootGroup rather than any single run group, so
+    // it reaches every one of the part's own <path> elements regardless of which run
+    // holds them.
+    const groups = ctx.partGroups.get(part.id);
+    if (!groups || groups.length === 0) continue;
+
+    let transform: string;
     if (part.skin && part.id !== suspendSkinId) {
       // Skinned parts deform by their bones, not by a group transform. RENDER
       // RESILIENCE: one part's poisoned/malformed skin data (dangling bone, NaN bind
@@ -129,11 +138,11 @@ export function renderPose(): void {
       // the try/catch below is the net for a genuinely STRUCTURAL failure (e.g.
       // malformed path `d`). Either way, fall back to this one part's rigid rest render
       // and warn exactly once while it stays broken.
-      g.setAttribute('transform', '');
+      transform = '';
       let ok = false;
       let err: unknown;
       try {
-        ok = renderSkinnedPart(part, g, t);
+        ok = renderSkinnedPart(part, root, t);
       } catch (e) {
         err = e;
       }
@@ -142,7 +151,7 @@ export function renderPose(): void {
           warnSkinFailure(part, err);
           warnedSkinParts.add(part.id);
         }
-        renderPartRigid(part, g, t);
+        renderPartRigidPaths(part);
       } else {
         warnedSkinParts.delete(part.id);
       }
@@ -151,19 +160,29 @@ export function renderPose(): void {
       // data node ops actually edit — so handles sit exactly on the drawn outline
       // instead of a stale deformed pose. Bind zeroed this part's own pose, so the rigid
       // transform is the identity `groupTransformOf` would compute anyway.
-      renderPartRigid(part, g, t);
+      transform = '';
+      renderPartRigidPaths(part);
     } else {
-      g.setAttribute('transform', groupTransformOf(part, t));
+      transform = groupTransformOf(part, t);
     }
-    applyOpacity(part, g, t);
+
+    // Drill-down focus: parts outside the editing context fade and stop catching
+    // pointer events (clicks fall through; node marquees sweep right over them).
+    const dimmed = !!focus && !focus.has(part.id);
     // Layers eye (editor-only, never keyable — see RigPart.hidden's doc comment):
     // visibility:hidden rather than display:none so getBBox() (align/distribute,
     // selection boxes, snapping candidates, node-editing suspend hints — several call
     // sites outside this module) keeps working on a hidden-but-still-selected part
     // instead of throwing; it's equally dead to elementFromPoint/hit-testing. Computed
-    // per part (not inherited) because the canvas is a FLAT list of part groups, not a
+    // per part (not inherited) because the canvas is a FLAT list of run groups, not a
     // nested DOM tree, so a hidden ancestor's state can't cascade through CSS alone.
-    g.classList.toggle('part-hidden', isEffectivelyHidden(part));
+    const hidden = isEffectivelyHidden(part);
+    for (const g of groups) {
+      g.classList.toggle('dimmed', dimmed);
+      g.setAttribute('transform', transform);
+      applyOpacity(part, g, t);
+      g.classList.toggle('part-hidden', hidden);
+    }
   }
   applyDrawOrder(doc, t);
   renderOnion();
@@ -172,35 +191,45 @@ export function renderPose(): void {
 
 // ---- Keyframeable z-order (paint order) ----
 //
-// doc.parts array order is the AUTHORED (rest) stacking; on top of it every part carries a
-// keyable `z` OFFSET (stepped, absolute, rest 0 — see model.ts's Channel doc). The rendered
-// paint order sorts parts by (effective z ascending, doc.parts index ascending), so an
-// unkeyed doc paints in pure doc.parts order exactly as before, and a keyed z lifts a part
-// forward/back relative to that. This is EDITOR-side only; the .riv exporter maps animated
-// draw order separately (phase 2), and Lottie can't animate layer order at all.
+// doc.parts/childOrder order is the AUTHORED (rest) stacking; on top of it every PART
+// carries a keyable `z` OFFSET (stepped, absolute, rest 0 — see model.ts's Channel doc).
+// The rendered paint order re-sorts PART slots by (effective z ascending, original
+// relative order ascending) WITHIN their own parent's slot list only — never globally
+// across the whole doc — while PATH slots (and hence a part's own paint RUNS) always hold
+// their rest position (`core/paintOrder.ts`'s `flattenPaintOrder`, the same algorithm
+// `canvas.ts`'s initial build and `headless/composePose.ts` use). An unkeyed doc paints in
+// pure childOrder order exactly as before U2 (Edit mode's null poseTime() naturally
+// produces an all-zero z, which reduces the sort to a no-op — see that module's header).
+// This is EDITOR-side only; the .riv exporter maps animated draw order separately (U3),
+// and Lottie can't animate layer order at all.
 
 /**
- * Reconcile the canvas part-group paint order with the current effective z-order, moving
- * groups only when it actually changed. rootGroup's children ARE the part groups (onion +
- * overlay are separate sibling groups), so the live child order is read back cheaply and
- * compared to the desired order — self-correcting across buildCanvas rebuilds and
- * reorderCanvas (no external cache to invalidate). appendChild MOVES existing nodes, so a
- * reorder is a handful of DOM moves, never a rebuild; an unchanged order does zero DOM work,
- * which matters because this runs every frame during playback.
+ * Reconcile the canvas paint-run order with the current effective z-order, moving groups
+ * only when it actually changed. rootGroup's children ARE the run groups (onion + overlay
+ * are separate sibling groups), so the live child order is read back cheaply and compared
+ * to the desired order — self-correcting across buildCanvas rebuilds and reorderCanvas (no
+ * external cache to invalidate). appendChild MOVES existing nodes, so a reorder is a
+ * handful of DOM moves, never a rebuild; an unchanged order does zero DOM work, which
+ * matters because this runs every frame during playback. Keyed by `partId:runIndex` (not
+ * partId alone) since U2 lets one part contribute more than one run group.
  */
 function applyDrawOrder(doc: RigDoc, t: number | null): void {
   const root = ctx.rootGroup;
   if (!root) return;
-  const desired = drawOrder(doc.parts, (part) => effectiveZ(part, t))
-    .map((part) => part.id)
-    .filter((id) => ctx.partGroups.has(id));
+  const desired: { key: string; el: SVGGElement }[] = [];
+  for (const run of flattenPaintOrder(doc, (part) => effectiveZ(part, t))) {
+    const g = ctx.partGroups.get(run.partId)?.[run.runIndex];
+    if (g) desired.push({ key: `${run.partId}:${run.runIndex}`, el: g });
+  }
   const current: string[] = [];
   for (const child of Array.from(root.children)) {
-    const id = (child as SVGElement).dataset?.partId;
-    if (id) current.push(id);
+    const el = child as SVGElement;
+    const partId = el.dataset?.partId;
+    if (!partId) continue;
+    current.push(`${partId}:${el.dataset.run ?? '0'}`);
   }
-  if (sameOrder(desired, current)) return;
-  for (const id of desired) root.appendChild(ctx.partGroups.get(id)!);
+  if (sameOrder(desired.map((d) => d.key), current)) return;
+  for (const d of desired) root.appendChild(d.el);
 }
 
 function sameOrder(a: string[], b: string[]): boolean {

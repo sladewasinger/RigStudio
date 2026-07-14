@@ -9,11 +9,11 @@
  * SVG's authored rotation center).
  */
 
-import { state } from '../core/model';
+import { state, flattenPaintOrder } from '../core/model';
 import { ctx, SVG_NS } from './context';
 import { svgPoint } from './coords';
 import { renderPose } from './render';
-import { applyPathAttrs } from './partDom';
+import { applyPathAttrs, partOwnBBox } from './partDom';
 import { applyViewRect } from './camera';
 import { wireInteractions } from './interactions';
 
@@ -53,19 +53,36 @@ export function buildCanvas(container: HTMLElement): void {
   ctx.overlay.id = 'overlay';
   ctx.svg.appendChild(ctx.overlay);
 
+  // U2: paint order is `part.childOrder`'s slot flatten, NOT a flat one-group-per-part
+  // loop over doc.parts — a part whose own paths interleave with children (never the
+  // case for a doc that predates U2 or was never hand-edited into that shape, so this
+  // degenerates to EXACTLY the old loop's DOM for every doc built before this wave) gets
+  // one `<g data-part-id data-run>` per contiguous PATH run, built and appended in the
+  // already-correct flattened order — no separate reorder pass needed here. A constant
+  // zOf (rest/structural order) matches Edit mode; `applyDrawOrder` (render.ts) re-derives
+  // the Animate-mode keyed-z order every frame from the same algorithm.
   ctx.partGroups.clear();
-  for (const part of doc.parts) {
+  const byPart = new Map<string, SVGGElement[]>();
+  const partsById = new Map(doc.parts.map((p) => [p.id, p]));
+  for (const run of flattenPaintOrder(doc, () => 0)) {
     const g = document.createElementNS(SVG_NS, 'g');
-    g.dataset.partId = part.id;
-    for (const p of part.paths) {
+    g.dataset.partId = run.partId;
+    if (run.totalRuns > 1) g.dataset.run = String(run.runIndex);
+    const part = partsById.get(run.partId)!;
+    for (const pid of run.pathIds) {
+      const path = part.paths.find((p) => p.id === pid);
+      if (!path) continue;
       const el = document.createElementNS(SVG_NS, 'path');
-      applyPathAttrs(el, p);
-      el.dataset.pathId = p.id;
+      applyPathAttrs(el, path);
+      el.dataset.pathId = pid;
       g.appendChild(el);
     }
     ctx.rootGroup.appendChild(g);
-    ctx.partGroups.set(part.id, g);
+    const arr = byPart.get(run.partId) ?? [];
+    arr.push(g);
+    byPart.set(run.partId, arr);
   }
+  for (const [id, groups] of byPart) ctx.partGroups.set(id, groups);
   container.appendChild(ctx.svg);
 
   // Freeze-mode indicator: an always-present banner shown via CSS only while #canvas
@@ -83,8 +100,13 @@ export function buildCanvas(container: HTMLElement): void {
   for (const part of doc.parts) {
     const needsSeed = part.pivotHint || (part.pivot.x === 0 && part.pivot.y === 0);
     if (!needsSeed) continue;
-    const g = ctx.partGroups.get(part.id)!;
-    const box = g.getBBox();
+    const g = ctx.partGroups.get(part.id)?.[0];
+    if (!g) continue;
+    // Union bbox across every run (identical to `g.getBBox()` when the part has only
+    // one, the pre-U2 shape) — falls back to the same {0,0,0,0} an empty single group
+    // would have returned for a partless part, so a bone/group still seeds its pivot at
+    // its own local origin mapped into root space exactly as before.
+    const box = partOwnBBox(part.id) ?? { x: 0, y: 0, width: 0, height: 0 };
     const local = svgPoint(box.x + box.width / 2, box.y + box.height / 2);
     const m = g.getCTM();
     const rootM = ctx.rootGroup.getCTM();

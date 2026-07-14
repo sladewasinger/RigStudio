@@ -201,7 +201,20 @@ export interface ViewContext {
   rootGroup: SVGGElement | null;
   onionGroup: SVGGElement | null;
   overlay: SVGGElement | null;
-  partGroups: Map<string, SVGGElement>;
+  /**
+   * Every DOM `<g>` currently painting a part's OWN paths (U2: `RigPart.childOrder`
+   * runs — see `core/paintOrder.ts`), in run order. Every part has AT LEAST one entry
+   * (an empty-pathIds "anchor" group for a partless bone/group, or a doc whose
+   * childOrder is the synthesized paths-first shape — the pre-U2, single-group-per-part
+   * case); a part whose childOrder interleaves its own paths with children gets MORE
+   * than one, each carrying the part's SAME composed transform (flat siblings, like
+   * before — no DOM nesting, no inheritance change). Consumers that only need the
+   * part's transform/CTM may read any entry (`[0]`, via `partDom.ts`'s
+   * `primaryPartGroup`); consumers that need the part's own rendered GEOMETRY (bbox,
+   * `<path>` elements) must consider every entry (`partDom.ts`'s `partOwnBBox`/
+   * `partOwnPathElements`) — see that module's header for the full consumer audit.
+   */
+  partGroups: Map<string, SVGGElement[]>;
 
   // Which handle set the selected part shows in Setup mode; clicking the part again
   // toggles it (Inkscape behavior). Resets when the primary selection changes.
@@ -244,7 +257,7 @@ export const ctx: ViewContext = {
   rootGroup: null,
   onionGroup: null,
   overlay: null,
-  partGroups: new Map<string, SVGGElement>(),
+  partGroups: new Map<string, SVGGElement[]>(),
   handleMode: 'scale',
   handlePartId: null,
   enteredGroups: new Set<string>(),
@@ -262,6 +275,55 @@ export const ctx: ViewContext = {
 // nearby geometry). Animate posing stays free — keyed motion should never jump to art.
 export function snappingActive(): boolean {
   return state.snapEnabled && state.editorMode === 'setup';
+}
+
+// ---- U2 partGroups read helpers ----
+//
+// `ctx.partGroups` may hold MORE THAN ONE `<g>` per part (see the field's own doc comment
+// above) — these live in context.ts, the layering DAG's lowest tier, so every other
+// view/* module can reach them regardless of where it sits (the overlay cluster sits
+// BELOW view/partDom.ts, which owns WRITING the registry — see that module's header —
+// so these READS can't live there). `partDom.ts` re-exports all three for discoverability.
+
+/** A representative DOM group for `partId` — for reading the part's TRANSFORM/CTM only
+ *  (every run of a part shares the same composed transform — flat siblings, no DOM
+ *  nesting). Never use this for bbox/path-content — see `partOwnBBox`/`partOwnPathElements`. */
+export function primaryPartGroup(partId: string): SVGGElement | undefined {
+  return ctx.partGroups.get(partId)?.[0];
+}
+
+interface Box { x: number; y: number; width: number; height: number; }
+
+function unionBox(a: Box, b: Box): Box {
+  const x0 = Math.min(a.x, b.x), y0 = Math.min(a.y, b.y);
+  const x1 = Math.max(a.x + a.width, b.x + b.width), y1 = Math.max(a.y + a.height, b.y + b.height);
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+/**
+ * Root-space-PRE-transform union bbox of every one of `partId`'s own run groups that
+ * actually contains path content (an empty anchor run is excluded, not folded in as a
+ * spurious box at the origin). Every run's children live in the SAME local coordinate
+ * space (they share one transform), so a plain box union is valid before mapping through
+ * it — exactly reproduces the pre-U2 `g.getBBox()` call when a part has only one run.
+ * Null when the part currently renders no geometry of its own (a partless bone/group, or
+ * a not-yet-built part) — callers that need a fallback box supply their own `?? {0,0,0,0}`
+ * (see `canvas.ts`'s pivot seeding, which relies on that exact pre-U2 fallback shape).
+ */
+export function partOwnBBox(partId: string): Box | null {
+  let box: Box | null = null;
+  for (const g of ctx.partGroups.get(partId) ?? []) {
+    if (g.childElementCount === 0) continue;
+    const b = g.getBBox();
+    box = box ? unionBox(box, b) : b;
+  }
+  return box;
+}
+
+/** Every `<path>` DOM element belonging to `partId`'s OWN paths, across all its runs. */
+export function partOwnPathElements(partId: string): SVGPathElement[] {
+  const groups = ctx.partGroups.get(partId) ?? [];
+  return groups.flatMap((g) => Array.from(g.querySelectorAll<SVGPathElement>('[data-path-id]')));
 }
 
 export function nodeKey(pathId: string, cmdIndex: number): string {

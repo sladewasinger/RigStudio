@@ -7,7 +7,7 @@
  * orchestration.
  */
 
-import { ctx, SVG_NS } from './context';
+import { ctx, SVG_NS, partOwnBBox } from './context';
 import {
   state, RigPart, selectedParts, isEffectivelyHidden, isGroupLike,
 } from '../core/model';
@@ -118,7 +118,7 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
     // its fields) but draws NOTHING on canvas — no box, no handles.
     if (isEffectivelyHidden(part)) continue;
     const groupLike = isGroupLike(part, state.doc?.parts ?? []);
-    const g = ctx.partGroups.get(part.id);
+    const g = ctx.partGroups.get(part.id)?.[0]; // any run's transform — see context.ts
     let box: { x: number; y: number; width: number; height: number };
     let boxTransform: string;
     if (groupLike) {
@@ -128,9 +128,11 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
       boxTransform = rootTransform; // union bbox is already root-space
     } else {
       if (!g || part.paths.length === 0) continue;
+      const ownBox = partOwnBBox(part.id); // union across every run (U2 interleaving)
+      if (!ownBox) continue;
       const partTransform = g.getAttribute('transform') ?? '';
       boxTransform = [rootTransform, partTransform].filter(Boolean).join(' ');
-      box = g.getBBox();
+      box = ownBox;
     }
     const primary = part.id === state.selectedPartId;
     const pad = size * (groupLike ? 0.8 : 0.6);

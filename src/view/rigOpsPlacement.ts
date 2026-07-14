@@ -13,6 +13,7 @@ import { ctx } from './context';
 import { poseTime, effectivePivot, effectiveTip } from './pose';
 import { renderPose } from './render';
 import { bindPartsToBones } from './rigOpsBind';
+import { partOwnPathElements } from './partDom';
 
 /**
  * Fraction of a bone chain's length that actually lies inside an art part's FILLED
@@ -23,10 +24,10 @@ import { bindPartsToBones } from './rigOpsBind';
  * runs down does. Returns 0 when the DOM/geometry isn't measurable.
  */
 function chainFillCoverage(part: RigPart, segs: { p: { x: number; y: number }; q: { x: number; y: number } }[]): number {
-  const g = ctx.partGroups.get(part.id);
   const rootCTM = ctx.rootGroup?.getScreenCTM();
-  if (!g || !rootCTM || !ctx.svg) return 0;
-  const paths = Array.from(g.querySelectorAll<SVGPathElement>('path'))
+  if (!rootCTM || !ctx.svg) return 0;
+  // Every one of the part's own <path> elements, across all its runs (U2 interleaving).
+  const paths = partOwnPathElements(part.id)
     .filter((pe) => typeof pe.isPointInFill === 'function' && pe.getAttribute('fill') !== 'none');
   if (paths.length === 0) return 0;
   const invByPath = paths.map((pe) => {

@@ -109,7 +109,8 @@ export function renderOverlay(): void {
   // 2026-07-13: path selection is navigation, not posing, so it isn't Setup-gated).
   if (state.selectedPathId) {
     const part = selectedPart();
-    const g = part ? ctx.partGroups.get(part.id) : null;
+    // Any one of the part's run groups works — they share the same transform (U2).
+    const g = part ? ctx.partGroups.get(part.id)?.[0] : null;
     const path = part?.paths.find((p) => p.id === state.selectedPathId);
     if (part && g && path) {
       const hl = document.createElementNS(SVG_NS, 'path');

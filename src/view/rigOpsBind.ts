@@ -15,7 +15,7 @@ import { ctx, round3 } from './context';
 import {
   poseTime, groupTransformOf, chainMatOf, effectivePivot, effectiveTip, fullPoseTransform,
 } from './pose';
-import { applyPathAttrs } from './partDom';
+import { applyPathAttrs, partOwnPathElements } from './partDom';
 import { invalidateSkinCache } from './skinRender';
 import { renderPose } from './render';
 
@@ -270,13 +270,11 @@ export function captureFrozenBaseline(boneId: string, t: number | null): void {
   const chainIds = new Set(boneChain(doc.parts, boneId).map((b) => b.id));
   for (const part of doc.parts) {
     if (!part.skin || !part.skin.bones.some((b) => chainIds.has(b.id))) continue;
-    const g = ctx.partGroups.get(part.id);
-    if (g) {
-      for (const path of part.paths) {
-        const el = g.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
-        const dNow = el?.getAttribute('d');
-        if (dNow) path.d = dNow; // freeze the current look into the rest geometry
-      }
+    // Every one of the part's own <path> elements, across all its runs (U2 interleaving).
+    const byPathId = new Map(partOwnPathElements(part.id).map((el) => [el.dataset.pathId, el]));
+    for (const path of part.paths) {
+      const dNow = byPathId.get(path.id)?.getAttribute('d');
+      if (dNow) path.d = dNow; // freeze the current look into the rest geometry
     }
     for (const sb of part.skin.bones) {
       const bone = doc.parts.find((p) => p.id === sb.id);
