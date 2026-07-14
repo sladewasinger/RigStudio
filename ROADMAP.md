@@ -44,6 +44,15 @@ be drawn from.
   animation): Rive supports it (our keyed-opacity export already targets
   per-paint SolidColor) and the model could grow path channels — real
   feature scope, his call whether the timeline should ever list paths.
+- **Unified child ordering (the full Inkscape model)** — user friction
+  2026-07-13 ("I have gimp/inkscape in mind… these are all paths"): today a
+  part's own paths are a separate bucket that always paints BELOW its child
+  parts, so paths can't interleave with sub-groups — and the IMPORTER
+  silently restacks any SVG where a path follows a sub-group (an import
+  fidelity bug by the user's standard). The cure is one ordered MIXED child
+  list per part, everywhere (panel/canvas/exporters — Rive's global drawable
+  order can express interleaving). Major model surgery; the auto-promote
+  drag fix is the compatible stopgap. HIS CALL when/whether to unify fully.
 - **Unified skeleton Phase 2 — IK across attachments**: does grabbing a hand
   FABRIK through the spine? Default OFF (IK chain resolution stops at
   attached roots — safer, predictable); the full-body solve is a flag to
