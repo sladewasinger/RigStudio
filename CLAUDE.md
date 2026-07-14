@@ -513,10 +513,18 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   a; `a` may be null for a pin-only entry). CRITICAL MENTAL MODEL: a/b/t choose WHICH
   BONE CARRIES the node — they never mean "stays put" (every bone influence moves when
   the chain poses). "Stays with the body" is `pin` (0..1, user feature 2026-07-13,
-  b45f323): the fraction of the node held at its BIND-POSE position —
-  `deformed = lerp(lbsResult, bindPos, pin)` — the inspector's "Pin to body" slider.
-  .riv parity: any pinned skin emits one synthetic never-animated anchor RootBone +
-  Tendon whose weight share is the pin (zero pins ⇒ byte-identical output; both golden
+  b45f323): the fraction of the node held at its RIGID-EQUIVALENT position — where the
+  vertex would render if the part were NOT skinned: `deformed = lerp(lbsResult,
+  rigidEquivalent, pin)`, `rigidEquivalent = fullPose(part, t) · skin.restWorldInv ·
+  bindPos` (tracking fix 2026-07-14, bcc5ac6: the original plain-bindPos target nailed
+  pinned nodes to WORLD space, so they froze when the parent group moved;
+  `skin.restWorldInv` is an optional part-level bind record — the part analogue of
+  each bone's — written at bind, refreshed by freeze captures, absent = identity so
+  legacy docs are exact). The inspector's "Pin to body" slider drives it. .riv parity:
+  any pinned skin emits one synthetic never-animated anchor RootBone + Tendon whose
+  weight share is the pin — the anchor is a CHILD of the part's Node, so the RUNTIME
+  had rigid-equivalent tracking all along; the editor now matches it (parity rule
+  pinned in io/riv/skin.ts's header; zero pins ⇒ byte-identical output, both golden
   pins asserted unmoved). Overrides are keyed by the path COMMAND index (post-bind geometry is all
   M/L/C/Z, so a command index IS its node); overriding node i governs its endpoint,
   its incoming handle, and the next segment's outgoing handle so the corner stays

@@ -214,6 +214,30 @@ completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
 
+### Pin-to-body tracking fix (the "pinned nodes frozen in place" report)
+
+*2026-07-14, bcc5ac6 (worktree wave). Reproduced on the user's exact save:
+pin=1 armpit nodes sat 94.5/98.1 px from their rigid-equivalent position at
+t=500 of his dance clip — nailed to WORLD space, because the pin target was
+the raw bind coordinate (a root-space constant). The target is now the
+RIGID-EQUIVALENT pose: `fullPose(part,t) · skin.restWorldInv · bindPos`,
+sampled per frame like bone deltas (gated by a cached hasPin flag — pin-less
+parts run the byte-identical old path). `skin.restWorldInv` is a NEW optional
+part-level bind record (the part analogue of each bone's): without it the
+plain fullPose target double-applies after a freeze capture on a rest-posed
+part (measured 21.2 px, PIN9 pins it); written at bind, mirrored in
+mcp/bindHeadless.ts, refreshed by captureFrozenBaseline/refreshBindForChain,
+normalizeDoc-validated, absent = identity (legacy docs exact, zero
+migration). PARITY: the .riv pin-anchor RootBone is a child of the part's
+Node, so the RUNTIME tracked all along — the editor now matches (rule pinned
+in io/riv/skin.ts's header; no exporter change; both golden pins +
+riv-check's pinnedSkinnedCheck unmoved). Live on his file: a 58.1 px group
+drag carries pin=1 nodes 58.1 px with 0.000 px rigid-drift while an unpinned
+node stays 129.5 px away (the arm still deforms). Mutation checks: plain-
+bindPos revert fails exactly PIN5–8 + the user-file repro; record ignored
+fails exactly PIN9. Gates: build clean, 811 unit / 322 interaction on
+integrated main.*
+
 ### Group second-click rotate fix (the "can't rotate Girl" report)
 
 *2026-07-14, 52ac4d3 (worktree wave). Reproduced on the user's exact save via
