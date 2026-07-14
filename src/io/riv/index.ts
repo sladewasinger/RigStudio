@@ -5,7 +5,9 @@
  * typeKey/propertyKey table + shared enums/constants + the `argb` color packer),
  * `scene.ts` (the `exportRiv()` entry point: Backboard/Artboard/Node-per-part + Shape/
  * PointsPath geometry mapping, incl. the draw-order reversal rule and hidden-part
- * exclusion), `animation.ts` (keyframe channel planning + LinearAnimation/KeyedObject/
+ * exclusion), `drawableOrder.ts` (U3: the global drawable-emission order — the childOrder
+ * slot flatten of core/paintOrder.ts reversed into Rive's first-in-file = topmost
+ * convention), `animation.ts` (keyframe channel planning + LinearAnimation/KeyedObject/
  * KeyedProperty/KeyFrame emission, incl. keyed opacity via SolidColor KeyFrameColor),
  * `drawRules.ts` (keyed `z` draw order via DrawRules/DrawTarget + KeyFrameId), and
  * `stateMachine.ts` (the state-machine object tree). Implementation modules never import

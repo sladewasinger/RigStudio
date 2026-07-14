@@ -66,6 +66,34 @@
  *
  * DrawTarget objects are cached per (owning part's DrawRules, anchor part, placement) since
  * a DrawTarget's parentId is fixed to one DrawRules (can't be shared across parts).
+ *
+ * U3 DIVERGENCE NOTE (keyed z vs childOrder slots — documented, deliberately NOT
+ * redesigned in the U3 wave; DEFERRED FOR AUSTIN). This planner was built under the
+ * pre-U3 GLOBAL-order semantics and keeps them; since U3 the editor's animate-time z
+ * re-sort is SIBLING-SCOPED (core/paintOrder.ts re-sorts PART slots within their
+ * parent's childOrder only) and the static drawable order is the slot flatten. For
+ * every doc whose childOrders are the synthesized paths-first shape (all docs until U4
+ * lets a user hand-interleave) the two models coincide and the export is byte-identical
+ * to pre-U3; for a hand-INTERLEAVED doc that ALSO keys z, editor and runtime can
+ * diverge in three narrow ways:
+ *   (a) SCOPE: rule 2 above ranks core/structuralOps.ts's `drawOrder` — the doc-wide,
+ *       hierarchy-blind z sort — to pick neighbors/anchors, so a z-keyed part nested
+ *       under an interleaved parent may resolve different neighbors than the canvas's
+ *       sibling-scoped re-sort shows.
+ *   (b) ANCHOR GRANULARITY: the DrawTarget anchors to the anchor part's FIRST-EMITTED
+ *       Shape (partShapeIndex). Pre-U3 a part's Shapes were one contiguous file-order
+ *       block, so before/after that shape bracketed the whole part; a MULTI-RUN anchor
+ *       part's Shapes are now split around its interleaved children, and the single
+ *       anchor only brackets its topmost run.
+ *   (c) MOVER GRANULARITY: an active target splices ALL the z-keyed part's own Shapes
+ *       (every run) to the anchor together, while its interleaved child parts hold
+ *       their file positions — the editor instead moves the part's whole SLOT (subtree
+ *       included). Rule 1's hasUnguardedShapeDescendant already refuses the machinery
+ *       to any part with a non-z-keyed shape-owning descendant, so the exposed case is
+ *       a multi-run part whose interleaved children own no shapes (or are themselves
+ *       z-keyed).
+ * Reconciling this (slot-aware neighbor ranking + per-run targets, or a redesigned
+ * mechanism) is a follow-up decision, not a silent change.
  */
 
 import { Clip, RigDoc, RigPart, drawOrder, sampleKeyList, subtreeIds } from '../../core/model';

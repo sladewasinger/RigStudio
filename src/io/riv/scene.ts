@@ -17,9 +17,13 @@
  *   - each RigPath -> Shape + PointsPath(s) of cubic vertices from pathToCubics, with
  *     Fill/Stroke SolidColors; rest scale/skew and baked transforms flattened into the
  *     geometry, arcs converted to cubics, stroke width scaled by the baked matrix norm;
- *   - shape clusters are emitted in REVERSE paint order because Rive draws the
+ *   - drawables (Shapes) are emitted in REVERSE paint order because Rive draws the
  *     first drawable in the file LAST (topmost) — see the draw-order comment below
- *     citing rive-runtime/src/artboard.cpp;
+ *     citing rive-runtime/src/artboard.cpp. Since U3 the paint order being reversed
+ *     is the childOrder SLOT FLATTEN (drawableOrder.ts over core/paintOrder.ts — the
+ *     same sequence the live canvas paints), so a part's own path runs interleave
+ *     with its children; synthesized/legacy docs degenerate to the old two-bucket
+ *     order byte-identically;
  *   - keyed values are ABSOLUTE; rest fills only unkeyed channels (a channel with no
  *     keyframes stays a static Node property, a keyed channel becomes a LinearAnimation
  *     KeyedProperty, emitted by animation.ts). Easing lives on the ARRIVING keyframe and
@@ -46,6 +50,7 @@ import { artboardFrame, RigDoc, RigPart, RigPath } from '../../core/model';
 import { assemble, Scene } from './writer';
 import { emitAnimations, OpacityColorTarget } from './animation';
 import { emitStateMachines } from './stateMachine';
+import { drawableEmissionOrder } from './drawableOrder';
 import { setupDrawRules } from './drawRules';
 import { bakedMatrix, pathToLocalSubpaths } from './geometry';
 import {
@@ -191,37 +196,58 @@ export function exportRiv(doc: RigDoc): Uint8Array {
   // order); drawInternal() iterates `drawable = m_FirstDrawable; ...; drawable =
   // drawable->prev`. Net effect: the FIRST drawable component in the file is drawn
   // LAST — first-in-file = TOPMOST, like the Rive editor's layer panel. The studio's
-  // convention is the opposite (doc.parts order is paint order, last = topmost; a
-  // part's paths array likewise). So shape clusters are emitted fully REVERSED:
-  // parts in reverse doc order, each part's paths in reverse array order. Only Shape
-  // (typeKey 3) is a Drawable — plain Nodes and PointsPaths never enter m_Drawables —
-  // and every part Node was emitted above, so all parentIds still point backward and
-  // the animation objectIds (recorded in partIndex at node-emit time) are unaffected.
+  // paint order is the opposite (bottom→top), and since U3 it is the childOrder SLOT
+  // FLATTEN (core/paintOrder.ts — the same sequence the live canvas and headless
+  // composePose paint), not the old two-bucket "reversed parts × reversed paths": the
+  // walk below iterates drawableOrder.ts's fully REVERSED flatten, so an interleaved
+  // childOrder (a path run above a nested child part) exports with the editor's exact
+  // stacking, while synthesized/legacy docs (one run per part) emit byte-identically
+  // to the pre-U3 loop. Only Shape (typeKey 3) is a Drawable — plain Nodes and
+  // PointsPaths never enter m_Drawables — and every part Node was emitted above, so
+  // all parentIds still point backward and the animation objectIds (recorded in
+  // partIndex at node-emit time) are unaffected by any drawable reordering.
   //
-  // LAYERS EYE (full exclusion, completed this wave): a hidden part already got no Node
-  // above, so it can't reach here as a PARENT (`partIndex.get(part.id)!` below is only
-  // ever called for a part whose Node was actually emitted); this loop's own hidden check
-  // additionally skips a hidden part's OWN Shapes (redundant with the Node-level skip for
-  // any part reached only through its own doc.parts slot, but kept as a direct guard since
-  // this loop iterates ALL parts independently of the Node pass above).
+  // LAYERS EYE (full exclusion): a hidden part already got no Node above, so it can't
+  // reach here as a PARENT (`partIndex.get(part.id)!` below is only ever called for a
+  // part whose Node was actually emitted); this walk's own hidden check additionally
+  // skips a hidden part's runs (redundant with the Node-level skip for any part reached
+  // only through its own runs, but kept as a direct guard since the emission order
+  // visits ALL parts independently of the Node pass above).
   //
-  // partShapeIndex records, per part, the component index of the FIRST Shape emitted for
-  // it (arbitrary among a multi-path part's shapes — they're always a contiguous file-order
-  // block, see drawRules.ts) — used as the anchor drawable for OTHER parts' keyed z draw
-  // order. opacityTargets records every Fill/Stroke SolidColor this part owns (with its
-  // base path opacity) so a KEYED `opacity` channel can animate them (animation.ts).
+  // partShapeIndex records, per part, the component index of the FIRST Shape emitted
+  // for it (its topmost run's topmost path) — used as the anchor drawable for OTHER
+  // parts' keyed z draw order. Pre-U3 a part's shapes were always one contiguous
+  // file-order block; a MULTI-RUN part's no longer are, which narrows what that single
+  // anchor can express — see the U3 divergence note in drawRules.ts's header.
+  // opacityTargets records every Fill/Stroke SolidColor this part owns (with its base
+  // path opacity) so a KEYED `opacity` channel can animate them (animation.ts).
+  //
+  // Skeletal deformation plans (skinned parts) resolve ONCE PER PART at its first
+  // emitted run (memoized below): buildSkinPlan is pure, but attachPinAnchor EMITS the
+  // synthetic pin-anchor RootBone (skin.ts's PIN-TO-REST), which must exist exactly
+  // once and before any of the part's paths — running it per run would mint one anchor
+  // per run. For single-run parts (every synthesized doc) this is byte-for-byte the
+  // pre-U3 per-part resolution.
   const partShapeIndex = new Map<string, number>();
   const opacityTargets = new Map<string, OpacityColorTarget[]>();
-  for (let pi = doc.parts.length - 1; pi >= 0; pi--) {
-    const part = doc.parts[pi];
+  const skinPlans = new Map<string, SkinPlan | null>();
+  for (const run of drawableEmissionOrder(doc)) {
+    const part = byId.get(run.partId)!;
     if (hiddenIds.has(part.id)) continue; // Layers eye: fully excluded, no Shapes either.
-    // Skeletal deformation plan (skinned parts): resolved once per part, null = the
-    // rigid fallback (skin.ts's buildSkinPlan documents when and why). PIN-TO-REST: a
-    // no-op unless the plan has a pinned node (skin.ts's attachPinAnchor/header).
-    const skinPlan = part.skin ? buildSkinPlan(doc, part, partIndex, ox, oy) : null;
-    if (skinPlan) attachPinAnchor(scene, doc, part, skinPlan, partIndex.get(part.id)!, ox, oy);
-    for (let qi = part.paths.length - 1; qi >= 0; qi--) {
-      const shapeIndex = emitShape(scene, part, part.paths[qi], partIndex.get(part.id)!, opacityTargets, skinPlan);
+    let skinPlan = skinPlans.get(part.id);
+    if (skinPlan === undefined) {
+      skinPlan = part.skin ? buildSkinPlan(doc, part, partIndex, ox, oy) : null;
+      if (skinPlan) attachPinAnchor(scene, doc, part, skinPlan, partIndex.get(part.id)!, ox, oy);
+      skinPlans.set(part.id, skinPlan);
+    }
+    const pathsById = new Map(part.paths.map((p) => [p.id, p]));
+    for (const pathId of run.pathIds) {
+      const rigPath = pathsById.get(pathId);
+      // A dangling path slot (stale childOrder inside the documented self-healing
+      // window — core/childOrder.ts's KNOWN GAP note) skips exactly like the U2
+      // renderers do; reconcileChildOrder repairs it at the next structural op/load.
+      if (!rigPath) continue;
+      const shapeIndex = emitShape(scene, part, rigPath, partIndex.get(part.id)!, opacityTargets, skinPlan);
       if (shapeIndex !== null && !partShapeIndex.has(part.id)) partShapeIndex.set(part.id, shapeIndex);
     }
   }

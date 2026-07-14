@@ -13,6 +13,16 @@
  * axis flipping is needed; the reference frame's origin (the artboard rect when the
  * doc has one enabled, else the viewBox) is baked into geometry and pivots.
  *
+ * U3 DOCUMENTED LIMITATION (unified child ordering): this exporter keeps the PATHS-FIRST
+ * approximation of `RigPart.childOrder` — one shape layer per part means a part's own
+ * paths are one indivisible block that cannot interleave with its CHILD parts' layers
+ * (stacking is per-LAYER; the paths live inside a single layer's `shapes`). An
+ * interleaved childOrder (a path run stacked above a nested child part) therefore
+ * renders its own paths entirely below its children here, exactly like every
+ * synthesized/legacy doc. The .riv exporter DOES express slots (io/riv/drawableOrder.ts
+ * — the U3 wave); Lottie is frozen per the standing ruling (may be deleted), so this
+ * stays a documented limitation, not a queued fix.
+ *
  * A keyed `z` (draw-order) channel is SILENTLY IGNORED here: Lottie layer order is fixed
  * for a composition (there is no animatable stacking property), so animated draw order
  * cannot be represented. Only the authored/rest stacking survives, via the doc.parts layer

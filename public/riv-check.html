@@ -565,6 +565,95 @@
         return { rest, bent, checks, pass };
       }
 
+      /**
+       * U3 INTERLEAVED-STACKING pixel check (unified child ordering — exporters,
+       * 2026-07-14): a parent part whose childOrder SANDWICHES a child part between two
+       * of its own path runs — `stack` paints pBottom (blue, x 10..50), then child
+       * `meat` (red, x 20..70), then pTop (green, x 30..90), all y 40..60, exactly what
+       * the editor canvas shows for that slot list. The discriminating pixel is the
+       * triple-overlap region (x 30..50): the pre-U3 exporter emitted a part's own
+       * paths as one block BELOW its children (two-bucket order), which would put RED
+       * on top there; the slot flatten puts GREEN (pTop's run) on top. Rendered 1:1 on
+       * the 100x100 canvas via the same drawNow flush sequence as skinnedCheck.
+       */
+      function interleavedStackDoc() {
+        const rect = (id, x0, x1, fill) => ({
+          id, label: id, d: `M ${x0},40 L ${x1},40 L ${x1},60 L ${x0},60 Z`,
+          fill, fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1, transform: '',
+        });
+        const stack = {
+          id: 'p_stack', label: 'stack', kind: 'art', transform: '', pivot: { x: 0, y: 0 },
+          pivotHint: null, rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+          parentId: null,
+          paths: [rect('pBottom', 10, 50, '#336699'), rect('pTop', 30, 90, '#99cc33')],
+          childOrder: [
+            { kind: 'path', id: 'pBottom' },
+            { kind: 'part', id: 'p_meat' },
+            { kind: 'path', id: 'pTop' },
+          ],
+        };
+        const meat = {
+          id: 'p_meat', label: 'meat', kind: 'art', transform: '', pivot: { x: 0, y: 0 },
+          pivotHint: null, rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+          parentId: 'p_stack',
+          paths: [rect('meat_p', 20, 70, '#cc3366')],
+        };
+        return {
+          name: 'interleaved_stack', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+          parts: [stack, meat], rootPivot: { x: 50, y: 50 },
+          clips: [{ name: 'idle', duration: 1000, tracks: [] }],
+        };
+      }
+
+      async function interleavedStackCheck() {
+        const bytes = exportRiv(interleavedStackDoc());
+        const canvas = document.getElementById('c2');
+        const inst = await loadRive(bytes, canvas);
+        const rt = inst.runtime, ab = inst.artboard;
+        const ctx2d = canvas.getContext('2d');
+        const px = (x, y) => Array.from(ctx2d.getImageData(x, y, 1, 1).data);
+        const isBlue = (p) => p[3] > 200 && p[2] > 120 && p[0] < 100 && p[1] < 140;
+        const isRed = (p) => p[3] > 200 && p[0] > 150 && p[1] < 120 && p[2] < 160;
+        const isGreen = (p) => p[3] > 200 && p[1] > 150 && p[0] < 200 && p[2] < 120;
+        const drawNow = () => {
+          const renderer = inst.renderer;
+          renderer.clear();
+          renderer.save();
+          inst.alignRenderer();
+          ab.draw(renderer);
+          renderer.restore();
+          renderer.flush();
+          if (typeof rt.resolveAnimationFrame === 'function') rt.resolveAnimationFrame();
+        };
+
+        ab.advance(0);
+        drawNow();
+        const samples = {
+          blueOnly: px(15, 50), // pBottom alone
+          redOverBlue: px(25, 50), // meat over pBottom (child above the LOWER run)
+          sandwich: px(45, 50), // all three overlap — pTop must win (the U3 proof)
+          greenOverRed: px(60, 50), // pTop over meat (upper run above the child)
+          greenOnly: px(80, 50), // pTop alone
+        };
+
+        const pixelsReadable = Object.values(samples).some((p) => p.some((v) => v !== 0));
+        const checks = {
+          loadedWithoutError: true,
+          pixelsReadable,
+          lowerRunVisible: isBlue(samples.blueOnly),
+          childAboveLowerRun: isRed(samples.redOverBlue),
+          upperRunAboveChild_sandwich: isGreen(samples.sandwich), // pre-U3 export: RED here
+          upperRunAboveChild_pair: isGreen(samples.greenOverRed),
+          upperRunVisible: isGreen(samples.greenOnly),
+        };
+        const hard = pixelsReadable
+          ? ['lowerRunVisible', 'childAboveLowerRun', 'upperRunAboveChild_sandwich',
+            'upperRunAboveChild_pair', 'upperRunVisible']
+          : [];
+        const pass = checks.loadedWithoutError && hard.every((k) => checks[k]);
+        return { samples, checks, pass };
+      }
+
       async function main() {
         try {
           if (!window.rive) throw new Error('Rive runtime failed to load');
@@ -575,6 +664,7 @@
           const drawOrderOpacityHidden = await drawOrderOpacityHiddenCheck();
           const skinned = await skinnedCheck();
           const pinnedSkinned = await pinnedSkinnedCheck();
+          const interleavedStack = await interleavedStackCheck();
           report({
             status: 'ok',
             note: 'Transform-level checks + pixel-level skinned articulation (drawNow flush).',
@@ -584,6 +674,7 @@
             drawOrderOpacityHidden,
             skinned,
             pinnedSkinned,
+            interleavedStack,
           });
         } catch (e) {
           report({ status: 'error', error: String((e && e.message) || e) });
