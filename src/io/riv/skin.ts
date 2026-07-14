@@ -51,6 +51,12 @@
  * class as CLAUDE.md's keyed-scale-propagation note). A skin with ZERO pinned nodes never
  * calls into this machinery at all (`attachPinAnchor` is a strict no-op) — the byte-
  * identity requirement for pin-less docs (goldenRiv.test.ts's two pins) depends on that.
+ * EDITOR↔RUNTIME PARITY RULE (pin-tracking fix 2026-07-14): because the anchor is a
+ * child of the part's Node, the runtime's pin target rides the node chain's animated
+ * channels relative to its static rest — and the editor's per-frame pin target
+ * (view/skinRender.ts: `fullPose(part,t) · skin.restWorldInv · bindPos`) implements the
+ * SAME rigid-equivalent semantics, so pinned nodes track parent-group / own-pose motion
+ * identically in both; keep the two targets in step if either side changes.
  */
 
 import { RigDoc, RigPart, SkinOverride } from '../../core/model';

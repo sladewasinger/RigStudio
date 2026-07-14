@@ -167,8 +167,21 @@ export interface RigPart {
    * that node's weight (see SkinOverride). Keyed by the path COMMAND index (post-bind
    * geometry is all M/L/C/Z, so a command index === its node); structural node edits
    * shift those indexes, so they drop the affected path's overrides.
+   *
+   * `restWorldInv` is the PART-level analogue of SkinBone.restWorldInv (pin-tracking
+   * fix 2026-07-14): the inverse of the part's own full-pose world matrix at bind time,
+   * so the PIN-TO-REST render target `fullPose(part,t) · restWorldInv · bindPos` is
+   * exactly the rigid-equivalent pose — identity delta at the bind moment, riding every
+   * later ancestor/own pose change the way an unskinned vertex would. Written by
+   * `bindPartsToBones` and refreshed by the freeze bind-refresh cycle alongside the
+   * per-bone records (view/rigOpsBind.ts); absent (legacy docs) reads as identity,
+   * which is exact for the overwhelmingly common bind-under-identity-chain case.
    */
-  skin?: { bones: SkinBone[]; overrides?: Record<string, Record<string, SkinOverride>> } | null;
+  skin?: {
+    bones: SkinBone[];
+    overrides?: Record<string, Record<string, SkinOverride>>;
+    restWorldInv?: Mat;
+  } | null;
   paths: RigPath[];
   /**
    * Layers-panel visibility (the eye icon). EDITOR-ONLY, doc data but NEVER keyable and

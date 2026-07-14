@@ -871,6 +871,44 @@ describe('normalizeDoc', () => {
     expect(skinned.skin?.bones.map((b) => b.id)).toEqual(['good_bone']);
   });
 
+  it('drops a malformed/non-finite PART-level skin.restWorldInv and keeps a finite one', () => {
+    const goodBone = {
+      id: 'b1',
+      restWorldInv: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 },
+      bindSeg: { p: { x: 0, y: 0 }, q: { x: 1, y: 0 } },
+    };
+    const doc = makeDoc([
+      makePart('b1', { kind: 'bone' }),
+      makePart('nan_record', {
+        skin: {
+          bones: [{ ...goodBone }],
+          restWorldInv: { a: NaN, b: 0, c: 0, d: 1, e: 0, f: 0 },
+        },
+      }),
+      makePart('bad_shape', {
+        skin: {
+          bones: [{ ...goodBone }],
+          restWorldInv: { a: 1, b: 0 } as unknown as { a: number; b: number; c: number; d: number; e: number; f: number },
+        },
+      }),
+      makePart('good_record', {
+        skin: {
+          bones: [{ ...goodBone }],
+          restWorldInv: { a: 0.966, b: -0.259, c: 0.259, d: 0.966, e: -3.5, f: 2.25 },
+        },
+      }),
+      makePart('absent_record', { skin: { bones: [{ ...goodBone }] } }),
+    ]);
+    const out = normalizeDoc(doc);
+    const find = (id: string) => out.parts.find((p) => p.id === id)!;
+    expect(find('nan_record').skin!.restWorldInv, 'non-finite record dropped').toBeUndefined();
+    expect(find('bad_shape').skin!.restWorldInv, 'wrong-shape record dropped').toBeUndefined();
+    expect(find('good_record').skin!.restWorldInv, 'finite record kept intact')
+      .toEqual({ a: 0.966, b: -0.259, c: 0.259, d: 0.966, e: -3.5, f: 2.25 });
+    expect(find('absent_record').skin!.restWorldInv, 'absent stays absent (legacy identity)')
+      .toBeUndefined();
+  });
+
   it('heals a present-but-degenerate bone tip (zero-length or non-finite) to a usable length, and leaves boneTip:null alone', () => {
     const doc = makeDoc([
       makePart('zero_len', { kind: 'bone', pivot: { x: 10, y: 20 }, boneTip: { x: 10, y: 20 } }),
@@ -1543,6 +1581,10 @@ function maximalDoc(): RigDoc {
               bindSeg: { p: { x: 70, y: 55 }, q: { x: 90, y: 55 } },
             },
           ],
+          // The PART-level bind record (pin-tracking fix 2026-07-14) — a deliberately
+          // non-identity matrix so the round trip proves the field itself persists.
+          restWorldInv: { a: 0.966, b: -0.259, c: 0.259, d: 0.966, e: -3.5, f: 2.25 },
+          overrides: { hand_path_1: { '2': { a: null, b: null, t: 0, pin: 0.7 } } },
         },
         paths: [makePath2('hand_path_1', 'palm', 'M 100,50 L 110,50 L 110,60 L 100,60 Z', 'zzzz', {
           fill: '#ffddaa', fillOpacity: 1, stroke: '#552200', strokeWidth: 1, strokeOpacity: 1, transform: '',

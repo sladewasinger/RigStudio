@@ -80,8 +80,15 @@ export function bindPartsToBones(artsIn: RigPart[], bones: RigPart[]): void {
 
   for (const part of arts) {
     if (part.skin) {
-      const overrides = part.skin.overrides;
-      part.skin = { bones: freshBones(), ...(overrides ? { overrides } : {}) };
+      // Re-bind of an already-skinned part: geometry is NOT re-baked (it is already in
+      // its bind pose), so the part-level restWorldInv reference (see below) must be
+      // KEPT as-is, exactly like the overrides.
+      const { overrides, restWorldInv } = part.skin;
+      part.skin = {
+        bones: freshBones(),
+        ...(overrides ? { overrides } : {}),
+        ...(restWorldInv ? { restWorldInv } : {}),
+      };
       invalidateSkinCache(part.id);
       continue;
     }
@@ -129,7 +136,16 @@ export function bindPartsToBones(artsIn: RigPart[], bones: RigPart[]): void {
     // now, so this matches the FINAL post-bind chain matrix the render pipeline will
     // actually use — not a stale pre-bake one (see the function doc).
     part.pivot = applyMat(invertMat(chainMatOf(part, null)), rootPivot.x, rootPivot.y);
-    part.skin = { bones: freshBones() };
+    // The PART-level bind record (pin-tracking fix, docTypes.ts): inverse of the part's
+    // full-pose world at the bind moment, so the PIN-TO-BODY render target
+    // `fullPose(part,t) · restWorldInv · bindPos` (skinRender.ts) is identity right
+    // now — the exact part-level analogue of each bone's restWorldInv above. Evaluated
+    // AFTER the own pose was zeroed, so it captures the (already-live, post-bake)
+    // ancestor chain matrix — same reasoning as the pivot line's chainMatOf comment.
+    part.skin = {
+      bones: freshBones(),
+      restWorldInv: invertMat(matrixOfTransform(fullPoseTransform(part, null))),
+    };
     invalidateSkinCache(part.id);
     bakedArtIds.add(part.id);
   }
@@ -236,6 +252,10 @@ export function refreshBindForChain(boneId: string, t: number | null): void {
       const qq = effectiveTip(bone, t) ?? { x: pp.x + 5, y: pp.y };
       sb.bindSeg = { p: { x: pp.x, y: pp.y }, q: { x: qq.x, y: qq.y } };
     }
+    // The PART-level record refreshes with the per-bone ones (one bind reference, all
+    // of it refreshed together): pinned nodes hold the frozen look exactly like the
+    // bone-driven ones. Also HEALS a legacy doc's absent record on first freeze use.
+    part.skin.restWorldInv = invertMat(matrixOfTransform(fullPoseTransform(part, t)));
   }
 }
 
@@ -284,6 +304,12 @@ export function captureFrozenBaseline(boneId: string, t: number | null): void {
       const qq = effectiveTip(bone, t) ?? { x: pp.x + 5, y: pp.y };
       sb.bindSeg = { p: { x: pp.x, y: pp.y }, q: { x: qq.x, y: qq.y } };
     }
+    // Refresh the PART-level pin reference with the capture (see refreshBindForChain):
+    // the freshly baked `d` above IS the pinned nodes' current look, so the pin target
+    // `fullPose(part,t) · restWorldInv · d` must be identity over it — without this, a
+    // rest-posed skinned part's pose would double-apply onto the re-baked geometry the
+    // moment a freeze gesture starts (pinned nodes would visibly jump mid-gesture).
+    part.skin.restWorldInv = invertMat(matrixOfTransform(fullPoseTransform(part, t)));
     invalidateSkinCache(part.id);
   }
 }

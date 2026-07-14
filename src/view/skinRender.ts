@@ -18,8 +18,11 @@ import { fullPoseTransform, effectivePivot, effectiveTip } from './pose';
 
 // Runtime cache: parsed rest geometry + per-point weights + per-point pins, invalidated
 // when the rest path data changes (node edits) or the binding (incl. pins) changes.
+// `hasPin` gates the per-frame pin-target matrix in renderSkinnedPart — pin-less parts
+// (the overwhelming majority) never touch that math at all.
 const skinCache = new Map<string, {
   sig: string;
+  hasPin: boolean;
   paths: {
     id: string; cmds: PathCmd[]; pts: { x: number; y: number }[][];
     weights: number[][]; pins: number[];
@@ -85,7 +88,11 @@ function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get
       : flat.map(() => 0);
     return { id: p.id, cmds, pts, weights, pins };
   });
-  const entry = { sig, paths };
+  const entry = {
+    sig,
+    hasPin: paths.some((pd) => pd.pins.some((v) => v > 0)),
+    paths,
+  };
   skinCache.set(part.id, entry);
   return entry;
 }
@@ -150,6 +157,29 @@ export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | nul
     return { m, bx: b.bindSeg.p.x, by: b.bindSeg.p.y, ax, ay, s };
   });
 
+  // PIN-TO-BODY target (tracking fix 2026-07-14, user report "pinned nodes are frozen in
+  // place when I move the parent body"): the pin lerp target is the RIGID-EQUIVALENT
+  // pose — where a vertex at its bind coordinate would render if the part were NOT
+  // skinned — i.e. `fullPose(part, t) · skin.restWorldInv · bindPos`, sampled per frame
+  // exactly like the bone deltas above (same `t` = poseTime()'s Animate/Edit
+  // discriminator, same view/pose.ts wrappers so the SM-preview sampler threads
+  // through). `skin.restWorldInv` (the part-level bind record, see docTypes.ts) makes
+  // the delta identity at the bind moment; absent (legacy docs) reads as identity,
+  // which is exact whenever the chain was unposed at bind. This mirrors the .riv
+  // runtime's pin-anchor semantics (io/riv/skin.ts: the anchor RootBone is a CHILD of
+  // the part's Node, so its per-frame delta is the node chain's own animated motion) —
+  // the editor and runtime now agree that pinned nodes ride the part's rigid pose.
+  // FREEZE interplay: captureFrozenBaseline re-bakes rest geometry at the current pose
+  // AND refreshes skin.restWorldInv to invert(fullPose(part, t)) alongside the per-bone
+  // records, so this product returns to identity over the newly captured look — a
+  // freeze reshape holds pinned nodes byte-stable (without the record refresh, a
+  // rest-posed part's pose would double-apply onto the re-baked geometry).
+  let pinMat: Mat | null = null;
+  if (data.hasPin) {
+    const rigid = matrixOfTransform(fullPoseTransform(part, t));
+    pinMat = skin.restWorldInv ? multiply(rigid, skin.restWorldInv) : rigid;
+  }
+
   let allFinite = true;
   for (const pd of data.paths) {
     let k = 0;
@@ -171,12 +201,16 @@ export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | nul
           x += w[bi] * (m.a * sx + m.c * sy + m.e);
           y += w[bi] * (m.b * sx + m.d * sy + m.f);
         }
-        // PIN-TO-REST: hold the fraction `pin` of this point at its own bind/rest
-        // coordinate (`pt`) instead of the bone-blended result above — independent of
-        // which bone(s) would otherwise carry it (CLAUDE.md's Bone system section).
-        if (pin > 0) {
-          x += (pt.x - x) * pin;
-          y += (pt.y - y) * pin;
+        // PIN-TO-BODY: hold the fraction `pin` of this point at its RIGID-EQUIVALENT
+        // position (`pinMat`·bind coordinate — see pinMat above) instead of the
+        // bone-blended result — independent of which bone(s) would otherwise carry it
+        // (CLAUDE.md's Bone system section). At rest/bind pinMat is identity, so this
+        // reduces to the original hold-at-bind behavior.
+        if (pin > 0 && pinMat) {
+          const rx = pinMat.a * pt.x + pinMat.c * pt.y + pinMat.e;
+          const ry = pinMat.b * pt.x + pinMat.d * pt.y + pinMat.f;
+          x += (rx - x) * pin;
+          y += (ry - y) * pin;
         }
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
           // Last-resort per-point safety net: a NaN/Infinity coordinate must never reach

@@ -203,6 +203,12 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
       part.skin.bones = part.skin.bones.filter((b) => boneKindIds.has(b.id) && isValidSkinBone(b));
       if (part.skin.bones.length === 0) part.skin = null;
     }
+    // The PART-level bind record (pin-tracking fix — docTypes.ts's skin.restWorldInv):
+    // a malformed/non-finite matrix would poison the PIN-TO-BODY render target, so drop
+    // it — absent reads as identity in skinRender, the legacy-doc behavior.
+    if (part.skin && part.skin.restWorldInv !== undefined && !isFiniteMat(part.skin.restWorldInv)) {
+      delete part.skin.restWorldInv;
+    }
     // Prune per-node weight overrides: drop entries whose bone refs no longer resolve
     // to a bound bone, or whose blend factor is non-finite; clamp t/pin into [0,1].
     // `a === null` is a valid PIN-ONLY entry (no bone-choice override, just a pin) —

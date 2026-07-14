@@ -126,8 +126,14 @@ export function bindPartsToBonesHeadless(artsIn: RigPart[], bones: RigPart[]): v
 
   for (const part of arts) {
     if (part.skin) {
-      const overrides = part.skin.overrides;
-      part.skin = { bones: freshBones(), ...(overrides ? { overrides } : {}) };
+      // Re-bind keeps the part-level restWorldInv reference along with the overrides —
+      // geometry is not re-baked (mirrors rigOpsBind.ts, pin-tracking fix 2026-07-14).
+      const { overrides, restWorldInv } = part.skin;
+      part.skin = {
+        bones: freshBones(),
+        ...(overrides ? { overrides } : {}),
+        ...(restWorldInv ? { restWorldInv } : {}),
+      };
       continue;
     }
     const { full, rootPivot } = preBake.get(part.id)!;
@@ -153,7 +159,13 @@ export function bindPartsToBonesHeadless(artsIn: RigPart[], bones: RigPart[]): v
     part.transform = '';
     part.rest = { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: part.rest.opacity };
     part.pivot = applyMat(invertMat(chainMatOf(part, null)), rootPivot.x, rootPivot.y);
-    part.skin = { bones: freshBones() };
+    // PART-level bind record for the PIN-TO-BODY render target (pin-tracking fix,
+    // docTypes.ts) — identical to rigOpsBind.ts's write; evaluated after the own pose
+    // was zeroed so it captures the post-bake ancestor chain matrix.
+    part.skin = {
+      bones: freshBones(),
+      restWorldInv: invertMat(matrixOfTransform(fullPoseTransform(part, null))),
+    };
     bakedArtIds.add(part.id);
   }
 
