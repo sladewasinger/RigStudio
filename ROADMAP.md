@@ -48,13 +48,15 @@ be drawn from.
 *Decisions that are Austin's to make — nothing below gets built without his call.*
 
 - **Keyed-z DrawRules vs childOrder slots** (U3, 3e4a71f): the .riv keyed-z
-  planner keeps pre-U3 GLOBAL-order semantics; a hand-INTERLEAVED doc that
+  planner keeps pre-U3 GLOBAL-order semantics; an INTERLEAVED doc that
   also keys z can diverge editor-vs-runtime in three narrow ways (scope,
   anchor granularity, mover granularity — full note in
   `io/riv/drawRules.ts`'s header). Byte-identical for every synthesized doc;
-  interleaving only becomes user-reachable at U4. Decide: redesign the
-  planner slot-aware (per-run targets + sibling-scoped neighbor ranking), or
-  accept the documented divergence.
+  NOW USER-REACHABLE (U4 landed 2026-07-14: fresh imports record true
+  document order and the Layers panel interleaves freely — note PIP itself
+  interleaves at body/face, so keying z on those parts touches the
+  divergence). Decide: redesign the planner slot-aware (per-run targets +
+  sibling-scoped neighbor ranking), or accept the documented divergence.
 - **Bone-deletion cascade vs attachments** (7d4f662): deleting a bone
   cascades its same-chain subtree; `attachedRoot` children DETACH
   world-preserving instead of dying. Say if attachments should cascade too.
@@ -68,13 +70,16 @@ be drawn from.
   CANCELLED pre-landing (superseded — its behavior would have been wrong
   post-surgery).
 
-## U-program: unified child ordering (the full Inkscape model) — IN PROGRESS
+## U-program: unified child ordering (the full Inkscape model) — COMPLETE (U1–U4)
 
-*User-approved priority #1. One ordered MIXED child list per part (paths and
-child parts interleaved) — panel order = paint order for EVERYTHING, the
-importer preserves SVG document order exactly, exporters express it. Kills
-the two-bucket model (own paths always below children) and its import
-restacking fidelity bug.*
+*User-approved priority #1, closed 2026-07-14. One ordered MIXED child list per
+part (paths and child parts interleaved) — panel order = paint order for
+EVERYTHING, the importer preserves SVG document order exactly, exporters
+express it. The two-bucket model (own paths always below children) and its
+import restacking fidelity bug are dead. Remaining non-goals: Lottie stays
+paths-first (frozen exporter, documented) and renderOnion ghosts stay flat
+per-part (editing aid); the keyed-z DrawRules divergence is a live deferred
+decision (see the ledger above).*
 
 - [x] **U1 — model + plumbing (zero behavior change)** (done 2026-07-13,
   03f7489): `RigPart.childOrder`
@@ -98,13 +103,18 @@ restacking fidelity bug.*
   Sequencing note: the skinned-.riv-export wave has LANDED (2026-07-13, see
   the archive) — the io/riv collision is cleared; U3 must keep skinned paths'
   Skin/Tendon emission intact through any drawable-order change.
-- [ ] **U4 — the user-visible layer**: importer records TRUE SVG document
-  order into slots (the restacking fidelity bug dies); layers panel rows =
+- [x] **U4 — the user-visible layer** (done 2026-07-14): importer records TRUE
+  SVG document order into slots (the restacking fidelity bug is dead — Pip's
+  body shading finally paints on top, matching Inkscape); layers panel rows =
   slot order with full drag-reorder between ANY rows (paths ↔ parts as
-  siblings, Inkscape rules); PageUp/Down + stacking row slot-aware; e2e =
-  the user's shadow-above-body_inner gesture. EXPECT a golden re-pin here
-  (the golden doc imports the sample, whose true document order may
-  interleave) — verify visually via render-frames per protocol.
+  siblings; Inkscape edge-drop rule — a path dropped between two ROOT parts
+  is refused with a visible reason, a part dropped between path rows becomes
+  a slotted child of their owner); PageUp/Down + stacking row step one SLOT;
+  e2e = the user's literal shadow gesture (model slots + panel rows + canvas
+  DOM + undo, all asserted together). The main golden re-pinned per protocol
+  (render-frames diff = exactly the body-shadow correction; AFTER matches a
+  raw-SVG render pixel-exact in the body region; skinned pin held). Full
+  entry in the archive below.
 - **Unified skeleton Phase 2 — IK across attachments**: does grabbing a hand
   FABRIK through the spine? Default OFF (IK chain resolution stops at
   attached roots — safer, predictable); the full-body solve is a flag to
@@ -203,6 +213,33 @@ Newest first. Programs/waves below are ordered by their actual git-log
 completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
+
+### U4 — the user-visible layer (importer document order + slot-aware Layers)
+
+*2026-07-14 (main-tree wave). Closes the U-program. The importer materializes an
+explicit `childOrder` per part recording TRUE document order
+(`core/childOrder.ts`'s `beginExplicitChildOrder` + one slotAdd per child in
+walk order — the one documented exception to U1's LAZY rule; old saves stay
+lazy). PIP_MASTER genuinely interleaves (body = [part body, path shadow],
+face = [part eyes, path path3]) so the authored body shading now paints on
+top — the originating complaint. `core/slotReorder.ts`'s `moveChildSlot` is
+the single slot-space reorder op (slot moves first, then paths[]/doc.parts
+re-derived to agree — the documented inversion of U1's mirror direction);
+Layers rows render in slot order with edge-drop sibling insertion on every
+row (`panels/layersDropRules.ts` pure resolver; root-level path drops refused
+visibly); PageUp/PageDown + stacking arrows step one slot
+(`refreshSelectedStackingDom` re-syncs paint runs); `movePathToPart` gained
+`destSlotIndex` (old default slot-append was wrong on interleaved
+destinations). Golden re-pin per protocol: before/after render-frames differ
+ONLY by the shadow crescent; AFTER matches a raw-SVG resvg render pixel-exact
+in the body region (0 vs 8062 mismatched px); skinned pin held. Four mutation
+checks (slot write dropped → 7 unit + 4 e2e fail; doc.parts mirror dropped →
+the part-swap test fails; importer recording dropped → 3 importer tests +
+e2e sanity fail; run DOM sync dropped → the two-runs canvas assertion fails).
+Live-verified on a dev server: real DragEvents on the actual rows; the same
+screen pixel hit the shadow before and the pill after — visible restack;
+undo restored. Gates: build clean, 810 unit / 42 files, 311 interaction /
+43 files.*
 
 ### U3 — .riv drawable order expresses childOrder slots
 

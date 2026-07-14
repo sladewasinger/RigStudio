@@ -120,11 +120,11 @@ inside `npm test` and fail violations regardless of who forgot what.
 
 | File | Responsibility |
 |---|---|
-| `core/model.ts` | **Pure re-export facade** — imported everywhere as `../core/model`; that path is permanent. Implementation modules: `core/docTypes.ts` (`RigDoc`/`RigPart`/`Clip`/`Track`/`Keyframe`/`Channel`/`Easing`/`Artboard`, `CHANNEL_DEFAULTS`), `core/smTypes.ts` (state-machine types), `core/appState.ts` (app-state singleton — `editorMode`: `setup`\|`animate`, multi-selection, tool/freeze/snap flags, playback speed/ping-pong/onion — plus pub/sub `subscribe`/`notify` and selection helpers), `core/channels.ts` (`channelValue` absolute-keys/rest-fallback, `sampleChannel` + 4 easings + stepped z, `setKeyframe*`/`keyAt`/`removeKeyAt`, AI protected-key guard, keyframe clipboard `copyKeys`/`pasteKeysAt`/`copyPoseAt`), `core/boneOps.ts` (`boneChain`, bone length/tip helpers), `core/partHierarchy.ts` (`ancestorChain`/`setParent` cycle-safe, group/ungroup), `core/structuralOps.ts` (`applyRigChanges`, delete/duplicate, draw order), `core/serialization.ts` (`serializeDoc`/`deserializeDoc`/`normalizeDoc`, `newBlankDoc`/`newStateMachine`, `sanitizeClipName`), `core/idGen.ts` (`freshId`), `core/childOrder.ts` (U1: `RigPart.childOrder` slot chokepoint — every path/child add/remove/move passes through it; `reconcileChildOrder` repairs; LAZY — absent lists synthesize paths-first ≡ legacy paint order), `core/paintOrder.ts` (U2: `flattenPaintOrder` — the pure childOrder→paint-sequence kernel shared by the live canvas AND `headless/composePose.ts`; contiguous own paths become one RUN, runs interleave with recursively-flattened children, partless parts emit one empty anchor run, keyed z re-sorts PART slots only, sibling-scoped) |
-| `io/importSvg.ts` | SVG file → `RigDoc`. Unwraps Inkscape layers, then RECURSIVE: every `<g>` at any depth becomes a part (exact SVG structure; label = inkscape:label else id; kind 'art' iff it has direct paths), parented per the nesting; each part's baked `transform` is the FULL composed ancestor chain (doc-space invariant — render-time parenting composes pose only); ellipse/circle/rect → path data; pivots per part from the *composed matrix's fixed point* or `inkscape:transform-center-x/y` as a `pivotHint` |
+| `core/model.ts` | **Pure re-export facade** — imported everywhere as `../core/model`; that path is permanent. Implementation modules: `core/docTypes.ts` (`RigDoc`/`RigPart`/`Clip`/`Track`/`Keyframe`/`Channel`/`Easing`/`Artboard`, `CHANNEL_DEFAULTS`), `core/smTypes.ts` (state-machine types), `core/appState.ts` (app-state singleton — `editorMode`: `setup`\|`animate`, multi-selection, tool/freeze/snap flags, playback speed/ping-pong/onion — plus pub/sub `subscribe`/`notify` and selection helpers), `core/channels.ts` (`channelValue` absolute-keys/rest-fallback, `sampleChannel` + 4 easings + stepped z, `setKeyframe*`/`keyAt`/`removeKeyAt`, AI protected-key guard, keyframe clipboard `copyKeys`/`pasteKeysAt`/`copyPoseAt`), `core/boneOps.ts` (`boneChain`, bone length/tip helpers), `core/partHierarchy.ts` (`ancestorChain`/`setParent` cycle-safe, group/ungroup), `core/structuralOps.ts` (`applyRigChanges`, delete/duplicate, draw order), `core/serialization.ts` (`serializeDoc`/`deserializeDoc`/`normalizeDoc`, `newBlankDoc`/`newStateMachine`, `sanitizeClipName`), `core/idGen.ts` (`freshId`), `core/childOrder.ts` (U1: `RigPart.childOrder` slot chokepoint — every path/child add/remove/move passes through it; `reconcileChildOrder` repairs; LAZY — absent lists synthesize paths-first ≡ legacy paint order; U4's `beginExplicitChildOrder` is the importer's one deliberate exception), `core/slotReorder.ts` (U4: `moveChildSlot` — THE slot-space reorder op behind Layers drag-reorders, PageUp/PageDown and the stacking arrows; slot moves first, then re-derives the paths[]/doc.parts authorities to agree — the documented inversion of U1's mirror direction), `core/paintOrder.ts` (U2: `flattenPaintOrder` — the pure childOrder→paint-sequence kernel shared by the live canvas AND `headless/composePose.ts`; contiguous own paths become one RUN, runs interleave with recursively-flattened children, partless parts emit one empty anchor run, keyed z re-sorts PART slots only, sibling-scoped) |
+| `io/importSvg.ts` | SVG file → `RigDoc`. Unwraps Inkscape layers, then RECURSIVE: every `<g>` at any depth becomes a part (exact SVG structure; label = inkscape:label else id; kind 'art' iff it has direct paths), parented per the nesting; each part's baked `transform` is the FULL composed ancestor chain (doc-space invariant — render-time parenting composes pose only); ellipse/circle/rect → path data; pivots per part from the *composed matrix's fixed point* or `inkscape:transform-center-x/y` as a `pivotHint`; U4: every imported part gets an EXPLICIT `childOrder` recording the group's true child interleaving in document order (one slot appended per child during the walk) |
 | `view/index.ts` | **Pure re-export facade (33 lines)** over the `src/view/` modules — consumers import ONLY `./view`, never deep paths. The canvas responsibilities live in 22 layered modules: `view/context.ts` (shared mutable state `ctx`, DragState type, constants, micro-utils), `view/glyphs.ts` (pure SVG-fragment string builders: bone kite, joint dot), `view/coords.ts` (screen↔doc conversion from live CTM/transform strings), `view/pose.ts` (thin delegator over the shared `geometry/pose.ts` kernel — injects `ctx.poseSampler`, keeps `poseTime()` + the live-DOM box measurers `partRootBoxes`/`groupUnionBox`), `view/focus.ts` (drill-down/dimming, `artworkUnderPointer`), `view/skinRender.ts` (LBS deformation + private cache), the overlay cluster — `view/overlay.ts` (`renderOverlay` orchestration + gizmos/pivots/snap marker — render-time side effects live here on purpose), `view/overlayHandles.ts` (selection boxes + scale/rotate/skew handle sets), `view/overlayBones.ts` (bone glyphs, tip handles, chain origin, freeze joint markers, ik-active highlight), `view/overlayNodes.ts` (node-editing chrome) — `view/snapping.ts` (candidate collection wiring), `view/render.ts` (`renderPose`, onion skins, `setPoseSampler`), `view/partDom.ts` (part-group/path DOM registry — since U2 a part owns an ARRAY of run-`<g>`s; the union-bbox/primary-group read helpers live in `view/context.ts` for layering and are re-exported here), the `view/nodeEditing/` package (`structural.ts` owns `applyStructuralEdit` — THE chokepoint every command-count-changing node edit must pass through: writes d/nodeTypes, drops the path's skin overrides, invalidates the skin cache, syncs DOM, clears node selection; enforced by `nodeEditingChokepoint.test.ts` — nothing else may write `nodeTypes` or call the override drop; `dragMath.ts` node/handle drag + mirror rules + nudge, `typeOps.ts` one-shot smooth/symmetric/corner + line↔curve, `index.ts` facade), the rigOps cluster — `view/rigOps.ts` (17-line re-export), `view/rigOpsPlacement.ts` (pen-tool chain lifecycle + auto-bind), `view/rigOpsBind.ts` (LBS bind/unbind + the freeze bind-refresh cycle), `view/rigOpsEdit.ts` (flips/nudges/aimBoneAtTip/group scale), `view/rigOpsNodeBinding.ts` (per-node weight overrides) — `view/camera.ts` (viewBox zoom/pan/fit), `view/ikDrag.ts` (the full-chain IK drag pipeline: chain resolution, grab-point anchoring, FABRIK write-back), the `view/interactions/` gesture-pipeline package (Chain of Responsibility: `priority.ts` is THE ordered 11-row table — first `claim()` wins the gesture, each row commented with why it precedes the next; `hit.ts` resolves the press once into a shared HitContext; `lifecycle.ts` owns threshold/checkpoint-deferral/capture/snap mechanics; `dblclick.ts` drill-down; `pipelines/` = boneChain, gizmo, boneTip, blank(+pan), handles, node, pivot, nodesBendMarquee, artwork — each feature-complete claim+move+release; a new gesture = one pipeline file + one table row, never a cascade edit; priority is pinned by `gesturePriority.test.ts`), `view/canvas.ts` (`buildCanvas`, render-then-measure pivot seeding) |
 | `timeline/timeline.ts` | **Pure re-export facade** over the timeline's internal modules: `timeline/tlState.ts` (shared `tlCtx` + rerender hook, fixed-height splitter, playhead-scrub util), `timeline/transport.ts` (play/pause/duplicate/rename/delete/duration, speed selector, ping-pong, onion toggle, fps readout, keys/curves/logic view picker), `timeline/lanes.ts` (scrubber ruler + keyframe lanes with click/shift-click/marquee selection, retime drag), `timeline/keyProps.ts` (key-property row — time/value/easing incl. the stepped-z easing disable — plus copy/paste/nudge/column-select), `timeline/panel.ts` (`buildTimeline`/`render` composition) |
-| `panels/index.ts` | **Pure re-export facade** over `src/panels/`'s submodules — consumers import ONLY `./panels`, never deep paths. `panels/icons.ts` (the inline SVG icon set + `icon`/`iconButton` helpers), `panels/layers.ts` (Layers **tree** — parts nest under their parent, fold open to show child paths, drag-to-parent / drop-to-unparent), `panels/inspector.ts` (itself a pure facade over `panels/inspectorSections/` — shared field builders, transform incl. keyed z/opacity/sx-sy, bone, stacking, skinning, align & distribute, node-operations, object/style+artboard sections, `panel.ts` orchestration), `panels/ai/` (the Claude assistant panel package — panel/apply/preview/previewBar/fields/requests/state/threadStrip/threads/templates/polish behind its own index.ts, mounted at the bottom of the inspector), `panels/canvasTools.ts` (the tool switcher, snap toggle, and flip/group/ungroup/bind actions shown above the canvas). `panels/smPanel.ts` (state-machine editor) lives alongside these but is imported directly by its consumers (`main.ts`, `timeline/timeline.ts`), not re-exported by the facade |
+| `panels/index.ts` | **Pure re-export facade** over `src/panels/`'s submodules — consumers import ONLY `./panels`, never deep paths. `panels/icons.ts` (the inline SVG icon set + `icon`/`iconButton` helpers), `panels/layers.ts` (Layers **tree** — parts nest under their parent, fold open to show their children in SLOT order: path rows and part rows interleave per `childOrder`, top row = topmost paint), `panels/layersDragAndDrop.ts` (all row drag/drop wiring — the 2×2 payload×row acceptance table with edge zones on every row) + `panels/layersDropRules.ts` (U4: the pure drop-position resolver — edge drop = become the reference row's SIBLING in its container; root-level path drops refused with a visible reason), `panels/inspector.ts` (itself a pure facade over `panels/inspectorSections/` — shared field builders, transform incl. keyed z/opacity/sx-sy, bone, stacking, skinning, align & distribute, node-operations, object/style+artboard sections, `panel.ts` orchestration), `panels/ai/` (the Claude assistant panel package — panel/apply/preview/previewBar/fields/requests/state/threadStrip/threads/templates/polish behind its own index.ts, mounted at the bottom of the inspector), `panels/canvasTools.ts` (the tool switcher, snap toggle, and flip/group/ungroup/bind actions shown above the canvas). `panels/smPanel.ts` (state-machine editor) lives alongside these but is imported directly by its consumers (`main.ts`, `timeline/timeline.ts`), not re-exported by the facade |
 | `core/history.ts` | Snapshot-based undo/redo; call `checkpoint()` BEFORE any doc mutation, one per user gesture |
 | `geometry/paths.ts` | Path-data parser/serializer (normalizes to absolute M/L/C/A/Z), de Casteljau cubic split for node insertion, `arcToCubics`/`pathToCubics` (W3C endpoint→center parametrization) so arc segments can be split and exported as geometry |
 | `geometry/pose.ts` | **The shared pose kernel** (H1b extraction from view/pose.ts, math moved verbatim): own/root pose transform strings, chain composition (`chainMatOf`/`fullPoseTransform`), effective pivot/tip/scale/z/opacity — pure over `state.doc` + an optional channel-`sampler` argument (the SM preview's override, injected by view/pose.ts; absent for headless callers). Consumed by BOTH the editor canvas and `headless/composePose.ts`, so editor and headless rendering cannot drift |
@@ -161,10 +161,10 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   `canonicalizePartOrder` in structuralOps, `normalizeDoc` repairs legacy docs on
   load). The keyed stepped `z` channel re-sorts the CANVAS at animate time only —
   the layers panel NEVER re-sorts; Edit mode shows pure rest order.
-- **Unified child ordering (the U-program, in progress)** layers on top of the
-  canonical part order: `RigPart.childOrder` is one ordered MIXED slot list per part
-  (`{kind:'path'|'part', id}`) so paths and child parts interleave like Inkscape.
-  U1 (03f7489): the slot CHOKEPOINT `core/childOrder.ts` — every structural op
+- **Unified child ordering (the U-program, COMPLETE as of U4 2026-07-14)** layers on
+  top of the canonical part order: `RigPart.childOrder` is one ordered MIXED slot list
+  per part (`{kind:'path'|'part', id}`) so paths and child parts interleave like
+  Inkscape. U1 (03f7489): the slot CHOKEPOINT `core/childOrder.ts` — every structural op
   maintains slots or reconciles; LAZY (absent ⇒ synthesized paths-first ≡ the legacy
   two-bucket paint order, so old docs are untouched); enforced by
   `childOrderChokepoint.test.ts`. U2 (7690d2f): the canvas AND headless composePose
@@ -174,12 +174,24 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   re-sorts PART slots only, sibling-scoped — PATH slots never move); synthesized docs
   render byte-identically (pinned). U3 (3e4a71f): the .riv exporter's drawable order
   is the same flatten reversed into first-in-file-topmost (`io/riv/drawableOrder.ts`;
-  skin/pin-anchor emission memoized once per part; synthesized docs byte-identical —
-  both golden pins unmoved; keyed-z DrawRules keeps global semantics, divergences
-  documented in `drawRules.ts` + deferred). NOT YET slot-aware: Lottie (frozen —
-  documented paths-first limitation), the inspector stacking UI (global `drawOrder`),
-  and the importer/layers-panel drag UX (U4); `renderOnion` ghosts stay flat per-part
-  (approximation, flagged).
+  skin/pin-anchor emission memoized once per part; keyed-z DrawRules keeps global
+  semantics, divergences documented in `drawRules.ts` + deferred — USER-REACHABLE since
+  U4). U4: the importer records TRUE SVG document order into slots
+  (`beginExplicitChildOrder` + one slotAdd per child in walk order — the ONE deliberate
+  exception to the LAZY rule; the import restacking fidelity bug is dead, and the MAIN
+  golden .riv pin moved because PIP_MASTER itself interleaves — re-pinned after
+  render-frames proof, see goldenRiv.test.ts); the Layers tree renders rows in slot
+  order (top row = last slot = topmost paint) with full drag-reorder between ANY rows
+  via `core/slotReorder.ts`'s `moveChildSlot` (slot moves FIRST, then paths[]/doc.parts
+  are re-derived to agree — the documented inversion of U1's mirror direction; rule 4
+  holds again on return); PageUp/PageDown + the stacking arrows step one SLOT (crossing
+  rows of the other kind; `refreshSelectedStackingDom` re-syncs paint runs); Inkscape
+  edge-drop rule: an edge drop makes the dragged row a SIBLING of the reference row in
+  that row's container — a path dropped between two ROOT parts is REFUSED with a visible
+  reason (paths can't live at root; `panels/layersDropRules.ts` documents the decision),
+  a part dropped between two path rows becomes a slotted CHILD of their owner. STILL
+  not slot-aware: Lottie (frozen — documented paths-first limitation) and `renderOnion`
+  ghosts (flat per-part approximation, flagged).
 - **Coordinates are SVG document space:** +y down, positive rotation = clockwise.
   Every part rotates around its own pivot; `root` is a synthetic target for whole-figure
   translate + scale (jumps, squash-and-stretch) around `rootPivot`.
@@ -613,6 +625,34 @@ harness (`src/__tests__/interaction/harness.ts` — use its helpers rather than
 hand-rolling gestures) and enforced by `npm run test:interaction`.
 
 ## Status
+
+### U4 — unified child ordering, the user-visible layer — implemented and verified
+
+Built 2026-07-14, closing the U-program (user priority #1; U1–U3 in the archive). The
+originating complaint — "I STILL can't move PIPs body shading (called shadow) up or
+down in this layer" — is the shipped acceptance test (`interaction/
+layersSlotReorder.test.ts`): the real drag gesture moves the shadow PATH row below/
+above its sibling nested-body PART row, and model slots, panel rows, and canvas DOM all
+restack together, one undo restoring all three. Shape of the change: the importer
+records TRUE SVG document order per part (`beginExplicitChildOrder` + slotAdd-per-child
+— PIP_MASTER genuinely interleaves at `body` [part body, path shadow] and `face`
+[part eyes, path path3], so the authored body shading finally paints ON TOP);
+`core/slotReorder.ts`'s `moveChildSlot` is the one op behind Layers drag-reorders and
+the (now slot-scoped) PageUp/PageDown + stacking arrows (`refreshSelectedStackingDom`
+re-syncs paint runs, since a slot crossing the other kind splits/merges a part's
+run-`<g>`s); the Layers tree renders rows in slot order; edge drops insert as SIBLINGS
+of the reference row per the documented Inkscape rule (`panels/layersDropRules.ts` —
+root-level path drops refused with a visible title reason); `movePathToPart` gained an
+explicit `destSlotIndex` (its old default slot-append was wrong on interleaved
+destinations). MAIN GOLDEN RE-PIN (protocol followed): render-frames before/after at
+five times — the ONLY pixel change is the body shadow crescent appearing above the
+pill, and the AFTER frames match a raw-SVG resvg render of PIP_MASTER pixel-exactly in
+the body region (0 mismatched px vs 8062 before); the skinned pin held. Four mutation
+checks recorded (slot write, doc.parts mirror, importer recording, run DOM sync — each
+failed exactly its pinning scenarios). Gates: build clean, **810 unit / 42 files, 311
+interaction / 43 files**; live-verified on a dev server (real DragEvents; the same
+screen pixel hit the shadow path before the drop and the pill path after — visible
+restack — and undo restored it).
 
 ### Skinned-part .riv export (Skin/Tendon/CubicWeight) — implemented and verified
 
