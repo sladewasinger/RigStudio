@@ -231,7 +231,12 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   rotated) and refuses if the null itself has keyframes.
 - **Group-aware selection**: clicking artwork inside a closed `group` selects the
   group; double-click steps in (group → part → path); Escape/blank click steps out
-  (`view.ts`'s `enteredGroups`).
+  (`view.ts`'s `enteredGroups`). Selecting a group AS A WHOLE (Layers row, context
+  menu, or canvas substitution) closes its own entered context — `focus.ts`'s
+  `repairEnteredGroups` keeps an entered id only as a STRICT ancestor of a selected
+  part (user bug 2026-07-14, 52ac4d3: a group left both entered and selected
+  suppressed the pipeline's group substitution, so the second click stole the
+  selection down to a child instead of toggling the rotate handle set).
 - **Moving a pivot never moves the artwork.** A Setup pivot drag solves the new pivot
   together with a rest-translation compensation (`view.ts` pivot drag branch): the
   pivot anchors both the part's own rotation and the innermost rest scale/skew, so

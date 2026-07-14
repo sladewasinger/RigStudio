@@ -214,6 +214,24 @@ completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
 
+### Group second-click rotate fix (the "can't rotate Girl" report)
+
+*2026-07-14, 52ac4d3 (worktree wave). Reproduced on the user's exact save via
+the REAL Layers rows — none of the three suspect branches was it: picking a
+CHILD row calls `enterGroupsFor` (opens the group as context); picking the
+GROUP row afterwards selected it but left it ENTERED, and that contradictory
+state suppressed the artwork pipeline's group substitution, so every canvas
+click stole the selection down to the child — the second-click rotate toggle
+was unreachable. Fix: one predicate in `focus.ts`'s `repairEnteredGroups`
+self-healing chokepoint — an entered id survives only as a STRICT ancestor of
+a selected part, so selecting the whole group closes its own entry at the
+next render. Drill-in dive, Escape ladder, Layers child pick, blank-click
+deselect, EG/GL/G suites all pinned unchanged; far-pivot orbit semantics
+untouched (GR3 pins rotation about a pivot 200 units away — correct, the
+pivot is user-editable in freeze). Mutation check: restoring the old
+predicate fails exactly the 3 recipe scenarios + the exact-file repro. Gates:
+build clean, 810 unit / 317 interaction (+6), golden pins unmoved.*
+
 ### U4 — the user-visible layer (importer document order + slot-aware Layers)
 
 *2026-07-14 (main-tree wave). Closes the U-program. The importer materializes an
