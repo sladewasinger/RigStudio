@@ -20,6 +20,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { undo, canUndo } from '../../core/history';
 import { selectPart as modelSelectPart, notify, RigPart } from '../../core/model';
 import { renderPose, zoomBy } from '../../view';
+import { deleteSelectedParts } from '../../ui/actions';
 import {
   bootRig, resetRig, state, partByLabel, partGroupEl, svgEl, medialPoints, placeBoneChain,
   simulateDragDrop, clientCenterOf, expectClose, repaint, overlayEl, gestureDrag, pressKey,
@@ -533,5 +534,59 @@ describe('scenario — the dashed attachment link is visible and its stroke stay
     if (!linkAfter) throw new Error('no .attachment-link after the zoom rebuild');
     expect(linkAfter.getAttribute('vector-effect')).toBe(before.vectorEffect);
     expect(linkAfter.getAttribute('stroke-width')).toBe(before.strokeWidth);
+  });
+});
+
+describe('scenario US8 — deleting the spine chain detaches the attached arm chain, world-preserving', () => {
+  it("deleting the spine's root bone cascades the WHOLE spine chain; the arm chain survives, detaches onto the spine's own anchor, and its bound art doesn't move", () => {
+    // The bone-deletion cascade/detach fix's spine+attached-arm scenario (core/
+    // structuralOps.ts's deleteParts + core/boneOps.ts's boneDeletionCascade/
+    // foldRestWorldIntoOwnPose): deleting a chain root must cascade the WHOLE chain
+    // (Bug 2), and any attachedRoot bone hanging off that chain must detach world-
+    // preserving rather than either cascading away with it or jumping to its new anchor.
+    const { spine1, spine2, armRoot, armTip, limb } = setupAttachedRig();
+    expect(armRoot.attachedRoot).toBe(true); // precondition
+    const spineAnchorId = partByLabel(SPINE).id; // where placeChainOn(SPINE, …) rooted spine1
+
+    modelSelectPart(armRoot.id);
+    notify();
+    repaint();
+    const artBefore = renderScreenSamples(LIMB);
+
+    state.selectedPartIds = [spine1.id];
+    state.selectedPartId = spine1.id;
+    notify();
+    deleteSelectedParts();
+
+    expect(state.doc!.parts.some((p) => p.id === spine1.id), 'spine root deleted').toBe(false);
+    expect(state.doc!.parts.some((p) => p.id === spine2.id), 'spine chain cascaded (Bug 2)').toBe(false);
+    expect(state.doc!.parts.some((p) => p.id === armRoot.id), 'arm chain root SURVIVES (detached, not cascaded)')
+      .toBe(true);
+    expect(state.doc!.parts.some((p) => p.id === armTip.id), 'arm chain tip survives too').toBe(true);
+
+    const armRootAfter = state.doc!.parts.find((p) => p.id === armRoot.id)!;
+    expect(armRootAfter.parentId, "detached onto the spine's own (surviving) anchor part")
+      .toBe(spineAnchorId);
+    expect(armRootAfter.attachedRoot, 'landed on a non-bone part — attachedRoot cleared').toBeUndefined();
+    // Chain-internal connectivity survives the detach (armTip still on armRoot's tip) —
+    // also independently re-checked by this file's afterEach(assertNoGap).
+    const armTipAfter = state.doc!.parts.find((p) => p.id === armTip.id)!;
+    expectClose(
+      armTipAfter.pivot.x + armTipAfter.rest.tx, armRootAfter.boneTip!.x, 0.3,
+      'arm chain stays internally connected after the detach (x)',
+    );
+    expectClose(
+      armTipAfter.pivot.y + armTipAfter.rest.ty, armRootAfter.boneTip!.y, 0.3,
+      'arm chain stays internally connected after the detach (y)',
+    );
+
+    const artAfter = renderScreenSamples(LIMB);
+    // MUTATION CHECK (performed while writing this file, not left in the tree): commenting
+    // out the foldRestWorldIntoOwnPose call for detached bones in core/structuralOps.ts's
+    // deleteParts (or reverting the ancestor-first fold ordering) turns this into a real
+    // multi-pixel jump — see the task report for the measured delta.
+    expect(maxDrift(artBefore, artAfter), 'arm art render-neutral through the detach (< 0.05px)')
+      .toBeLessThan(0.05);
+    expect(limb.skin, 'the arm stays bound').toBeTruthy();
   });
 });

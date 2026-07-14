@@ -1,6 +1,9 @@
 // ---- Bone chains ----
 
 import { RigPart, Vec2 } from './docTypes';
+import {
+  Mat, IDENTITY, multiply, translationMat, rotationMat, invertMat,
+} from '../geometry/transforms';
 
 /**
  * The full bone chain a bone belongs to (Bones 2.0 auto-bind): its ROOT bone (walking
@@ -204,4 +207,122 @@ export function dropSkinOverridesForPath(part: RigPart, pathId: string): void {
     delete overrides[pathId];
     if (Object.keys(overrides).length === 0) delete part.skin!.overrides;
   }
+}
+
+// ---- World-preserving rest folds (bone-deletion unbind/detach) ----
+//
+// `deleteParts` (structuralOps.ts) needs the exact same closed-form "solve this part's
+// own rest so chain·ownPose reproduces a target world matrix" fold that
+// view/rigOpsBind.ts's foldLostArtPoseIntoBoneRest and view/rigOpsAttach.ts's
+// foldWorldIntoBoneRest already use — but core/ can never import either (they live in
+// view/, and worse, the natural "just call geometry/pose.ts's chainMatOf" shortcut is
+// ALSO unreachable: geometry/pose.ts imports core/model, so core/ importing it back
+// would cycle). This is the core-side twin: REST-ONLY (t=null) composition, exactly what
+// every existing fold in this codebase already restricts itself to (rig-editing folds
+// have never operated at the live Animate playhead) — see chainMatOf(part, null) in
+// geometry/pose.ts for the version this mirrors.
+
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
+/** Ancestors of `part` within `parts`, outermost first — a PURE mirror of
+ *  partHierarchy.ts's ancestorChain (which reads the global `state.doc`), kept local so
+ *  the folds below stay testable without any app-state setup, matching every other
+ *  function in this file (`boneChain`, `translateBoneChain`, ...). Cycle-safe. */
+function localAncestorChain(parts: RigPart[], part: RigPart): RigPart[] {
+  const byId = new Map(parts.map((p) => [p.id, p]));
+  const chain: RigPart[] = [];
+  const seen = new Set<string>([part.id]);
+  let cur = part.parentId ? byId.get(part.parentId) : undefined;
+  while (cur && !seen.has(cur.id)) {
+    chain.unshift(cur);
+    seen.add(cur.id);
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  return chain;
+}
+
+/** A part's own REST pose as a rigid matrix: translate(rest.tx,rest.ty) then rotate
+ *  rest.rotate about its pivot — the product geometry/pose.ts's ownPoseTransform composes
+ *  at t=null, mirrored here in pure Mat form (see the section header for why). */
+export function restOwnPoseMat(part: RigPart): Mat {
+  return multiply(
+    translationMat(part.rest.tx, part.rest.ty),
+    rotationMat(part.rest.rotate, part.pivot.x, part.pivot.y),
+  );
+}
+
+/** The matrix mapping `part`'s rest-local space into root space through its ancestor
+ *  chain's rest own-poses only — a pure mirror of geometry/pose.ts's chainMatOf(part,
+ *  null): baked transforms and rest scale/skew never propagate to children (CLAUDE.md),
+ *  so only each ancestor's rotate/tx/ty contributes. */
+export function restChainMatOf(parts: RigPart[], part: RigPart): Mat {
+  let m: Mat = IDENTITY;
+  for (const ancestor of localAncestorChain(parts, part)) m = multiply(m, restOwnPoseMat(ancestor));
+  return m;
+}
+
+/** `part`'s full rest-only world matrix (ancestor chain composed with its own rest pose). */
+export function restWorldMatOf(parts: RigPart[], part: RigPart): Mat {
+  return multiply(restChainMatOf(parts, part), restOwnPoseMat(part));
+}
+
+/**
+ * Solve `part`'s own rest (rotate + translate around its UNCHANGED pivot) so that
+ * `restChainMatOf(parts, part) · newOwnPose` reproduces the target world matrix `W` — the
+ * closed form behind every world-preserving rig fold in this codebase (see the section
+ * header). `target = invert(chain) · W`; ownPose = translate(tx,ty)·rotate(rot,pivot),
+ * whose matrix translation is (tx,ty) + pivot − Rot·pivot, solved for (tx,ty). Call AFTER
+ * any parentId change (restChainMatOf reads it live from `parts`). `W` must be rigid
+ * (rotate+translate, no scale/shear) — every caller builds it from rest-only chain/own-
+ * pose products (rigid by construction) or the identity matrix, so the decomposition is
+ * always exact.
+ */
+export function foldRestWorldIntoOwnPose(parts: RigPart[], part: RigPart, W: Mat): void {
+  const target = multiply(invertMat(restChainMatOf(parts, part)), W);
+  const rotDeg = round3((Math.atan2(target.b, target.a) * 180) / Math.PI);
+  const rad = (rotDeg * Math.PI) / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const { x: px, y: py } = part.pivot;
+  part.rest.rotate = rotDeg;
+  part.rest.tx = round3(target.e - px + (cos * px - sin * py));
+  part.rest.ty = round3(target.f - py + (sin * px + cos * py));
+}
+
+/**
+ * Expand a set of parts requested for deletion (`structuralOps.ts`'s `deleteParts`) to
+ * include the FULL same-chain bone subtree of every BONE among them: a bone's own
+ * (non-attachedRoot) bone children are shared-joint CONTINUATIONS of the same chain, not
+ * independent parts, so deleting a bone must cascade its entire descendant bone subtree
+ * (the user's report: "when I delete the top most parent bone, the other two stay
+ * alive" — orphaning them left meaningless floating bones). Only triggers for a DYING
+ * BONE's bone children — a dying ART/GROUP's bone children (hierarchy-as-assignment)
+ * keep the plain re-adopt `deleteParts` already does for every non-bone child, since they
+ * were never sharing a joint with their container to begin with.
+ *
+ * `attachedRoot` children (Unified Skeleton Phase 1: a deliberately LOOSE cross-chain
+ * coupling, not a shared joint) are the exception: excluded from the cascade — neither
+ * they nor their own descendants are touched here — and returned in `detach` for the
+ * caller to reparent world-preserving via `foldRestWorldIntoOwnPose` onto the dying
+ * bone's nearest surviving ancestor (mirrors `view/rigOpsAttach.ts`'s `reattachRootBone`
+ * detach case, unreachable from core/ — see the section header).
+ */
+export function boneDeletionCascade(
+  parts: RigPart[], ids: Set<string>,
+): { dead: Set<string>; detach: RigPart[] } {
+  const byId = new Map(parts.map((p) => [p.id, p]));
+  const dead = new Set(ids);
+  const detach: RigPart[] = [];
+  const stack = [...ids].filter((id) => byId.get(id)?.kind === 'bone');
+  while (stack.length > 0) {
+    const parentId = stack.pop()!;
+    for (const child of parts) {
+      if (child.parentId !== parentId || child.kind !== 'bone' || dead.has(child.id)) continue;
+      if (child.attachedRoot) { detach.push(child); continue; }
+      dead.add(child.id);
+      stack.push(child.id);
+    }
+  }
+  return { dead, detach };
 }

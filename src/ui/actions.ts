@@ -12,7 +12,7 @@ import {
   state, notify, selectedParts, selectPart, deleteParts, duplicateParts,
   canMoveSelectedInDrawOrder, moveSelectedInDrawOrder, partById, RigPart,
 } from '../core/model';
-import { renderPose, reorderCanvas, unregisterPart, buildCanvas } from '../view';
+import { renderPose, reorderCanvas, unregisterPart, buildCanvas, syncPartPathDom } from '../view';
 import { checkpoint } from '../core/history';
 import { flipAction, groupAction, ungroupAction } from '../panels';
 import { dialog } from './dialogs';
@@ -50,12 +50,33 @@ export function canDeleteSelection(): boolean {
   return state.editorMode === 'setup' && state.selectedPartIds.length > 0;
 }
 
-/** The Setup-pose-mode Delete-key branch's mutation, also driven by the context menus. */
+/**
+ * The Setup-pose-mode Delete-key branch's mutation, also driven by the context menus.
+ *
+ * `deleteParts` (core/structuralOps.ts) properly UNBINDS a skinned part whose every skin
+ * bone just died (folds its ancestor chain away so the model's ROOT-space baked geometry
+ * renders correctly again — see its doc comment), but core/ never touches the DOM. A
+ * part that was posed while skinned had its DOM path `d` overwritten by the LBS
+ * deformation (`view/skinRender.ts`; `path.d` itself is never mutated, only the DOM
+ * attribute), and renderPose()'s plain (non-skinned) branch only ever refreshes a part's
+ * group TRANSFORM, never `d` — a static part's `d` never changes at render time, so
+ * nothing else would reset that stale deformed attribute back to the model's rest data.
+ * Left alone, the newly-unbound part would keep rendering its frozen mid-pose SHAPE
+ * (just sitting at the now-correct identity-ish position) instead of returning to its
+ * true rest/bind-pose look. `syncPartPathDom` (already used elsewhere for exactly this
+ * "resync DOM path data with the model" job) fixes it for every part that WAS skinned
+ * and no longer is.
+ */
 export function deleteSelectedParts(): void {
   if (!canDeleteSelection()) return;
   checkpoint();
+  const wasSkinned = new Set(state.doc!.parts.filter((p) => p.skin).map((p) => p.id));
   const removed = deleteParts([...state.selectedPartIds]);
   removed.forEach(unregisterPart);
+  for (const id of wasSkinned) {
+    const part = partById(id);
+    if (part && !part.skin) syncPartPathDom(part);
+  }
   notify();
   renderPose();
 }

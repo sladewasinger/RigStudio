@@ -19,7 +19,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { canUndo, undo } from '../../core/history';
 import { parsePath } from '../../geometry/paths';
 import {
-  selectPart as modelSelectPart, setKeyframe, notify,
+  selectPart as modelSelectPart, setKeyframe, notify, setParent,
   serializeDoc, deserializeDoc,
 } from '../../core/model';
 import {
@@ -27,6 +27,7 @@ import {
   unbindSelectedSkin, deleteSelectedNodes, selectedNodeCount,
 } from '../../view';
 import { groupAction } from '../../panels';
+import { deleteSelectedParts } from '../../ui/actions';
 import {
   bootRig, resetRig, state, partByLabel, partGroupEl, gestureDrag, click, moveMouse,
   clientCenterOf, overlayEl, overlayCount, expectClose, setEditorMode, repaint,
@@ -1345,5 +1346,103 @@ describe('scenario GB — Group-level auto-bind (the reported bug: a chain on Pi
     expect(rightAfter.skin, 'right_arm bound via the group').toBeTruthy();
     expect(leftAfter.parentId, 'left_arm stays under the group (hierarchy-as-assignment)').toBe(group.id);
     expect(rightAfter.parentId, 'right_arm stays under the group').toBe(group.id);
+  });
+});
+
+// ---- Two user-reported bone-deletion bugs (fixed together in core/structuralOps.ts's
+// deleteParts + core/boneOps.ts's boneDeletionCascade/foldRestWorldIntoOwnPose) ----
+
+describe('scenario B32 — deleting every skin bone properly unbinds a limb (the "arm went nuts" bug)', () => {
+  it('returns the deformed limb to its exact pre-bind rendered look, still correctly parented', () => {
+    // Give the limb a NON-TRIVIAL ancestor so a broken (un-folded) unbind would visibly
+    // double-transform it — Pip's limbs sit at root level by default (identity chain),
+    // which would make the final assertion pass vacuously even with the bug present.
+    const leg = partByLabel(LIMB);
+    const ancestor = partByLabel('right_leg');
+    setParent(leg.id, ancestor.id);
+    ancestor.rest.rotate = 24;
+    ancestor.rest.tx = 15;
+    ancestor.rest.ty = -8;
+    notify();
+    renderPose();
+    const restLook = renderScreenSamples(LIMB);
+
+    const bones = placeParentedChain(LIMB, 3);
+    expect(partByLabel(LIMB).skin!.bones.length, 'limb bound to all 3 bones').toBe(3);
+    expectClose(maxDrift(restLook, renderScreenSamples(LIMB)), 0, 0.1, 'bind itself is render-neutral');
+
+    // Pose the limb away from its bind look so "returns to rest" below is a real check.
+    bones[1].rest.rotate = 35;
+    repaint();
+    expect(maxDrift(restLook, renderScreenSamples(LIMB)), 'posing actually deformed the art')
+      .toBeGreaterThan(1);
+
+    state.selectedPartIds = bones.map((b) => b.id);
+    state.selectedPartId = bones[bones.length - 1].id;
+    notify();
+    deleteSelectedParts();
+
+    expect(partByLabel(LIMB).skin ?? null, 'fully unbound').toBeNull();
+    expect(partByLabel(LIMB).parentId, 'still parented to its (non-trivially posed) ancestor')
+      .toBe(ancestor.id);
+    // MUTATION CHECK (performed while writing this file, not left in the tree): commenting
+    // out the foldRestWorldIntoOwnPose call in core/structuralOps.ts's deleteParts (or
+    // reverting to the pre-fix `part.skin = null;` alone) reproduces the reported bug;
+    // commenting out ui/actions.ts's syncPartPathDom follow-up call reproduces a related
+    // but distinct DOM-staleness gap this scenario also caught — see the task report for
+    // both measured deltas.
+    expectClose(maxDrift(restLook, renderScreenSamples(LIMB)), 0, 0.15,
+      'the art returns to its exact pre-bind rendered look, correctly placed (no double-transform)');
+  });
+});
+
+describe('scenario B33 — deleting a bone cascades its entire same-chain bone subtree (the "other two stay alive" bug)', () => {
+  it('deleting the ROOT bone deletes the whole chain, not just the root', () => {
+    const [b1, b2, b3] = placeParentedChain(LIMB, 3);
+    const before = state.doc!.parts.length;
+
+    state.selectedPartIds = [b1.id];
+    state.selectedPartId = b1.id;
+    notify();
+    deleteSelectedParts();
+
+    expect(state.doc!.parts.some((p) => p.id === b1.id), 'root gone').toBe(false);
+    expect(state.doc!.parts.some((p) => p.id === b2.id), 'mid bone cascaded').toBe(false);
+    expect(state.doc!.parts.some((p) => p.id === b3.id), 'tip bone cascaded').toBe(false);
+    expect(state.doc!.parts.length, 'all three bones removed').toBe(before - 3);
+    expect(partByLabel(LIMB).skin ?? null, 'limb fully unbound').toBeNull();
+  });
+
+  it('deleting a MID-chain bone deletes only its own subtree; the root survives', () => {
+    const [b1, b2, b3] = placeParentedChain(LIMB, 3);
+
+    state.selectedPartIds = [b2.id];
+    state.selectedPartId = b2.id;
+    notify();
+    deleteSelectedParts();
+
+    expect(state.doc!.parts.some((p) => p.id === b1.id), 'root SURVIVES').toBe(true);
+    expect(state.doc!.parts.some((p) => p.id === b2.id), 'mid bone deleted').toBe(false);
+    expect(state.doc!.parts.some((p) => p.id === b3.id), 'tip bone cascaded too').toBe(false);
+    // MUTATION CHECK (performed while writing this file, not left in the tree): reverting
+    // core/boneOps.ts's boneDeletionCascade to a plain identity pass-through (no cascade)
+    // leaves b3 orphaned instead of deleted — see the task report for the reproduction.
+    expect(partByLabel(LIMB).skin!.bones.map((b) => b.id), 'skin scrubbed to the surviving root')
+      .toEqual([b1.id]);
+  });
+
+  it('one undo restores the whole cascade (bones, skin, and any folds) byte-exact', () => {
+    const [b1] = placeParentedChain(LIMB, 3);
+    const before = serializeDoc(state.doc!);
+
+    state.selectedPartIds = [b1.id];
+    state.selectedPartId = b1.id;
+    notify();
+    deleteSelectedParts();
+    expect(serializeDoc(state.doc!), 'the cascade delete actually mutated the doc').not.toBe(before);
+    expect(canUndo()).toBe(true);
+
+    undo();
+    expect(serializeDoc(state.doc!), 'one undo restores every bone + the binding').toBe(before);
   });
 });

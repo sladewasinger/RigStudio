@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   Easing,
   RigDoc,
+  RigPart,
   ancestorChain,
   applyRigChanges,
   canMoveSelectedInDrawOrder,
@@ -1987,6 +1988,256 @@ describe('deleteParts scrubs skin references (live mutation)', () => {
     const after = state.doc!.parts.find((p) => p.id === 'skinned')!;
     expect(after.skin?.overrides?.p1?.['0']).toBeUndefined(); // pruned — dangled onto `a`
     expect(after.skin?.overrides?.p1?.['1']).toEqual({ a: 'bone2', b: null, t: 0 }); // survives
+  });
+});
+
+// ---- Bone-deletion bugs: cascade + world-preserving unbind/detach ----
+//
+// Two user reports fixed together (deleteParts, core/boneOps.ts's boneDeletionCascade +
+// foldRestWorldIntoOwnPose): (1) "the arm went nuts" — deleting every skin bone of a
+// bound part left it in the normal render pipeline with geometry already baked to ROOT
+// space, double-transforming through its live ancestor chain; (2) "when I delete the
+// top most parent bone, the other two stay alive" — a bone's own (non-attachedRoot) bone
+// children are shared-joint continuations of the same chain and must cascade-delete with
+// it, except a cross-chain attachedRoot child, which detaches world-preserving instead.
+//
+// These helpers independently re-derive the REST-only world matrix a part renders with
+// (chain of ancestor own-poses, then the part's own pose) — deliberately NOT calling the
+// production restChainMatOf/restWorldMatOf/foldRestWorldIntoOwnPose themselves, so the
+// assertions check the OBSERVABLE geometric result, not just that the implementation
+// called itself consistently.
+function rest(rotate: number, tx: number, ty: number) {
+  return { rotate, tx, ty, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 };
+}
+function ownPoseMatOf(part: RigPart) {
+  return multiply(
+    translationMat(part.rest.tx, part.rest.ty),
+    rotationMat(part.rest.rotate, part.pivot.x, part.pivot.y),
+  );
+}
+function chainMatIn(doc: RigDoc, part: RigPart) {
+  const byId = new Map(doc.parts.map((p) => [p.id, p]));
+  const chain: RigPart[] = [];
+  const seen = new Set([part.id]);
+  let cur = part.parentId ? byId.get(part.parentId) : undefined;
+  while (cur && !seen.has(cur.id)) {
+    chain.unshift(cur);
+    seen.add(cur.id);
+    cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+  }
+  let m = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+  for (const ancestor of chain) m = multiply(m, ownPoseMatOf(ancestor));
+  return m;
+}
+function worldOf(doc: RigDoc, part: RigPart) {
+  return multiply(chainMatIn(doc, part), ownPoseMatOf(part));
+}
+const IDENTITY_MAT = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+const boneRow = (id: string, p: { x: number; y: number }, q: { x: number; y: number }) => (
+  { id, restWorldInv: IDENTITY_MAT, bindSeg: { p, q } }
+);
+
+describe('deleteParts: bone-chain cascade (Bug 2)', () => {
+  it('deleting the ROOT bone cascades its entire same-chain bone subtree', () => {
+    const b1 = makePart('b1', { kind: 'bone', pivot: { x: 0, y: 0 }, boneTip: { x: 10, y: 0 } });
+    const b2 = makePart('b2', {
+      kind: 'bone', parentId: 'b1', pivot: { x: 10, y: 0 }, boneTip: { x: 20, y: 0 },
+    });
+    const b3 = makePart('b3', {
+      kind: 'bone', parentId: 'b2', pivot: { x: 20, y: 0 }, boneTip: { x: 30, y: 0 },
+    });
+    resetState(makeDoc([b1, b2, b3]));
+    const removed = deleteParts(['b1']);
+    expect(removed.slice().sort()).toEqual(['b1', 'b2', 'b3']);
+    expect(state.doc!.parts).toEqual([]);
+  });
+
+  it('deleting a MID-chain bone deletes it and its descendants; the root survives', () => {
+    const b1 = makePart('b1', { kind: 'bone', pivot: { x: 0, y: 0 }, boneTip: { x: 10, y: 0 } });
+    const b2 = makePart('b2', {
+      kind: 'bone', parentId: 'b1', pivot: { x: 10, y: 0 }, boneTip: { x: 20, y: 0 },
+    });
+    const b3 = makePart('b3', {
+      kind: 'bone', parentId: 'b2', pivot: { x: 20, y: 0 }, boneTip: { x: 30, y: 0 },
+    });
+    resetState(makeDoc([b1, b2, b3]));
+    const removed = deleteParts(['b2']);
+    expect(removed.slice().sort()).toEqual(['b2', 'b3']);
+    expect(state.doc!.parts.map((p) => p.id)).toEqual(['b1']);
+  });
+
+  it('a non-bone child of a dying bone still just re-adopts (never cascaded)', () => {
+    const b1 = makePart('b1', { kind: 'bone', pivot: { x: 0, y: 0 }, boneTip: { x: 10, y: 0 } });
+    const prop = makePart('prop', { kind: 'art', parentId: 'b1' });
+    resetState(makeDoc([b1, prop]));
+    const removed = deleteParts(['b1']);
+    expect(removed).toEqual(['b1']);
+    expect(state.doc!.parts.find((p) => p.id === 'prop')!.parentId).toBeNull();
+  });
+
+  it('an attachedRoot child does NOT cascade — it detaches world-preserving onto the nearest survivor', () => {
+    const torso = makePart('torso', { kind: 'art', rest: rest(12, 5, -3) });
+    const s1 = makePart('s1', {
+      kind: 'bone', parentId: 'torso', pivot: { x: 0, y: 0 }, boneTip: { x: 20, y: 0 },
+      rest: rest(8, 0, 0),
+    });
+    const s2 = makePart('s2', {
+      kind: 'bone', parentId: 's1', pivot: { x: 20, y: 0 }, boneTip: { x: 40, y: 0 },
+      rest: rest(-5, 0, 0),
+    });
+    const s3 = makePart('s3', {
+      kind: 'bone', parentId: 's2', pivot: { x: 40, y: 0 }, boneTip: { x: 60, y: 0 },
+    });
+    const a1 = makePart('a1', {
+      kind: 'bone', parentId: 's2', attachedRoot: true,
+      pivot: { x: 40, y: -20 }, boneTip: { x: 55, y: -20 }, rest: rest(3, 4, -6),
+    });
+    const a2 = makePart('a2', {
+      kind: 'bone', parentId: 'a1', pivot: { x: 55, y: -20 }, boneTip: { x: 70, y: -20 },
+    });
+    resetState(makeDoc([torso, s1, s2, s3, a1, a2]));
+    const worldBefore = worldOf(state.doc!, a1);
+
+    const removed = deleteParts(['s2']); // mid-chain: s2+s3 cascade, s1 survives
+
+    expect(removed.slice().sort()).toEqual(['s2', 's3']);
+    const a1After = state.doc!.parts.find((p) => p.id === 'a1')!;
+    expect(a1After.parentId, "re-anchored onto s1 (s2's own surviving parent, still a bone)")
+      .toBe('s1');
+    expect(a1After.attachedRoot, 'landed on another bone — flag stays true').toBe(true);
+    // a2, an ordinary chain-internal child of a1, is entirely untouched by the detach.
+    const a2After = state.doc!.parts.find((p) => p.id === 'a2')!;
+    expect(a2After.parentId).toBe('a1');
+    expect(a2After.pivot).toEqual(a2.pivot);
+
+    const worldAfter = worldOf(state.doc!, a1After);
+    expect(worldAfter.a).toBeCloseTo(worldBefore.a, 6);
+    expect(worldAfter.b).toBeCloseTo(worldBefore.b, 6);
+    expect(worldAfter.e, 'world-preserving: pivot x unchanged by the detach').toBeCloseTo(worldBefore.e, 2);
+    expect(worldAfter.f, 'world-preserving: pivot y unchanged by the detach').toBeCloseTo(worldBefore.f, 2);
+  });
+
+  it('deleting the WHOLE spine chain detaches the attached root onto a non-bone ancestor, clearing the flag', () => {
+    const torso = makePart('torso', { kind: 'art', rest: rest(12, 5, -3) });
+    const s1 = makePart('s1', {
+      kind: 'bone', parentId: 'torso', pivot: { x: 0, y: 0 }, boneTip: { x: 20, y: 0 },
+      rest: rest(8, 0, 0),
+    });
+    const s2 = makePart('s2', {
+      kind: 'bone', parentId: 's1', pivot: { x: 20, y: 0 }, boneTip: { x: 40, y: 0 },
+      rest: rest(-5, 0, 0),
+    });
+    const a1 = makePart('a1', {
+      kind: 'bone', parentId: 's2', attachedRoot: true,
+      pivot: { x: 40, y: -20 }, boneTip: { x: 55, y: -20 }, rest: rest(3, 4, -6),
+    });
+    resetState(makeDoc([torso, s1, s2, a1]));
+    const worldBefore = worldOf(state.doc!, a1);
+
+    const removed = deleteParts(['s1']); // root: whole spine chain cascades
+
+    expect(removed.slice().sort()).toEqual(['s1', 's2']);
+    const a1After = state.doc!.parts.find((p) => p.id === 'a1')!;
+    expect(a1After.parentId, "detached onto torso (s1's own surviving parent)").toBe('torso');
+    expect(a1After.attachedRoot, 'landed on a non-bone part — flag cleared').toBeUndefined();
+
+    const worldAfter = worldOf(state.doc!, a1After);
+    expect(worldAfter.e).toBeCloseTo(worldBefore.e, 2);
+    expect(worldAfter.f).toBeCloseTo(worldBefore.f, 2);
+  });
+});
+
+describe('deleteParts: world-preserving skin unbind (Bug 1)', () => {
+  it('deleting every skin bone folds the ancestor chain away so the ROOT-space geometry renders unchanged', () => {
+    const parent = makePart('parent', { kind: 'art', rest: rest(24, 15, -8) });
+    const bone = makePart('bone', { kind: 'bone', pivot: { x: 0, y: 0 }, boneTip: { x: 10, y: 0 } });
+    const skinned = makePart('skinned', {
+      kind: 'art', parentId: 'parent',
+      // A pose accumulated on the skinned part itself since bind (allowed — CLAUDE.md
+      // "Skinned-part UX", rotate/translate only ever carried the BONES, never its own
+      // render) — must be DISCARDED, not preserved, by the unbind fold.
+      rest: rest(9, 2, 3),
+      skin: { bones: [boneRow('bone', { x: 0, y: 0 }, { x: 10, y: 0 })] },
+    });
+    resetState(makeDoc([parent, bone, skinned]));
+
+    deleteParts(['bone']);
+
+    const after = state.doc!.parts.find((p) => p.id === 'skinned')!;
+    expect(after.skin).toBeNull();
+    const world = worldOf(state.doc!, after);
+    expect(world.a).toBeCloseTo(1, 6);
+    expect(world.b).toBeCloseTo(0, 6);
+    expect(world.c).toBeCloseTo(0, 6);
+    expect(world.d).toBeCloseTo(1, 6);
+    expect(world.e, 'root-space geometry renders at exactly its baked position').toBeCloseTo(0, 3);
+    expect(world.f).toBeCloseTo(0, 3);
+  });
+
+  it('partial skin death (some bones survive) scrubs the bone list without touching rest', () => {
+    const bone1 = makePart('bone1', { kind: 'bone' });
+    const bone2 = makePart('bone2', { kind: 'bone' });
+    const skinned = makePart('skinned', {
+      rest: rest(17, 6, -2), // must be preserved untouched — no fold triggers
+      skin: {
+        bones: [
+          boneRow('bone1', { x: 0, y: 0 }, { x: 1, y: 0 }),
+          boneRow('bone2', { x: 1, y: 0 }, { x: 2, y: 0 }),
+        ],
+      },
+    });
+    resetState(makeDoc([bone1, bone2, skinned]));
+
+    deleteParts(['bone1']);
+
+    const after = state.doc!.parts.find((p) => p.id === 'skinned')!;
+    expect(after.skin?.bones.map((b) => b.id)).toEqual(['bone2']);
+    expect(after.rest).toEqual(rest(17, 6, -2));
+  });
+
+  it('ORDERING: an unbind fold and a detach fold in the same call resolve ancestor-first', () => {
+    // torsoArt is BOTH skinned to spineBone (dies here → torsoArt fully unbinds, Bug 1)
+    // AND becomes armRoot's new parent once spineBone dies (Bug 2's detach). If the
+    // detach fold ran BEFORE torsoArt's own unbind fold, it would solve against
+    // torsoArt's STALE (20,10,-15) rest instead of the FINAL zeroed one, and the
+    // world-preservation assertion below would fail by tens of units — see the task
+    // report for the measured mutation-check delta.
+    const torsoArt = makePart('torsoArt', {
+      kind: 'art',
+      rest: rest(20, 10, -15),
+      skin: { bones: [boneRow('spineBone', { x: 0, y: 0 }, { x: 10, y: 0 })] },
+    });
+    const spineBone = makePart('spineBone', {
+      kind: 'bone', parentId: 'torsoArt', pivot: { x: 0, y: 0 }, boneTip: { x: 10, y: 0 },
+      rest: rest(-7, 0, 0),
+    });
+    const armRoot = makePart('armRoot', {
+      kind: 'bone', parentId: 'spineBone', attachedRoot: true,
+      pivot: { x: 5, y: -12 }, boneTip: { x: 15, y: -12 }, rest: rest(4, 3, -2),
+    });
+    resetState(makeDoc([torsoArt, spineBone, armRoot]));
+    const worldBefore = worldOf(state.doc!, armRoot);
+
+    deleteParts(['spineBone']);
+
+    const torsoAfter = state.doc!.parts.find((p) => p.id === 'torsoArt')!;
+    expect(torsoAfter.skin).toBeNull();
+    // torsoArt has no ancestors of its own, so its unbind target (the identity) forces
+    // its rest to exactly zero — a large, easily observed change from (20,10,-15).
+    expect(torsoAfter.rest.rotate).toBeCloseTo(0, 6);
+    expect(torsoAfter.rest.tx).toBeCloseTo(0, 6);
+    expect(torsoAfter.rest.ty).toBeCloseTo(0, 6);
+
+    const armAfter = state.doc!.parts.find((p) => p.id === 'armRoot')!;
+    expect(armAfter.parentId).toBe('torsoArt');
+    expect(armAfter.attachedRoot).toBeUndefined();
+
+    const worldAfter = worldOf(state.doc!, armAfter);
+    expect(worldAfter.a).toBeCloseTo(worldBefore.a, 6);
+    expect(worldAfter.b).toBeCloseTo(worldBefore.b, 6);
+    expect(worldAfter.e, 'world-preserving DESPITE the simultaneous ancestor unbind')
+      .toBeCloseTo(worldBefore.e, 2);
+    expect(worldAfter.f).toBeCloseTo(worldBefore.f, 2);
   });
 });
 

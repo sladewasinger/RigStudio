@@ -2,10 +2,13 @@
 
 import { RigPart, Vec2 } from './docTypes';
 import { selectedPart, selectPart, state } from './appState';
-import { addNullPart, partById, setParent, subtreeIds } from './partHierarchy';
-import { isUsableBoneTip } from './boneOps';
+import { addNullPart, ancestorChain, partById, setParent, subtreeIds } from './partHierarchy';
+import {
+  isUsableBoneTip, boneDeletionCascade, restWorldMatOf, foldRestWorldIntoOwnPose,
+} from './boneOps';
 import { freshId } from './idGen';
 import { reconcileChildOrder, seedChildOrderIfActive, slotAddChild } from './childOrder';
+import { IDENTITY, Mat } from '../geometry/transforms';
 
 /** Structural edits the AI assistant may request (opt-in). */
 export interface RigChanges {
@@ -72,23 +75,66 @@ export function applyRigChanges(changes: RigChanges): Map<string, string> {
 
 /**
  * Delete parts (layers). Children of a deleted part re-adopt its nearest SURVIVING
- * ancestor (artwork is never deleted implicitly), the parts' tracks vanish from every
- * clip, and skin bindings (bones AND any per-node overrides pinned to them) referencing
- * deleted bones are dropped. Returns deleted ids so the canvas can unregister their
- * groups.
+ * ancestor (artwork is never deleted implicitly), UNLESS the dying parent is itself a
+ * BONE: a bone's own (non-attachedRoot) bone children are shared-joint CONTINUATIONS of
+ * the same chain, not independent parts, so deleting a bone cascades its ENTIRE
+ * same-chain bone subtree (`boneOps.ts`'s `boneDeletionCascade`) — orphaning them left
+ * meaningless floating bones (the user's report: "when I delete the top most parent
+ * bone, the other two stay alive"). An `attachedRoot` child (a deliberately LOOSE
+ * cross-chain coupling, Unified Skeleton Phase 1) is the exception: it does NOT cascade
+ * — it DETACHES world-preserving, re-parenting to the dying bone's nearest surviving
+ * ancestor via the same closed-form fold `view/rigOpsAttach.ts`'s `reattachRootBone`
+ * uses (mirrored core-side as `boneOps.ts`'s `foldRestWorldIntoOwnPose`, since
+ * `geometry/pose.ts` imports `core/model` and would cycle if called from here).
  *
- * CANONICAL ORDER is preserved BY CONSTRUCTION: this only ever REMOVES array elements
- * (never moves a survivor) and re-adopts orphans to an ANCESTOR, never a sibling — on a
- * canonical starting doc, excising any subset of interior nodes (with their children
- * promoted to the nearest surviving ancestor) can't create a gap or interleave a foreign
- * subtree, because every survivor's position relative to every other survivor is
- * untouched; only the now-closer index gaps left by deletions shift things down uniformly.
+ * A skinned part whose EVERY skin bone dies gets a proper model-level UNBIND rather than
+ * just losing its `skin` field: bind baked the part's full ancestor chain into its
+ * (now-static) ROOT-space geometry and zeroed its own pose, so re-entering the normal
+ * render pipeline with a non-identity ancestor chain would double-transform it (the
+ * reported "the arm went nuts" bug — deleting the bones teleported/mangled the art). The
+ * fix folds the INVERSE of the part's current rest-chain matrix into its own rest so
+ * chain·own composes to the identity in root space — the baked geometry keeps rendering
+ * exactly where it was baked, discarding whatever pose the part itself had accumulated
+ * since bind (a skinned part's own rotate/translate posing only ever carried its BONES,
+ * never its own render — see CLAUDE.md's "Skinned-part UX" — so there is nothing
+ * meaningful to preserve there). A part that keeps SOME surviving skin bones needs no
+ * such fold: its render pipeline is untouched (still `transform=''`, still deformed by
+ * the remaining bones); only the scrubbed bone/override lists change, so its weights
+ * RELAX onto the survivors through the ordinary auto-weight cache (skinRender.ts's cache
+ * signature includes `skin.bones`, so a bone-set change alone forces a recompute — no
+ * explicit invalidation call is needed, or reachable from this module without cycling
+ * into view/).
+ *
+ * The parts' tracks vanish from every clip, and skin bindings (bones AND any per-node
+ * overrides pinned to them) referencing deleted bones are dropped. Returns EVERY deleted
+ * id (including the cascade) so the canvas can unregister their groups.
+ *
+ * CANONICAL ORDER is preserved BY CONSTRUCTION exactly as before: this still only ever
+ * REMOVES array elements (never moves a survivor) and re-adopts orphans — cascaded or
+ * not, detached or not — to an ANCESTOR, never a sibling; on a canonical starting doc,
+ * excising any subset of interior nodes (with their children promoted to the nearest
+ * surviving ancestor) can't create a gap or interleave a foreign subtree, because every
+ * survivor's position relative to every other survivor is untouched; only the now-closer
+ * index gaps left by deletions shift things down uniformly.
  */
 export function deleteParts(ids: string[]): string[] {
   const doc = state.doc;
   if (!doc) return [];
-  const dead = new Set(ids.filter((id) => doc.parts.some((p) => p.id === id)));
-  if (dead.size === 0) return [];
+  const requested = new Set(ids.filter((id) => doc.parts.some((p) => p.id === id)));
+  if (requested.size === 0) return [];
+  const { dead, detach } = boneDeletionCascade(doc.parts, requested);
+  const detachIds = new Set(detach.map((b) => b.id));
+
+  // Snapshot everything the folds below need BEFORE any mutation runs: every
+  // ATTACHED-ROOT bone's current rest-only world matrix (the detach target — must be
+  // reproduced across the reparent, so it has to be read while the OLD chain is still
+  // live) and the SET of skinned survivors whose skin bones are ALL about to die (the
+  // unbind target is always the identity, computed fresh at fold time — this only needs
+  // the membership test, done here because it's simplest before skin.bones is mutated).
+  const detachWorlds = new Map(detach.map((b) => [b.id, restWorldMatOf(doc.parts, b)]));
+  const unbinding = doc.parts.filter(
+    (p) => !dead.has(p.id) && p.skin && p.skin.bones.every((b) => dead.has(b.id)),
+  );
 
   for (const part of doc.parts) {
     if (dead.has(part.id) || !part.parentId || !dead.has(part.parentId)) continue;
@@ -96,6 +142,28 @@ export function deleteParts(ids: string[]): string[] {
     while (anc && dead.has(anc.id)) anc = anc.parentId ? partById(anc.parentId) : null;
     part.parentId = anc?.id ?? null;
   }
+
+  // World-preserving folds (detached attached-root bones + fully-unbound skinned parts),
+  // ANCESTOR-FIRST — mirrors view/rigOpsBind.ts's bindPartsToBones ordering rationale: a
+  // detached bone can land under a part that is ITSELF being unbound in this SAME call
+  // (or the reverse), so whichever one sits shallower in the FINAL (already-reparented)
+  // hierarchy must be folded first, or the deeper one would read a still-stale ancestor
+  // rest value and solve against the wrong chain.
+  const folds: { part: RigPart; target: Mat }[] = [
+    ...detach.map((bone) => ({ part: bone, target: detachWorlds.get(bone.id)! })),
+    ...unbinding.map((part) => ({ part, target: IDENTITY })),
+  ].sort((a, b) => ancestorChain(a.part).length - ancestorChain(b.part).length);
+  for (const { part, target } of folds) {
+    foldRestWorldIntoOwnPose(doc.parts, part, target);
+    if (!detachIds.has(part.id)) continue; // the rest is the detach-only flag correction
+    const newParent = part.parentId ? partById(part.parentId) : null;
+    // Still true when it landed on another bone (re-anchored higher up the same original
+    // parent chain), cleared when it landed on a non-bone part/root — exactly
+    // `reattachRootBone`'s rule.
+    if (newParent?.kind === 'bone') part.attachedRoot = true;
+    else delete part.attachedRoot;
+  }
+
   doc.parts = doc.parts.filter((p) => !dead.has(p.id));
   // childOrder: a batch delete can drop several dead children off ONE surviving parent's
   // list and/or land several promoted orphans on another, all at once — rather than
@@ -112,7 +180,7 @@ export function deleteParts(ids: string[]): string[] {
   for (const part of doc.parts) {
     if (!part.skin) continue;
     part.skin.bones = part.skin.bones.filter((b) => !dead.has(b.id));
-    if (part.skin.bones.length === 0) { part.skin = null; continue; }
+    if (part.skin.bones.length === 0) { part.skin = null; continue; } // fold already applied above
     // A deleted bone can still be pinned by a per-node override even though it's gone
     // from skin.bones above — prune those too (mirrors normalizeDoc's dangling-ref
     // pruning, but live: this runs on an in-session mutation, not just on load).
