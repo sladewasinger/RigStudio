@@ -2,7 +2,7 @@
 
 import { RigPart, Vec2 } from './docTypes';
 import {
-  Mat, IDENTITY, multiply, translationMat, rotationMat, invertMat,
+  Mat, IDENTITY, multiply, translationMat, rotationMat, invertMat, matrixOfTransform, applyMat,
 } from '../geometry/transforms';
 
 /**
@@ -266,6 +266,32 @@ export function restChainMatOf(parts: RigPart[], part: RigPart): Mat {
 /** `part`'s full rest-only world matrix (ancestor chain composed with its own rest pose). */
 export function restWorldMatOf(parts: RigPart[], part: RigPart): Mat {
   return multiply(restChainMatOf(parts, part), restOwnPoseMat(part));
+}
+
+/**
+ * `part`'s full REST-time RENDER matrix — the pure mirror of geometry/pose.ts's
+ * `groupTransformOf(part, null)` as a Mat (core/ can never call that module — see the
+ * section header above): ancestor rest poses · own rest pose · the baked SVG transform ·
+ * the innermost rest scale/skew about the local pivot, replicating
+ * `innerLocalTransform`'s exact op order (translate(pl) scale(sx,sy) skewX(kx) skewY(ky)
+ * translate(−pl), with pl = invert(baked)·pivot — `localPivotOf`'s rule). Unlike the
+ * rigid fold mirrors above, this one is NOT restricted to rigid output: it exists for
+ * pure-doc GEOMETRY measurement (partHierarchy.ts's headless group-pivot default), never
+ * for rest folds. Callers handle skinned parts themselves: bind bakes the whole chain
+ * into root-space geometry and render forces the part's group transform empty, so a
+ * skinned part's geometry maps through the IDENTITY, not this.
+ */
+export function restRenderMatrixOf(parts: RigPart[], part: RigPart): Mat {
+  const baked = matrixOfTransform(part.transform);
+  const world = multiply(restWorldMatOf(parts, part), baked);
+  const { sx, sy, kx, ky } = part.rest;
+  if (sx === 1 && sy === 1 && kx === 0 && ky === 0) return world;
+  const pl = applyMat(invertMat(baked), part.pivot.x, part.pivot.y);
+  let inner: Mat = translationMat(pl.x, pl.y);
+  inner = multiply(inner, { a: sx, b: 0, c: 0, d: sy, e: 0, f: 0 });
+  if (kx !== 0) inner = multiply(inner, { a: 1, b: 0, c: Math.tan((kx * Math.PI) / 180), d: 1, e: 0, f: 0 });
+  if (ky !== 0) inner = multiply(inner, { a: 1, b: Math.tan((ky * Math.PI) / 180), c: 0, d: 1, e: 0, f: 0 });
+  return multiply(world, multiply(inner, translationMat(-pl.x, -pl.y)));
 }
 
 /**

@@ -1,9 +1,11 @@
 // ---- Part hierarchy ----
 
-import { applyMat, multiply, rotationMat } from '../geometry/transforms';
+import { IDENTITY, applyMat, matrixOfTransform, multiply, rotationMat } from '../geometry/transforms';
+import { Bounds, boundsCenter, pathBoundsThroughMatrix, unionBounds } from '../geometry/pathBounds';
 import { Channel, Easing, RigPart, Track, Vec2 } from './docTypes';
 import { selectPart, state } from './appState';
 import { sampleKeyList } from './channels';
+import { restRenderMatrixOf } from './boneOps';
 import { freshId } from './idGen';
 import { reconcileChildOrder, seedChildOrderIfActive, slotAddChild, slotRemoveChild } from './childOrder';
 
@@ -212,7 +214,49 @@ export function addNullPart(
 }
 
 /**
- * Wrap the outermost of the given parts in a new group null pivoted at `pivot`.
+ * Default pivot for a null part minted AROUND members when the caller supplies none: the
+ * members' subtree geometry bbox center, computed PURE-DOC — every path's data mapped
+ * through its part's full rest render matrix (`boneOps.ts`'s `restRenderMatrixOf`) then
+ * its own `path.transform` — because HEADLESS callers (scripts/agents on the headless
+ * facade, MCP tool bodies) have no canvas to measure. Mirrors the in-app Ctrl+G default
+ * (`panels/canvasTools.ts`: rendered-bbox center via partRootBoxes, pivot average for a
+ * bones-only selection) with the same exclusions: hidden parts don't count
+ * (partRootBoxes skips `isEffectivelyHidden`), and a skinned part's geometry is already
+ * ROOT-space (bind bakes the chain in; render forces its group transform empty) so it
+ * maps through the IDENTITY. One deliberate improvement over the DOM flow: a member
+ * measures its WHOLE SUBTREE's art (partRootBoxes only boxes parts with their own
+ * paths, so a partless group member contributes nothing there) — wrapping a container
+ * should pivot around everything it carries. Selections with no geometry anywhere
+ * (bones-only chains) fall back to the members' pivot average, exactly like the in-app
+ * flow. This is the fix for the 2026-07-14 defect: headless-created wrapper groups
+ * landed pivot ≈ (0,0), so every keyed/interactive rotation orbited a point far off
+ * the artwork.
+ */
+export function memberGeometryPivot(members: RigPart[], parts: RigPart[]): Vec2 {
+  let bounds: Bounds | null = null;
+  for (const member of members) {
+    const ids = subtreeIds(member, parts);
+    for (const part of parts) {
+      if (!ids.has(part.id) || part.paths.length === 0 || isEffectivelyHidden(part)) continue;
+      const partMatrix = part.skin ? IDENTITY : restRenderMatrixOf(parts, part);
+      for (const path of part.paths) {
+        const m = path.transform ? multiply(partMatrix, matrixOfTransform(path.transform)) : partMatrix;
+        bounds = unionBounds(bounds, pathBoundsThroughMatrix(path.d, m));
+      }
+    }
+  }
+  if (bounds) return boundsCenter(bounds);
+  return {
+    x: members.reduce((sum, p) => sum + p.pivot.x, 0) / members.length,
+    y: members.reduce((sum, p) => sum + p.pivot.y, 0) / members.length,
+  };
+}
+
+/**
+ * Wrap the outermost of the given parts in a new group null pivoted at `pivot` — or,
+ * when the caller supplies none, at the members' pure-doc geometry bbox center
+ * (`memberGeometryPivot` above; an explicit pivot always wins — the in-app Ctrl+G flow
+ * keeps passing its DOM-measured box center).
  * Members whose ancestor is also selected stay attached to that ancestor. The group
  * adopts the members' common parent (or none); it starts just above the topmost member's
  * own slot (roughly preserving where the grouped content read in the stack), then each
@@ -220,7 +264,7 @@ export function addNullPart(
  * self-healing the group's cosmetic starting position even when it temporarily lands
  * inside an existing block (setParent moves by the parentId graph, not array position).
  */
-export function groupParts(ids: string[], pivot: Vec2): RigPart | null {
+export function groupParts(ids: string[], pivot?: Vec2): RigPart | null {
   const doc = state.doc;
   if (!doc) return null;
   const members = doc.parts.filter((p) => ids.includes(p.id));
@@ -229,7 +273,7 @@ export function groupParts(ids: string[], pivot: Vec2): RigPart | null {
 
   const parents = new Set(outer.map((p) => p.parentId));
   const parentId = parents.size === 1 ? [...parents][0] : null;
-  const group = addNullPart('group', pivot, parentId);
+  const group = addNullPart('group', pivot ?? memberGeometryPivot(outer, doc.parts), parentId);
   doc.parts = doc.parts.filter((p) => p.id !== group.id);
   const topmostIdx = Math.max(...outer.map((p) => doc.parts.indexOf(p)));
   doc.parts.splice(topmostIdx + 1, 0, group);
