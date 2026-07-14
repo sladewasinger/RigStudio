@@ -44,15 +44,47 @@ be drawn from.
   animation): Rive supports it (our keyed-opacity export already targets
   per-paint SolidColor) and the model could grow path channels — real
   feature scope, his call whether the timeline should ever list paths.
-- **Unified child ordering (the full Inkscape model)** — user friction
-  2026-07-13 ("I have gimp/inkscape in mind… these are all paths"): today a
-  part's own paths are a separate bucket that always paints BELOW its child
-  parts, so paths can't interleave with sub-groups — and the IMPORTER
-  silently restacks any SVG where a path follows a sub-group (an import
-  fidelity bug by the user's standard). The cure is one ordered MIXED child
-  list per part, everywhere (panel/canvas/exporters — Rive's global drawable
-  order can express interleaving). Major model surgery; the auto-promote
-  drag fix is the compatible stopgap. HIS CALL when/whether to unify fully.
+- ~~Unified child ordering~~ — APPROVED BY USER 2026-07-13 AS PRIORITY #1
+  ("YES. I want this to work exactly how you said… this is priority #1. So
+  do it."). Moved to the U-program below; the auto-promote drag stopgap was
+  CANCELLED pre-landing (superseded — its behavior would have been wrong
+  post-surgery).
+
+## U-program: unified child ordering (the full Inkscape model) — IN PROGRESS
+
+*User-approved priority #1. One ordered MIXED child list per part (paths and
+child parts interleaved) — panel order = paint order for EVERYTHING, the
+importer preserves SVG document order exactly, exporters express it. Kills
+the two-bucket model (own paths always below children) and its import
+restacking fidelity bug.*
+
+- [ ] **U1 — model + plumbing (zero behavior change)**: `RigPart.childOrder`
+  (ordered slots `{kind:'path'|'part', id}`); normalizeDoc SYNTHESIZES
+  paths-first-then-children for docs without it (≡ today's paint order — old
+  files render identically) and repairs dangling/missing/duplicate slots; a
+  slot CHOKEPOINT so every structural op (add/remove path or child, group/
+  ungroup/delete/duplicate/reparent/movePathToPart/extract) maintains slots;
+  serialization round-trip; per-op integrity tests. Renderer untouched.
+- [ ] **U2 — rendering honors slots**: canvas paint = per-parent slot order
+  (a part's paths render as document-ordered RUNS interleaved with child
+  part groups — flat sibling `<g>`s sharing the part's composed transform,
+  no inheritance change); headless composePose same flatten; animate-time
+  keyed `z` rule: PART slots stable-sort by z within their parent's slot
+  list, PATH slots hold their rest positions (paths have no channels).
+  Synthesized docs render byte-identically — pinned.
+- [ ] **U3 — exporters**: .riv global drawable order = the slot flatten
+  (synthesized docs byte-identical, golden pin holds; interleaved docs get
+  correct stacking). Lottie: DOCUMENTED LIMITATION only (frozen — one layer
+  per part can't interleave; keeps the paths-first approximation).
+  SEQUENCED AFTER the in-flight skinned-.riv-export session lands (io/riv
+  collision).
+- [ ] **U4 — the user-visible layer**: importer records TRUE SVG document
+  order into slots (the restacking fidelity bug dies); layers panel rows =
+  slot order with full drag-reorder between ANY rows (paths ↔ parts as
+  siblings, Inkscape rules); PageUp/Down + stacking row slot-aware; e2e =
+  the user's shadow-above-body_inner gesture. EXPECT a golden re-pin here
+  (the golden doc imports the sample, whose true document order may
+  interleave) — verify visually via render-frames per protocol.
 - **Unified skeleton Phase 2 — IK across attachments**: does grabbing a hand
   FABRIK through the spine? Default OFF (IK chain resolution stops at
   attached roots — safer, predictable); the full-body solve is a flag to
