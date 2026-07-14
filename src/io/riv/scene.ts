@@ -24,8 +24,15 @@
  *     keyframes stays a static Node property, a keyed channel becomes a LinearAnimation
  *     KeyedProperty, emitted by animation.ts). Easing lives on the ARRIVING keyframe and
  *     Keyframe.bezier overrides the preset (both mirrored in animation.ts);
- *   - skinned parts export RIGIDLY at rest (Rive Skin/Tendon left for a future wave),
- *     which happens for free since binding already baked their geometry.
+ *   - BONES emit as RootBone (typeKey 41) — same x/y/rotation transform semantics as a
+ *     Node (keys.ts's skeletal table cites root_bone.cpp), so the placement math below
+ *     is shared verbatim; being real Bones lets Tendons reference them;
+ *   - SKINNED parts (part.skin) emit real skeletal deformation (skinned-part export
+ *     wave, 2026-07-13): each PointsPath gets a Skin + one Tendon per skin bone and
+ *     every vertex a CubicWeight, built by io/riv/skin.ts from the stored bind data
+ *     (restWorldInv/bindSeg) and the same weight model as the live canvas — see
+ *     skin.ts's header for the frame math. A skin that references a hidden or dangling
+ *     bone falls back to the old rigid emission (skin.ts's buildSkinPlan).
  *
  * Export-completions wave (2026-07-13): keyed `z` (draw order) via DrawRules/DrawTarget
  * (drawRules.ts — its header has the full mechanism + citations + the faithful-subset
@@ -36,17 +43,18 @@
  */
 
 import { artboardFrame, RigDoc, RigPart, RigPath } from '../../core/model';
-import { parsePath, pathToCubics } from '../../geometry/paths';
-import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../../geometry/transforms';
 import { assemble, Scene } from './writer';
 import { emitAnimations, OpacityColorTarget } from './animation';
 import { emitStateMachines } from './stateMachine';
 import { setupDrawRules } from './drawRules';
+import { bakedMatrix, pathToLocalSubpaths } from './geometry';
+import { buildSkinPlan, emitSkin, emitVertexWeight, SkinPlan, subpathWeights } from './skin';
 import {
-  argb, DEG2RAD, P_COLOR, P_HEIGHT, P_IN_DISTANCE, P_IN_ROTATION, P_IS_CLOSED, P_NAME,
-  P_NODE_X, P_NODE_Y, P_OUT_DISTANCE, P_OUT_ROTATION, P_PARENT_ID, P_ROTATION, P_THICKNESS,
-  P_VERT_X, P_VERT_Y, P_WIDTH, T_ARTBOARD, T_BACKBOARD, T_CUBIC_VERTEX, T_FILL, T_NODE,
-  T_POINTS_PATH, T_SHAPE, T_SOLID_COLOR, T_STROKE,
+  argb, DEG2RAD, P_BONE_LENGTH, P_COLOR, P_HEIGHT, P_IN_DISTANCE, P_IN_ROTATION,
+  P_IS_CLOSED, P_NAME, P_NODE_X, P_NODE_Y, P_OUT_DISTANCE, P_OUT_ROTATION, P_PARENT_ID,
+  P_ROOT_BONE_X, P_ROOT_BONE_Y, P_ROTATION, P_THICKNESS, P_VERT_X, P_VERT_Y, P_WIDTH,
+  T_ARTBOARD, T_BACKBOARD, T_CUBIC_VERTEX, T_FILL, T_NODE, T_POINTS_PATH, T_ROOT_BONE,
+  T_SHAPE, T_SOLID_COLOR, T_STROKE,
 } from './keys';
 
 /**
@@ -141,14 +149,29 @@ export function exportRiv(doc: RigDoc): Uint8Array {
     const baseX = part.pivot.x - parentRef.x;
     const baseY = part.pivot.y - parentRef.y;
 
-    const nodeIndex = scene.begin(T_NODE);
+    // Bones are REAL Rive bones (RootBone) so Tendons can reference them; RootBone's
+    // x(90)/y(91)/rotation(15) compose exactly like a Node's x/y/rotation (keys.ts's
+    // skeletal table cites root_bone.cpp skipping the Bone parent/derived-origin rules),
+    // so the placement math below is one shared path. A plain Bone (40) would snap its
+    // origin to the parent's tip and demand a Bone parent — wrong for chains rooted on
+    // art parts and for attachedRoot bones carrying loose offsets.
+    const isBone = part.kind === 'bone';
+    const nodeIndex = scene.begin(isBone ? T_ROOT_BONE : T_NODE);
     partIndex.set(part.id, nodeIndex);
     scene.propUint(P_PARENT_ID, parentNodeIndex);
     scene.propString(P_NAME, part.label);
     // Static Node transform = rest pose; keyed channels override it via animations.
-    scene.propDouble(P_NODE_X, baseX + part.rest.tx);
-    scene.propDouble(P_NODE_Y, baseY + part.rest.ty);
+    scene.propDouble(isBone ? P_ROOT_BONE_X : P_NODE_X, baseX + part.rest.tx);
+    scene.propDouble(isBone ? P_ROOT_BONE_Y : P_NODE_Y, baseY + part.rest.ty);
     if (part.rest.rotate !== 0) scene.propDouble(P_ROTATION, part.rest.rotate * DEG2RAD);
+    // Bone length is cosmetic for a RootBone-only rig (only a plain Bone CHILD reads its
+    // parent's length for positioning) but cheap and faithful — the tip is real data.
+    if (isBone && part.boneTip) {
+      scene.propDouble(
+        P_BONE_LENGTH,
+        Math.hypot(part.boneTip.x - part.pivot.x, part.boneTip.y - part.pivot.y),
+      );
+    }
     // Rest scale/skew are baked into geometry (below), so the STATIC Node scale stays 1.
     // A part MAY still key sx/sy (see animation.ts's channelSpecs) — an absolute Node
     // scaleX/scaleY that rides on top of the baked-in rest scale, so a part authored at
@@ -190,8 +213,11 @@ export function exportRiv(doc: RigDoc): Uint8Array {
   for (let pi = doc.parts.length - 1; pi >= 0; pi--) {
     const part = doc.parts[pi];
     if (hiddenIds.has(part.id)) continue; // Layers eye: fully excluded, no Shapes either.
+    // Skeletal deformation plan (skinned parts): resolved once per part, null = the
+    // rigid fallback (skin.ts's buildSkinPlan documents when and why).
+    const skinPlan = part.skin ? buildSkinPlan(doc, part, partIndex, ox, oy) : null;
     for (let qi = part.paths.length - 1; qi >= 0; qi--) {
-      const shapeIndex = emitShape(scene, part, part.paths[qi], partIndex.get(part.id)!, opacityTargets);
+      const shapeIndex = emitShape(scene, part, part.paths[qi], partIndex.get(part.id)!, opacityTargets, skinPlan);
       if (shapeIndex !== null && !partShapeIndex.has(part.id)) partShapeIndex.set(part.id, shapeIndex);
     }
   }
@@ -226,10 +252,16 @@ export function exportRiv(doc: RigDoc): Uint8Array {
  * One RigPath -> Shape (child of the part node) with PointsPath(s), Fill, Stroke. Returns
  * the Shape's component index (for partShapeIndex/draw-order anchoring), or null when the
  * path produced no geometry (degenerate — no Shape was emitted at all).
+ *
+ * With a `skinPlan`, each PointsPath additionally gets its Skin + Tendons (emitted right
+ * after the path, before its vertices) and EVERY vertex a CubicWeight (right after the
+ * vertex — parentId always points backward). The runtime then renders the path in world
+ * space through the skin and ignores the shape's own transform (points_path.cpp's
+ * identity pathTransform), so the node hierarchy above only matters for the BONES.
  */
 function emitShape(
   scene: Scene, part: RigPart, path: RigPath, partNodeIndex: number,
-  opacityTargets: Map<string, OpacityColorTarget[]>,
+  opacityTargets: Map<string, OpacityColorTarget[]>, skinPlan: SkinPlan | null,
 ): number | null {
   const m = bakedMatrix(part, path);
   const subs = pathToLocalSubpaths(path.d, m, part.pivot.x, part.pivot.y);
@@ -245,8 +277,10 @@ function emitShape(
     scene.propUint(P_PARENT_ID, shapeIndex);
     scene.propBool(P_IS_CLOSED, sub.closed);
     scene.end();
-    for (const v of sub.verts) {
-      scene.begin(T_CUBIC_VERTEX);
+    if (skinPlan) emitSkin(scene, skinPlan, pathIndex);
+    const weights = skinPlan ? subpathWeights(skinPlan, path.id, sub) : null;
+    sub.verts.forEach((v, vi) => {
+      const vertexIndex = scene.begin(T_CUBIC_VERTEX);
       scene.propUint(P_PARENT_ID, pathIndex);
       scene.propDouble(P_VERT_X, v.x);
       scene.propDouble(P_VERT_Y, v.y);
@@ -255,7 +289,8 @@ function emitShape(
       scene.propDouble(P_OUT_ROTATION, v.outRot);
       scene.propDouble(P_OUT_DISTANCE, v.outDist);
       scene.end();
-    }
+      if (weights) emitVertexWeight(scene, vertexIndex, weights[vi]);
+    });
   }
 
   // Part-level `opacity` (RestPose.opacity / the keyable 'opacity' channel) folds
@@ -298,128 +333,7 @@ function pushOpacityTarget(
   arr.push(target);
 }
 
-/**
- * Baked matrix for a path: part group transform, then rest scale/skew innermost around
- * the pivot (mapped into pre-baked local space) so artwork reshapes on its own axes and
- * the joint stays fixed, then the per-path transform. Identical to exportLottie.ts.
- */
-function bakedMatrix(part: RigPart, path: RigPath): Mat {
-  const baked = matrixOfTransform(part.transform);
-  let m = baked;
-  const sx = part.rest?.sx ?? 1;
-  const sy = part.rest?.sy ?? 1;
-  const kx = part.rest?.kx ?? 0;
-  const ky = part.rest?.ky ?? 0;
-  if (sx !== 1 || sy !== 1 || kx !== 0 || ky !== 0) {
-    const pl = applyMat(invertMat(baked), part.pivot.x, part.pivot.y);
-    const local = matrixOfTransform(
-      `translate(${pl.x},${pl.y}) scale(${sx},${sy}) ` +
-      `skewX(${kx}) skewY(${ky}) translate(${-pl.x},${-pl.y})`,
-    );
-    m = multiply(baked, local);
-  }
-  return multiply(m, matrixOfTransform(path.transform));
-}
-
-interface RivVertex {
-  x: number; y: number;
-  inRot: number; inDist: number;
-  outRot: number; outDist: number;
-}
-interface RivSubpath { verts: RivVertex[]; closed: boolean }
-
-/**
- * Parse path data, rewrite arcs as cubics, flatten the baked matrix, subtract the pivot
- * to land in the part node's local space, and convert each vertex's in/out tangent
- * offsets to Rive's polar (rotation, distance) form. Straight segments become
- * zero-distance handles (Rive renders a degenerate cubic as a line). The subpath fold
- * for an explicit closing segment mirrors exportLottie.ts's pathToBeziers.
- */
-function pathToLocalSubpaths(d: string, m: Mat, pivotX: number, pivotY: number): RivSubpath[] {
-  const cmds = pathToCubics(parsePath(d));
-  const subs: RivSubpath[] = [];
-  // Working buffers for the current subpath: vertex point + in/out tangent OFFSETS.
-  let v: { x: number; y: number }[] = [];
-  let inv: { x: number; y: number }[] = [];
-  let outv: { x: number; y: number }[] = [];
-  let curX = 0, curY = 0, startX = 0, startY = 0;
-  let open = false;
-
-  const local = (x: number, y: number) => {
-    const p = applyMat(m, x, y);
-    return { x: p.x - pivotX, y: p.y - pivotY };
-  };
-  const tangent = (cx: number, cy: number, vx: number, vy: number) => {
-    const c = applyMat(m, cx, cy);
-    const w = applyMat(m, vx, vy);
-    return { x: c.x - w.x, y: c.y - w.y };
-  };
-  const finish = (closed: boolean) => {
-    if (v.length >= 2) {
-      subs.push({ verts: v.map((pt, i) => toPolar(pt, inv[i], outv[i])), closed });
-    }
-    v = []; inv = []; outv = []; open = false;
-  };
-  const startSub = (x: number, y: number) => {
-    v = [local(x, y)]; inv = [{ x: 0, y: 0 }]; outv = [{ x: 0, y: 0 }]; open = true;
-  };
-
-  for (const c of cmds) {
-    switch (c.cmd) {
-      case 'M':
-        if (open) finish(false);
-        startSub(c.x, c.y);
-        curX = c.x; curY = c.y; startX = c.x; startY = c.y;
-        break;
-      case 'L': {
-        if (!open) startSub(curX, curY);
-        v.push(local(c.x, c.y)); inv.push({ x: 0, y: 0 }); outv.push({ x: 0, y: 0 });
-        curX = c.x; curY = c.y;
-        break;
-      }
-      case 'C': {
-        if (!open) startSub(curX, curY);
-        outv[outv.length - 1] = tangent(c.x1, c.y1, curX, curY);
-        v.push(local(c.x, c.y));
-        inv.push(tangent(c.x2, c.y2, c.x, c.y));
-        outv.push({ x: 0, y: 0 });
-        curX = c.x; curY = c.y;
-        break;
-      }
-      case 'Z': {
-        if (open) {
-          const n = v.length;
-          // Explicit final segment back to the start duplicates vertex 0: fold its
-          // incoming tangent into vertex 0 and drop it (Rive auto-closes last->first).
-          if (n > 1 && Math.hypot(v[n - 1].x - v[0].x, v[n - 1].y - v[0].y) < 1e-3) {
-            inv[0] = inv[n - 1];
-            v.pop(); inv.pop(); outv.pop();
-          }
-          finish(true);
-        }
-        curX = startX; curY = startY;
-        break;
-      }
-      case 'A':
-        break; // unreachable: pathToCubics rewrote all arcs
-    }
-  }
-  if (open) finish(false);
-  return subs;
-}
-
-/** Vertex point + in/out tangent offsets -> Rive detached-cubic polar handles. */
-function toPolar(
-  pt: { x: number; y: number },
-  inOff: { x: number; y: number },
-  outOff: { x: number; y: number },
-): RivVertex {
-  return {
-    x: pt.x, y: pt.y,
-    inRot: Math.atan2(inOff.y, inOff.x),
-    inDist: Math.hypot(inOff.x, inOff.y),
-    outRot: Math.atan2(outOff.y, outOff.x),
-    outDist: Math.hypot(outOff.x, outOff.y),
-  };
-}
+// bakedMatrix/pathToLocalSubpaths/toPolar live in ./geometry (moved verbatim in the
+// skinned-part export wave, extended with the per-vertex weight-source records
+// io/riv/skin.ts consumes — see geometry.ts's header).
 

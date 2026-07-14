@@ -9,17 +9,12 @@
 
 import { state, RigPart } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
-import { skinWeights, overrideWeightRow, Seg } from '../geometry/skin';
+import { skinWeights, overrideWeightRow, Seg, SKIN_WEIGHT_POWER } from '../geometry/skin';
 import { Mat, matrixOfTransform, multiply } from '../geometry/transforms';
 import { fullPoseTransform, effectivePivot, effectiveTip } from './pose';
 
-/**
- * Auto-weight falloff exponent for the render path (see skinWeights). A long thin limb
- * with a 3-bone chain bends mushily at inverse-square (2) — the joint folds don't
- * localize; 4 concentrates each point on its nearest bone so an elbow actually creases,
- * while distant bones still contribute enough to avoid tearing.
- */
-const SKIN_WEIGHT_POWER = 4;
+// SKIN_WEIGHT_POWER lives in geometry/skin.ts (single source of truth shared with the
+// .riv exporter's Skin/Tendon weights) — see its doc comment there for the "why 4".
 
 // Runtime cache: parsed rest geometry + per-point weights, invalidated when the
 // rest path data changes (node edits) or the binding changes.

@@ -278,7 +278,8 @@ export function runRenderFrames(args: string[]): CommandResult {
   if (result.hasSkinnedParts) {
     stdout +=
       '\nNote: this document has skinned part(s) — they render RIGID in headless mode '
-      + '(bind-pose geometry, no linear-blend deformation).\n';
+      + '(bind-pose geometry, no linear-blend deformation). The .riv EXPORT of this doc '
+      + 'does articulate them (Rive Skin/Tendon); only these frame renders are rigid.\n';
   }
   return ok(stdout);
 }

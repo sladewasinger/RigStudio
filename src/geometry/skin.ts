@@ -9,6 +9,18 @@
 
 import type { RigPart } from '../core/model';
 
+/**
+ * Auto-weight falloff exponent used everywhere a skinned part's LOOK is produced —
+ * `view/skinRender.ts` (the live canvas LBS) and `io/riv/skin.ts` (the exported Rive
+ * Skin/Tendon weights) both import THIS constant so the editor and the .riv runtime
+ * can never disagree on weights. A long thin limb with a 3-bone chain bends mushily at
+ * inverse-square (2) — the joint folds don't localize; 4 concentrates each point on its
+ * nearest bone so an elbow actually creases, while distant bones still contribute
+ * enough to avoid tearing. (`skinWeights`' own default stays 2 — the classic
+ * inverse-square the unit tests pin.)
+ */
+export const SKIN_WEIGHT_POWER = 4;
+
 export interface Pt {
   x: number;
   y: number;

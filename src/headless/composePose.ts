@@ -10,8 +10,12 @@
  * LIMITATION (documented here AND surfaced by `renderFrames.ts`'s CLI output — do not
  * silently drop it in a future refactor): skinned parts (`part.skin`) render RIGID —
  * their bind-time REST geometry (already baked to root space by the bind step) with an
- * identity transform, exactly like both exporters and `view/render.ts`'s
- * `renderPartRigid` fallback. Headless linear-blend skinning is out of scope for H1b.
+ * identity transform, like the Lottie exporter and `view/render.ts`'s
+ * `renderPartRigid` fallback. (The .riv exporter is the exception since the
+ * skinned-part export wave, 2026-07-13: it emits real Rive Skin/Tendon deformation —
+ * `io/riv/skin.ts` — so exported playback articulates even though headless FRAME
+ * RENDERS of the same doc stay rigid.) Headless linear-blend skinning is out of scope
+ * for H1b.
  */
 import {
   RigDoc, Clip, RigPart, RigPath, state, artboardFrame, drawOrder, isEffectivelyHidden,

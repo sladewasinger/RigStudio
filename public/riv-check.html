@@ -22,10 +22,11 @@
             the app via window.__rigStudio.exportRiv), it also samples every animation's
             keyed node rotations across the timeline.
 
-         NOTE ON PIXELS: this headless preview cannot read back Canvas2D pixels rendered by
-         the Rive wasm (a known-good .riv reads 0 pixels here too; rAF never ticks). So we
-         verify at the TRANSFORM level using the low-level LinearAnimationInstance /
-         StateMachineInstance APIs, which advance deterministically without rAF. -->
+         NOTE ON PIXELS: rAF never ticks in this headless preview, so anything routed
+         through the wrapper's render loop never paints — the transform-level checks
+         below predate knowing the workaround. Pixel readback DOES work when the
+         wrapper's clear/align/draw/flush sequence is invoked directly (see
+         skinnedCheck's drawNow), which the skinned-deformation check uses. -->
     <script src="/node_modules/@rive-app/canvas/rive.js"></script>
     <style>
       body { font-family: monospace; padding: 12px; }
@@ -35,6 +36,9 @@
   </head>
   <body>
     <canvas id="c" width="200" height="200"></canvas>
+    <!-- Skinned-deformation check draws 1:1 (100x100 artboard on a 100x100 canvas) via
+         its own low-level renderer so getImageData samples exact artboard coords. -->
+    <canvas id="c2" width="100" height="100"></canvas>
     <pre id="out">running…</pre>
     <script type="module">
       import { exportRiv } from '/src/io/riv/index.ts';
@@ -366,6 +370,128 @@
         return { checks, pass: Object.values(checks).every(Boolean) };
       }
 
+      /**
+       * SKELETAL DEFORMATION (skinned-part export wave, 2026-07-13): a horizontal red
+       * bar (10,45)-(90,55) with a MID-SPAN vertex column at x=50, skinned to a 2-bone
+       * chain along its spine — b1 (10,50)->(50,50), b2 (50,50)->(90,50) child of b1,
+       * identity bind — with a clip keying b2.rotate 0 -> 90deg. Mirrors
+       * src/__tests__/exportRivSkin.test.ts's fixture (that one has no midpoints; the
+       * subdivision here exists so the BEND is visible — LBS moves vertices, and a
+       * 4-corner quad under a bent chain just skews with straight edges, exactly like
+       * the editor's own LBS on the same path). PIXEL-LEVEL articulation asserts, at
+       * ~89deg: the inner half holds still at (25,50), the outer half leaves (75,50)
+       * and arrives rotated-down at (52,80).
+       *
+       * Rendering: the wrapper's own clear/align/draw/flush sequence invoked DIRECTLY
+       * (drawNow below — the body of rive.js's Rive.draw minus its gating), 1:1 on a
+       * 100x100 canvas, then getImageData. Three hard-won facts: (a) pixel readback
+       * DOES work here (the old "unavailable" note predated this) — but only after
+       * renderer.flush(), because the wasm renderer buffers commands; (b) the public
+       * drawFrame()/rAF paths are unreliable in this headless preview —
+       * document.timeline.currentTime gates drawFrame's synchronous branch and rAF
+       * never ticks, so once any instance has a pending frame request its drawFrame
+       * silently no-ops forever; (c) advance() on a LOOPING clip wraps at the exact
+       * duration — advance to 0.99, never 1.0.
+       */
+      function skinnedDoc() {
+        const bone = (id, label, px, py, tx, ty, parentId) => ({
+          id, label, kind: 'bone', transform: '', pivot: { x: px, y: py },
+          boneTip: { x: tx, y: ty }, pivotHint: null, parentId,
+          rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+          paths: [],
+        });
+        const I = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+        const limb = {
+          id: 'p_limb', label: 'limb', kind: 'art', transform: '',
+          pivot: { x: 50, y: 50 }, pivotHint: null, parentId: null,
+          rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+          skin: {
+            bones: [
+              { id: 'p_b1', restWorldInv: I, bindSeg: { p: { x: 10, y: 50 }, q: { x: 50, y: 50 } } },
+              { id: 'p_b2', restWorldInv: I, bindSeg: { p: { x: 50, y: 50 }, q: { x: 90, y: 50 } } },
+            ],
+          },
+          paths: [{
+            id: 'limb_path', label: 'limb_path',
+            d: 'M 10,45 L 50,45 L 90,45 L 90,55 L 50,55 L 10,55 Z',
+            fill: '#cc3366', fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1,
+            transform: '',
+          }],
+        };
+        return {
+          name: 'skin_check', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+          parts: [bone('p_b1', 'b1', 10, 50, 50, 50, null), bone('p_b2', 'b2', 50, 50, 90, 50, 'p_b1'), limb],
+          rootPivot: { x: 50, y: 50 },
+          clips: [{
+            name: 'bend', duration: 1000,
+            tracks: [{
+              target: 'p_b2', channel: 'rotate', keyframes: [
+                { time: 0, value: 0, easing: 'linear' },
+                { time: 1000, value: 90, easing: 'linear' },
+              ],
+            }],
+          }],
+        };
+      }
+
+      async function skinnedCheck() {
+        const bytes = exportRiv(skinnedDoc());
+        const canvas = document.getElementById('c2');
+        const inst = await loadRive(bytes, canvas);
+        const rt = inst.runtime, ab = inst.artboard;
+        const ctx2d = canvas.getContext('2d');
+        const px = (x, y) => Array.from(ctx2d.getImageData(x, y, 1, 1).data);
+        // #cc3366 with generous tolerance (AA at edges is avoided by sampling interiors).
+        const isRed = (p) => p[3] > 200 && p[0] > 150 && p[1] < 120 && p[2] < 160;
+        // The wrapper's Rive.draw body minus its timeline/rAF gating (see the doc
+        // comment above): its own renderer + alignment, then an explicit flush.
+        const drawNow = () => {
+          const renderer = inst.renderer;
+          renderer.clear();
+          renderer.save();
+          inst.alignRenderer();
+          ab.draw(renderer);
+          renderer.restore();
+          renderer.flush();
+          if (typeof rt.resolveAnimationFrame === 'function') rt.resolveAnimationFrame();
+        };
+
+        const bones = typeof ab.bone === 'function'
+          ? { b1: !!ab.bone('b1'), b2: !!ab.bone('b2') }
+          : { unavailable: true };
+
+        const anim = ab.animationByName('bend');
+        const li = new rt.LinearAnimationInstance(anim, ab);
+        li.advance(0); li.apply(1.0); ab.advance(0);
+        drawNow();
+        const rest = { inner: px(25, 50), outer: px(75, 50), below: px(52, 80) };
+
+        li.advance(0.99); li.apply(1.0); ab.advance(0); // 89.1deg (1.0 would loop-wrap to 0)
+        drawNow();
+        const bent = {
+          inner: px(25, 50), outer: px(75, 50), below: px(52, 80),
+          b2deg: ab.bone('b2') ? +(ab.bone('b2').rotation * DEG).toFixed(1) : null,
+        };
+
+        const pixelsReadable = rest.inner.some((v) => v !== 0) || rest.outer.some((v) => v !== 0);
+        const checks = {
+          loadedWithoutError: true,
+          bonesResolvable: bones.unavailable ? 'api-unavailable' : bones.b1 && bones.b2,
+          pixelsReadable,
+          restBarPresent: isRed(rest.inner) && isRed(rest.outer) && !isRed(rest.below),
+          bentOuterHalfLeft: !isRed(bent.outer),
+          bentSegmentArrivedBelow: isRed(bent.below),
+          innerHalfHeldStill: isRed(bent.inner),
+        };
+        const hard = pixelsReadable
+          ? ['restBarPresent', 'bentOuterHalfLeft', 'bentSegmentArrivedBelow', 'innerHalfHeldStill']
+          : []; // without pixels only the load/bone checks are provable here
+        const pass = checks.loadedWithoutError &&
+          checks.bonesResolvable !== false &&
+          hard.every((k) => checks[k]);
+        return { bones, rest, bent, checks, pass };
+      }
+
       async function main() {
         try {
           if (!window.rive) throw new Error('Rive runtime failed to load');
@@ -374,13 +500,15 @@
           const exitTime = await exitTimeCheck();
           const wholeDoc = await wholeDocCheck();
           const drawOrderOpacityHidden = await drawOrderOpacityHiddenCheck();
+          const skinned = await skinnedCheck();
           report({
             status: 'ok',
-            note: 'Pixel readback unavailable in this headless env; verified at transform level.',
+            note: 'Transform-level checks + pixel-level skinned articulation (drawNow flush).',
             stateMachine,
             exitTime,
             wholeDoc,
             drawOrderOpacityHidden,
+            skinned,
           });
         } catch (e) {
           report({ status: 'error', error: String((e && e.message) || e) });

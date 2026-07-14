@@ -133,9 +133,12 @@ export interface RigPart {
   attachedRoot?: boolean;
   /**
    * Linear-blend skinning binding (art parts): geometry deforms by these bones
-   * instead of riding a parent chain. Bind bakes static transforms into path data,
-   * zeroes rest, and clears parentId; weights derive from bindSeg distances at
-   * runtime. Exporters render skinned parts rigidly (documented limitation).
+   * instead of riding a parent chain. Bind bakes static transforms into path data
+   * and zeroes the part's own pose but KEEPS parentId (see view/rigOpsBind.ts —
+   * detaching nested art was a real regression); weights derive from bindSeg
+   * distances at runtime. The .riv export emits this binding as real Rive
+   * Skin/Tendon deformation (io/riv/skin.ts); Lottie and headless frame renders
+   * stay rigid (documented limitation).
    *
    * `overrides` are manual per-node refinements: `overrides[pathId][cmdIndex]` pins
    * that node's weight (see SkinOverride). Keyed by the path COMMAND index (post-bind

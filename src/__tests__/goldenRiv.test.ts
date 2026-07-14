@@ -21,9 +21,18 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { importSvgHeadless } from '../headless/importSvgHeadless';
 import { exportRiv } from '../io/riv';
-import { normalizeDoc, RigDoc, Clip } from '../core/model';
+import { normalizeDoc, RigDoc, RigPart, Clip } from '../core/model';
 
 const GOLDEN_SHA256 = 'a1c6ff4b7e97d94293cf50c2d936115cff409aaf07a5968ddafb00a37511e3c6';
+
+/** Second pin: the SKELETAL-DEFORMATION surface (skinned-part export wave, 2026-07-13).
+ *  The main golden doc has no bones/skin (its hash deliberately did NOT move when the
+ *  wave landed — the no-regression proof for boneless docs), so RootBone emission,
+ *  Skin/Tendon binds, CubicWeight packing, and per-node overrides need their own
+ *  deterministic doc. Pinned after the fixture's articulation was verified pixel-level
+ *  in the official @rive-app/canvas runtime (public/riv-check.html's skinnedCheck —
+ *  same two-bone bar, inner half holds while the outer half rotates down 90deg). */
+const GOLDEN_SKINNED_SHA256 = '92e04a34643836e02f063dfe6b0f474c32f5331b446178714fb3bceb8f686454';
 
 function goldenDoc(): RigDoc {
   const svg = readFileSync(join(__dirname, '../../public/PIP_MASTER.svg'), 'utf8');
@@ -128,6 +137,67 @@ function goldenDoc(): RigDoc {
   return normalizeDoc(doc);
 }
 
+/** The runtime-verified two-bone limb (public/riv-check.html's skinnedCheck fixture,
+ *  plus a per-node override and a keyed bone tx so the RootBone-x mapping and the
+ *  override-pinning path are inside the pinned bytes too). Hand-authored — fully
+ *  deterministic, no import step. */
+function goldenSkinnedDoc(): RigDoc {
+  const bone = (
+    id: string, label: string, pivot: { x: number; y: number },
+    tip: { x: number; y: number }, parentId: string | null,
+  ): RigPart => ({
+    id, label, kind: 'bone', transform: '', pivot, boneTip: tip, pivotHint: null, parentId,
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+    paths: [],
+  });
+  const identity = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+  const limb: RigPart = {
+    id: 'p_limb', label: 'limb', kind: 'art', transform: '',
+    pivot: { x: 50, y: 50 }, pivotHint: null, parentId: null,
+    rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
+    skin: {
+      bones: [
+        { id: 'p_b1', restWorldInv: identity, bindSeg: { p: { x: 10, y: 50 }, q: { x: 50, y: 50 } } },
+        { id: 'p_b2', restWorldInv: identity, bindSeg: { p: { x: 50, y: 50 }, q: { x: 90, y: 50 } } },
+      ],
+      overrides: { limb_path: { '2': { a: 'p_b2', b: null, t: 0 } } },
+    },
+    paths: [{
+      id: 'limb_path', label: 'limb_path',
+      d: 'M 10,45 L 50,45 L 90,45 L 90,55 L 50,55 L 10,55 Z',
+      fill: '#cc3366', fillOpacity: 1, stroke: null, strokeWidth: 1, strokeOpacity: 1,
+      transform: '',
+    }],
+  };
+  const bend: Clip = {
+    name: 'bend', duration: 1000,
+    tracks: [
+      {
+        target: 'p_b2', channel: 'rotate', keyframes: [
+          { time: 0, value: 0, easing: 'linear' },
+          { time: 500, value: 90, easing: 'easeInOut' },
+          { time: 1000, value: 0, easing: 'linear' },
+        ],
+      },
+      {
+        target: 'p_b1', channel: 'tx', keyframes: [
+          { time: 0, value: 0, easing: 'linear' },
+          { time: 1000, value: 4, easing: 'linear' },
+        ],
+      },
+    ],
+  };
+  return normalizeDoc({
+    name: 'golden_skinned', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+    parts: [
+      bone('p_b1', 'b1', { x: 10, y: 50 }, { x: 50, y: 50 }, null),
+      bone('p_b2', 'b2', { x: 50, y: 50 }, { x: 90, y: 50 }, 'p_b1'),
+      limb,
+    ],
+    rootPivot: { x: 50, y: 50 }, clips: [bend],
+  } as RigDoc);
+}
+
 describe('golden .riv byte-identity gate', () => {
   it('the golden doc exports to the exact pinned bytes', () => {
     const bytes = exportRiv(goldenDoc());
@@ -140,6 +210,19 @@ describe('golden .riv byte-identity gate', () => {
   it('export is deterministic (two runs, identical bytes)', () => {
     const a = exportRiv(goldenDoc());
     const b = exportRiv(goldenDoc());
+    expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
+  });
+
+  it('the skinned golden doc exports to the exact pinned bytes', () => {
+    const bytes = exportRiv(goldenSkinnedDoc());
+    const sha = createHash('sha256').update(bytes).digest('hex');
+    if (sha !== GOLDEN_SKINNED_SHA256) console.log(`GOLDEN_SKINNED_ACTUAL=${sha}`);
+    expect(sha).toBe(GOLDEN_SKINNED_SHA256);
+  });
+
+  it('skinned export is deterministic (two runs, identical bytes)', () => {
+    const a = exportRiv(goldenSkinnedDoc());
+    const b = exportRiv(goldenSkinnedDoc());
     expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
   });
 });

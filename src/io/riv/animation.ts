@@ -37,9 +37,9 @@ import { DrawRulesEntry, DrawRulesSetup, emitZKeyedProperty, planZDrawTargets, Z
 import {
   argb, DEG2RAD, EASING_CUBIC, FPS, INTERP_CUBIC, INTERP_LINEAR, P_ANIM_NAME, P_COLOR,
   P_DURATION, P_FPS, P_FRAME, P_INTERP_TYPE, P_INTERPOLATOR_ID, P_KEYFRAME_COLOR_VALUE,
-  P_LOOP, P_NODE_X, P_NODE_Y, P_OBJECT_ID, P_PROPERTY_KEY, P_ROTATION, P_SCALE_X, P_SCALE_Y,
-  P_VALUE, P_X1, P_X2, P_Y1, P_Y2, T_CUBIC_INTERP, T_KEYED_OBJECT, T_KEYED_PROPERTY,
-  T_KEYFRAME_COLOR, T_KEYFRAME_DOUBLE, T_LINEAR_ANIM,
+  P_LOOP, P_NODE_X, P_NODE_Y, P_OBJECT_ID, P_PROPERTY_KEY, P_ROOT_BONE_X, P_ROOT_BONE_Y,
+  P_ROTATION, P_SCALE_X, P_SCALE_Y, P_VALUE, P_X1, P_X2, P_Y1, P_Y2, T_CUBIC_INTERP,
+  T_KEYED_OBJECT, T_KEYED_PROPERTY, T_KEYFRAME_COLOR, T_KEYFRAME_DOUBLE, T_LINEAR_ANIM,
 } from './keys';
 
 /** One Fill or Stroke SolidColor a part owns (scene.ts's emitShape records these). */
@@ -122,10 +122,14 @@ export function emitAnimations(
     if (hiddenIds.has(part.id)) continue;
     const parent = part.parentId ? byId.get(part.parentId) ?? null : null;
     const parentRef = parent ? parent.pivot : doc.rootPivot;
+    // Bones export as RootBone (scene.ts), whose position properties are its OWN
+    // x(90)/y(91) — Node's x(13)/y(14) don't exist on it, so a keyed bone tx/ty must
+    // target the RootBone keys. rotation/scale stay the shared TransformComponent keys.
+    const isBone = part.kind === 'bone';
     channelSpecs.push(
       { target: part.id, channel: 'rotate', propertyKey: P_ROTATION, base: 0, isAngle: true },
-      { target: part.id, channel: 'tx', propertyKey: P_NODE_X, base: part.pivot.x - parentRef.x, isAngle: false },
-      { target: part.id, channel: 'ty', propertyKey: P_NODE_Y, base: part.pivot.y - parentRef.y, isAngle: false },
+      { target: part.id, channel: 'tx', propertyKey: isBone ? P_ROOT_BONE_X : P_NODE_X, base: part.pivot.x - parentRef.x, isAngle: false },
+      { target: part.id, channel: 'ty', propertyKey: isBone ? P_ROOT_BONE_Y : P_NODE_Y, base: part.pivot.y - parentRef.y, isAngle: false },
       // sx/sy: absolute Node scale (base 0 -> raw value == the keyed scale). A part with
       // no scale keyframes produces an empty channel and emits nothing, so this is a
       // no-op for every doc that never animates part scale (all existing fixtures).

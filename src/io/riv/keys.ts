@@ -155,6 +155,78 @@
  *   order comment) and the prev/next splice in src/artboard.cpp's Artboard::sortDrawOrder,
  *   `before` renders the ruled group IN FRONT OF (more topmost than) its DrawTarget's anchor
  *   and `after` renders it BEHIND - traced and documented in drawRules.ts.
+ *
+ * SKELETAL DEFORMATION (Skin/Tendon/Weight — the skinned-part export wave, 2026-07-13).
+ * Pinned from rive-runtime dev/defs bones/*.json + src/bones/*.cpp, fetched directly.
+ *
+ *   Object (typeKey)      | def                        | notes
+ *   ----------------------|----------------------------|----------------------------------
+ *   Bone           = 40   | bones/bone.json            | length(89); NOT emitted — a plain
+ *                         |                            | Bone requires a Bone parent
+ *                         | (bone.cpp onAddedClean) and derives its origin from the
+ *                         | parent's length (x() == parent length, y() == 0), while this
+ *                         | editor's chains root on art/groups and attachedRoot bones
+ *                         | carry LOOSE offsets — so every bone exports as a RootBone.
+ *   RootBone       = 41   | bones/root_bone.json       | x(90)/y(91); root_bone.cpp
+ *                         |                            | SKIPS Bone's parent check
+ *                         | (calls TransformComponent::onAddedClean directly), so any
+ *                         | TransformComponent parent — Node, Shape, another bone — is
+ *                         | valid, and x/y/rotation compose EXACTLY like a Node's. That
+ *                         | keeps this exporter's verified pivot-relative placement math
+ *                         | byte-for-byte identical to the old Node emission; Tendon only
+ *                         | needs is<Bone>() (tendon.cpp), which RootBone satisfies.
+ *   Skin           = 43   | bones/skin.json            | child of the SKINNED PointsPath
+ *                         |                            | (skin.cpp: Skinnable::from(parent()));
+ *                         | xx..ty = the path's BIND world transform, applied to stored
+ *                         | vertices BEFORE the blended bone deltas (weight.cpp deform:
+ *                         | final = blended * (world * inPoint)).
+ *   Tendon         = 44   | bones/tendon.json          | child of the Skin (addTendon, file
+ *                         |                            | order = tendon order); boneId(95)
+ *                         | must resolve to a Bone; xx..ty = the bone's BIND world
+ *                         | transform — the runtime inverts it (m_InverseBind) and each
+ *                         | frame computes boneWorld * inverseBind (skin.cpp update).
+ *   Weight         = 45   | bones/weight.json          | child of a Vertex; NOT emitted —
+ *                         |                            | every vertex here is a
+ *                         | CubicDetachedVertex, whose handles need the Cubic form.
+ *   CubicWeight    = 46   | bones/cubic_weight.json    | extends Weight: values/indices for
+ *                         |                            | the point + in/out pairs for the
+ *                         | two handles. Emitted for EVERY vertex of a skinned path
+ *                         | (Vertex::deform dereferences its weight unconditionally).
+ *
+ *   Property (propertyKey)   | owner def             | type | notes
+ *   --------------------------|-----------------------|------|------------------------------
+ *   length          =  89 [D] | bones/bone.json       |      | cosmetic for RootBone-only
+ *                             |                       |      | rigs (child POSITIONING uses
+ *                             |                       |      | it only for plain Bones)
+ *   x (root bone)   =  90 [D] | bones/root_bone.json  |      | NOT Node.x(13) — RootBone has
+ *   y (root bone)   =  91 [D] | bones/root_bone.json  |      | its own keys; animation.ts
+ *                             |                       |      | maps keyed bone tx/ty here
+ *   boneId          =  95 [U] | bones/tendon.json     | Id   | artboard component index
+ *   tendon xx       =  96 [D] | bones/tendon.json     |      | PROPERTY-KEY ORDER IS
+ *   tendon yx       =  97 [D] | bones/tendon.json     |      | xx, yx, xy, yy (NOT xx,xy,..)
+ *   tendon xy       =  98 [D] | bones/tendon.json     |      | but the NAMES map to Mat2D
+ *   tendon yy       =  99 [D] | bones/tendon.json     |      | slots [xx, xy, yx, yy, tx, ty]
+ *   tendon tx       = 100 [D] | bones/tendon.json     |      | (tendon.cpp: bind[0]=xx(),
+ *   tendon ty       = 101 [D] | bones/tendon.json     |      | bind[1]=xy(), bind[2]=yx()…)
+ *   weight values   = 102 [U] | bones/weight.json     |      | 4 packed bytes, byte i =
+ *                             |                       |      | influence i's weight 0..255
+ *                             |                       |      | (weight.cpp encodedWeightValue
+ *                             |                       |      | = (data >> i*8) & 0xFF); the
+ *                             |                       |      | four SHOULD sum to 255
+ *   weight indices  = 103 [U] | bones/weight.json     |      | 4 packed bytes, byte i = the
+ *                             |                       |      | influence's index into the
+ *                             |                       |      | bone-transform buffer, which
+ *                             |                       |      | is 1-BASED: slot 0 is identity,
+ *                             |                       |      | tendon k lives at slot k+1
+ *                             |                       |      | (skin.cpp sizes it
+ *                             |                       |      | (tendons+1)*6 with identity
+ *                             |                       |      | first) — 0 = "unbound"
+ *   skin xx..ty     = 104..109 [D] | bones/skin.json  |      | SAME xx,yx,xy,yy,tx,ty key
+ *                             |                       |      | order as tendon (104=xx,
+ *                             |                       |      | 105=yx, 106=xy, 107=yy)
+ *   in/out values/indices = 110..113 [U] | bones/cubic_weight.json | inValues 110,
+ *                             |                       |      | inIndices 111, outValues 112,
+ *                             |                       |      | outIndices 113
  */
 
 import { Easing, SMConditionOp, SMListener } from '../../core/model';
@@ -187,6 +259,12 @@ export const T_DRAW_TARGET = 48; // draw_target.json
 export const T_DRAW_RULES = 49; // draw_rules.json
 export const T_KEYFRAME_COLOR = 37; // animation/keyframe_color.json
 export const T_KEYFRAME_ID = 50; // animation/keyframe_id.json
+// Skeletal deformation (see the header table for why RootBone/CubicWeight are the only
+// bone/weight types this exporter ever writes).
+export const T_ROOT_BONE = 41; // bones/root_bone.json
+export const T_SKIN = 43; // bones/skin.json
+export const T_TENDON = 44; // bones/tendon.json
+export const T_CUBIC_WEIGHT = 46; // bones/cubic_weight.json
 
 // State-machine typeKeys (animation/*.json). None of these consume an artboard
 // component index: like animations, they are added to the artboard's separate
@@ -244,6 +322,31 @@ export const P_IN_DISTANCE = 85;
 export const P_OUT_ROTATION = 86;
 export const P_OUT_DISTANCE = 87;
 export const P_KEYFRAME_COLOR_VALUE = 88; // [C] KeyFrameColor.value — NOT SolidColor.colorValue (37)
+// Skeletal deformation. NOTE the xx,yx,xy,yy property-key order on tendon/skin matrices
+// (header table cites tendon.cpp's Mat2D slot assignment — swapping 97/98 or 105/106
+// transposes every bind matrix).
+export const P_BONE_LENGTH = 89; // [D] Bone.length
+export const P_ROOT_BONE_X = 90; // [D] RootBone.x — NOT Node.x (13)
+export const P_ROOT_BONE_Y = 91; // [D] RootBone.y — NOT Node.y (14)
+export const P_TENDON_BONE_ID = 95; // [U] Tendon.boneId (artboard component index)
+export const P_TENDON_XX = 96; // [D] Tendon bind matrix — Mat {a, c, b, d, e, f} in
+export const P_TENDON_YX = 97; // [D] key order 96..101 (SVG a=xx, b=xy, c=yx, d=yy)
+export const P_TENDON_XY = 98; // [D]
+export const P_TENDON_YY = 99; // [D]
+export const P_TENDON_TX = 100; // [D]
+export const P_TENDON_TY = 101; // [D]
+export const P_WEIGHT_VALUES = 102; // [U] 4 packed weight bytes (should sum to 255)
+export const P_WEIGHT_INDICES = 103; // [U] 4 packed 1-BASED tendon slots (0 = unbound)
+export const P_SKIN_XX = 104; // [D] Skin bind matrix — same xx,yx,xy,yy,tx,ty key order
+export const P_SKIN_YX = 105; // [D]
+export const P_SKIN_XY = 106; // [D]
+export const P_SKIN_YY = 107; // [D]
+export const P_SKIN_TX = 108; // [D]
+export const P_SKIN_TY = 109; // [D]
+export const P_WEIGHT_IN_VALUES = 110; // [U] CubicWeight in-handle weights
+export const P_WEIGHT_IN_INDICES = 111; // [U]
+export const P_WEIGHT_OUT_VALUES = 112; // [U] CubicWeight out-handle weights
+export const P_WEIGHT_OUT_INDICES = 113; // [U]
 export const P_DRAWABLE_ID = 119; // [U] DrawTarget.drawableId (Id)
 export const P_PLACEMENT_VALUE = 120; // [U] DrawTarget.placementValue (DrawTargetPlacement enum)
 export const P_DRAW_TARGET_ID = 121; // [U] DrawRules.drawTargetId (Id, ANIMATABLE)
@@ -338,6 +441,28 @@ export const FIELD_TYPE: Record<number, number> = {
   [P_PLACEMENT_VALUE]: F_UINT,
   [P_DRAW_TARGET_ID]: F_UINT,
   [P_KEYFRAME_ID_VALUE]: F_UINT,
+  [P_BONE_LENGTH]: F_DOUBLE,
+  [P_ROOT_BONE_X]: F_DOUBLE,
+  [P_ROOT_BONE_Y]: F_DOUBLE,
+  [P_TENDON_BONE_ID]: F_UINT,
+  [P_TENDON_XX]: F_DOUBLE,
+  [P_TENDON_YX]: F_DOUBLE,
+  [P_TENDON_XY]: F_DOUBLE,
+  [P_TENDON_YY]: F_DOUBLE,
+  [P_TENDON_TX]: F_DOUBLE,
+  [P_TENDON_TY]: F_DOUBLE,
+  [P_WEIGHT_VALUES]: F_UINT,
+  [P_WEIGHT_INDICES]: F_UINT,
+  [P_SKIN_XX]: F_DOUBLE,
+  [P_SKIN_YX]: F_DOUBLE,
+  [P_SKIN_XY]: F_DOUBLE,
+  [P_SKIN_YY]: F_DOUBLE,
+  [P_SKIN_TX]: F_DOUBLE,
+  [P_SKIN_TY]: F_DOUBLE,
+  [P_WEIGHT_IN_VALUES]: F_UINT,
+  [P_WEIGHT_IN_INDICES]: F_UINT,
+  [P_WEIGHT_OUT_VALUES]: F_UINT,
+  [P_WEIGHT_OUT_INDICES]: F_UINT,
 };
 
 // TransitionConditionOp enum (include/rive/animation/transition_condition_op.hpp).

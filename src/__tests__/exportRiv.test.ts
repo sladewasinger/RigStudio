@@ -829,11 +829,13 @@ describe('exportRiv exit time', () => {
 
 // ---- Unified Skeleton (Phase 1): cross-chain bone attachment ----
 //
-// A bone exports as a plain Node in the parentId hierarchy either way — `attachedRoot`
-// is purely an EDITOR-side chain-resolution boundary (auto-bind targeting, the no-gap
-// invariant); the exporter has no concept of it and needs no change. This just confirms
-// a doc carrying the flag still exports cleanly and the attached bone's Node parents to
-// the bone it was dropped onto, exactly like any other bone-to-bone parentId link.
+// A bone exports as a RootBone in the parentId hierarchy either way (the skinned-part
+// export wave; RootBone x/y compose exactly like the Node emission it replaced) —
+// `attachedRoot` is purely an EDITOR-side chain-resolution boundary (auto-bind
+// targeting, the no-gap invariant); the exporter has no concept of it and needs no
+// change. This just confirms a doc carrying the flag still exports cleanly and the
+// attached bone parents to the bone it was dropped onto, exactly like any other
+// bone-to-bone parentId link.
 describe('exportRiv Unified Skeleton attachment (Phase 1)', () => {
   function attachedDoc(): RigDoc {
     const spine = part('p_spine', {
@@ -857,10 +859,10 @@ describe('exportRiv Unified Skeleton attachment (Phase 1)', () => {
     expect(() => exportRiv(attachedDoc())).not.toThrow();
   });
 
-  it("parents the attached bone's Node to the bone it was cross-chain attached onto", () => {
+  it("parents the attached bone's RootBone to the bone it was cross-chain attached onto", () => {
     const d = decodeRiv(exportRiv(attachedDoc()));
-    const spineNode = d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'spine')!;
-    const armNode = d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'arm_root')!;
+    const spineNode = d.objects.find((o) => o.typeKey === TYPE.ROOT_BONE && o.props[PROP.NAME] === 'spine')!;
+    const armNode = d.objects.find((o) => o.typeKey === TYPE.ROOT_BONE && o.props[PROP.NAME] === 'arm_root')!;
     expect(spineNode).toBeTruthy();
     expect(armNode).toBeTruthy();
     expect(armNode.props[PROP.PARENT_ID]).toBe(spineNode.index);
