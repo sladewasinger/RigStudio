@@ -473,9 +473,15 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   delta (clamped), so dragging a tip stretches the limb; unchanged length ⇒ factor 1 ⇒
   the plain rigid delta (backward-compatible). On top
   of auto weights sit **manual per-node overrides**: `skin.overrides[pathId][cmdIndex]`
-  = `{a, b, t}` pins a node's weight to bone `a` at (1−t) blended with bone `b` at t
-  (`b:null` = 100% a) — the origin↔tip lerp across the joint where a's tip meets b's
-  origin. Overrides are keyed by the path COMMAND index (post-bind geometry is all
+  = `{a, b, t, pin?}` — bone `a` at (1−t) blended with bone `b` at t (`b:null` = 100%
+  a; `a` may be null for a pin-only entry). CRITICAL MENTAL MODEL: a/b/t choose WHICH
+  BONE CARRIES the node — they never mean "stays put" (every bone influence moves when
+  the chain poses). "Stays with the body" is `pin` (0..1, user feature 2026-07-13,
+  b45f323): the fraction of the node held at its BIND-POSE position —
+  `deformed = lerp(lbsResult, bindPos, pin)` — the inspector's "Pin to body" slider.
+  .riv parity: any pinned skin emits one synthetic never-animated anchor RootBone +
+  Tendon whose weight share is the pin (zero pins ⇒ byte-identical output; both golden
+  pins asserted unmoved). Overrides are keyed by the path COMMAND index (post-bind geometry is all
   M/L/C/Z, so a command index IS its node); overriding node i governs its endpoint,
   its incoming handle, and the next segment's outgoing handle so the corner stays
   rigid. `skinRender` bakes overrides into the cached weight rows (cache sig includes
