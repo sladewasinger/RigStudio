@@ -495,6 +495,22 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   `dropSkinOverridesForPath` + `invalidateSkinCache`. `normalizeDoc` prunes overrides
   with dangling bone refs or non-finite t and clamps t to [0,1]. Plain node drags and
   one-shot node ops (smooth/symmetric/corner) keep the index, so they keep overrides.
+- **Bone DELETION cascades the chain and truly unbinds** (user bug reports 2026-07-14,
+  7d4f662). Deleting a bone deletes its FULL same-chain bone subtree
+  (`core/boneOps.ts`'s `boneDeletionCascade` — non-attachedRoot bone children are
+  shared-joint continuations, orphaning them left floating bones); `attachedRoot`
+  children instead DETACH world-preserving onto the nearest surviving ancestor (the
+  reattachRootBone rule, mirrored core-side). A skinned part whose EVERY skin bone dies
+  gets a real model-level unbind: bind baked the ancestor chain into root-space
+  geometry, so `deleteParts` folds the chain's inverse into the part's own rest
+  (`foldRestWorldIntoOwnPose` — the closed-form rigid fold shared with bind/attach; all
+  folds apply ANCESTOR-FIRST because a detached bone can land under a part being
+  unbound in the same call) — without it the part double-transformed and teleported
+  (34.7px reproduced). Core never touches DOM: `ui/actions.ts`'s `deleteSelectedParts`
+  runs `syncPartPathDom` on newly-unbound parts, because renderPose's non-skinned
+  branch never rewrites `d` and the stale LBS-deformed attribute would otherwise stick
+  (the second, distinct 26.9px bug live verification surfaced). Partial bone death
+  prunes dead refs from `skin.bones` + overrides (pin-only entries survive).
 - **IK (full-chain FABRIK).** The IK tool solves the WHOLE bone chain with `ik.ts`
   `solveChainIK` — n-joint FABRIK over the chain's joint polyline (root..effector tip),
   so EVERY joint participates including the grabbed bone's own rotation (the old

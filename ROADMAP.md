@@ -193,6 +193,25 @@ completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
 
+### Bone deletion: unbind fold + chain cascade
+
+*2026-07-14, 7d4f662 (worktree wave, cherry-picked over U1 + the pin wave; the
+override-pruning it added is pin-aware). Both user reports fixed. (1) "doesn't
+reset to rest / teleports off screen": deleting a skinned part's last skin
+bones now truly UNBINDS — `deleteParts` folds the inverse ancestor chain into
+the part's rest via the shared closed-form rigid fold
+(`boneOps.foldRestWorldIntoOwnPose`), ancestor-first ordering (a detached bone
+can land under a part being unbound in the same call; a reversed-sort mutation
+check pins it). Reproduced at 34.7 px → 0 px; live verification surfaced a
+SECOND bug (26.9 px residual): the stale LBS-deformed DOM `d` survives unbind
+because renderPose's non-skinned branch never rewrites `d` — fixed at the sole
+production call site (`ui/actions.ts` deleteSelectedParts → syncPartPathDom).
+(2) "child bones stay alive": `boneDeletionCascade` expands deletion to the
+full same-chain bone subtree; `attachedRoot` children DETACH world-preserving
+onto the nearest surviving ancestor instead (flagged for Austin: tell us if
+attachments should cascade too). Gates on integrated main: build clean, 770
+unit / 298 interaction, both golden pins hold.*
+
 ### Pin-to-body node weights (the armpit-floats-away report)
 
 *2026-07-14, b45f323. The user's report exposed a MODEL gap, not a bug: carry
