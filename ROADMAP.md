@@ -24,8 +24,15 @@ be drawn from.
   both scale" feels wrong in testing, it's a one-predicate-site change —
   flag it.
 - **.riv keyed-z + opacity VISUALS** (7155013) — decoder+runtime verified,
-  but on-screen stacking/fade blending needs a real player look (rive.rip) —
-  pixel readback is impossible headless.
+  but on-screen stacking/fade blending needs a real player look (rive.rip).
+  (The "pixel readback is impossible headless" premise is now FALSE — the
+  skinned-export wave found the drawNow flush workaround in riv-check.html —
+  so these could alternatively get automated pixel checks there.)
+- **Skinned-part .riv export on a real rig** (this wave) — the two-bone-bar
+  articulation is pixel-verified in @rive-app/canvas headlessly, but a real
+  character (bind a limb in the app, export, rive.rip or the Android
+  runtime) deserves one human look — same protocol as the 2026-07-12
+  on-device verification.
 - **Take-pill hash re-pin** (dbac402) — canonical order changed the bytes;
   verified visually via render-frames; the Dosey checkout's riv+rig.json
   outputs were rewritten with the canonical bytes (the generating script has
@@ -76,8 +83,9 @@ restacking fidelity bug.*
   (synthesized docs byte-identical, golden pin holds; interleaved docs get
   correct stacking). Lottie: DOCUMENTED LIMITATION only (frozen — one layer
   per part can't interleave; keeps the paths-first approximation).
-  SEQUENCED AFTER the in-flight skinned-.riv-export session lands (io/riv
-  collision).
+  Sequencing note: the skinned-.riv-export wave has LANDED (2026-07-13, see
+  the archive) — the io/riv collision is cleared; U3 must keep skinned paths'
+  Skin/Tendon emission intact through any drawable-order change.
 - [ ] **U4 — the user-visible layer**: importer records TRUE SVG document
   order into slots (the restacking fidelity bug dies); layers panel rows =
   slot order with full drag-reorder between ANY rows (paths ↔ parts as
@@ -183,6 +191,34 @@ Newest first. Programs/waves below are ordered by their actual git-log
 completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
+
+### Skinned-part .riv export (Skin/Tendon/CubicWeight)
+
+*2026-07-13. The "skinned parts export rigidly" limitation is dead for .riv:
+bone rotation keys now articulate skinned limbs in official Rive runtimes.*
+
+- [x] **Bones export as RootBone (typeKey 41)** — same x/y/rotation transform
+  semantics as the old Node emission (root_bone.cpp skips Bone's parent check),
+  so the verified placement math is shared verbatim; keyed bone tx/ty map to
+  RootBone's own x/y keys (90/91). Every schema fact pinned from rive-runtime
+  dev/defs + src/bones/*.cpp, fetched and cited in io/riv/keys.ts — including
+  the non-obvious xx,yx,xy,yy matrix key order and 1-based tendon slots.
+- [x] **Skin + Tendon + CubicWeight emission** (`io/riv/skin.ts`; the shared
+  path→vertex walk moved verbatim to `io/riv/geometry.ts` with per-vertex
+  weight-source records): Skin bind = T(pivot − frame origin), tendon bind =
+  invert(restWorldInv)·T(bone.pivot) — full frame-model derivation in skin.ts's
+  header; weights are the editor's own rows (SKIN_WEIGHT_POWER now lives in
+  geometry/skin.ts, shared by skinRender and the exporter) quantized to
+  4-influence bytes summing exactly 255. Hidden/dangling skin bones fall back
+  to the old rigid emission.
+- [x] **Verified**: 705 unit / 37 files (exportRivSkin.test.ts, 3 mutation
+  checks) + 287 interaction / 40 files + build clean; boneless golden hash
+  UNMOVED (no-regression proof), second skinned golden pinned (92e04a34…);
+  pixel-level articulation in @rive-app/canvas via riv-check.html's
+  skinnedCheck (inner half holds, outer half rotates down 89°) — enabled by
+  the drawNow flush discovery (pixel readback works headlessly after all).
+- Still rigid: Lottie export and headless composePose/render-frames (their
+  docs/CLI notes updated to say so explicitly).
 
 ### Post-run live fixes
 
@@ -1177,4 +1213,6 @@ ticked above with their commit trail.*
   unsupported SVG features.
 - Text, gradients, clipping/masks in imports and exports.
 - Per-part motion-suggestion AI mode; conversational multi-turn choreography editing.
-- Skinning export parity (baked-frame export or a runtime player).
+- Skinning export parity for LOTTIE + headless frame renders (baked-frame
+  export or per-frame vertex baking; the .riv half shipped 2026-07-13 as
+  native Skin/Tendon — see the archive).

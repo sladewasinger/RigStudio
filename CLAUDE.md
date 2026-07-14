@@ -130,7 +130,7 @@ inside `npm test` and fail violations regardless of who forgot what.
 | `geometry/pose.ts` | **The shared pose kernel** (H1b extraction from view/pose.ts, math moved verbatim): own/root pose transform strings, chain composition (`chainMatOf`/`fullPoseTransform`), effective pivot/tip/scale/z/opacity — pure over `state.doc` + an optional channel-`sampler` argument (the SM preview's override, injected by view/pose.ts; absent for headless callers). Consumed by BOTH the editor canvas and `headless/composePose.ts`, so editor and headless rendering cannot drift |
 | `geometry/transforms.ts` | SVG transform-list parser plus a small affine `Mat` toolkit (`multiply`/`invertMat`/`applyMat`/`rotationMat`); `rotationPivotOf` finds a transform list's fixed point by testing the *composed matrix* for a rigid rotation, so it recovers pivots regardless of whether Inkscape wrote `rotate(...)` or an equivalent `matrix(...)` |
 | `io/exportLottie.ts` | `RigDoc` + one clip → Lottie JSON (v5.7.0, 60fps): a root null layer for whole-figure translate/scale, one shape layer per part with Lottie-native `parent` layer references mirroring the bone hierarchy, geometry flattened through baked SVG transforms with arcs converted to cubics, easings converted to bezier handles |
-| `io/riv/index.ts` | **Pure re-export facade** over `src/io/riv/` — `RigDoc` + ALL clips → Rive `.riv` binary (format major 7); consumers import ONLY `./io/riv`, never a deep path. Modules: `writer.ts` (varuint/ToC binary primitives + header assembly), `keys.ts` (typeKey/propertyKey table derived from rive-runtime `dev/defs`, cited in-file, + shared enums), `scene.ts` (the `exportRiv()` entry: Backboard→Artboard→Node-per-part-at-pivot — geometry baked to docPoint−pivot, rest scale/skew baked in, rotation in RADIANS — Shape/PointsPath/CubicDetachedVertex geometry, Fill/Stroke/SolidColor with opacity folded into alpha, draw-order-REVERSED shape emission), `animation.ts` (one LinearAnimation per clip with KeyedObject/KeyedProperty/KeyFrameDouble + CubicEaseInterpolators — interpolators emitted BEFORE animations, animation objects consume no component index), `stateMachine.ts` (the SM object tree). Deterministic bytes; playback-only (the Rive editor cannot import .riv). The standalone test decoder lives in `src/__tests__/rivDecoder.ts` |
+| `io/riv/index.ts` | **Pure re-export facade** over `src/io/riv/` — `RigDoc` + ALL clips → Rive `.riv` binary (format major 7); consumers import ONLY `./io/riv`, never a deep path. Modules: `writer.ts` (varuint/ToC binary primitives + header assembly), `keys.ts` (typeKey/propertyKey table derived from rive-runtime `dev/defs`, cited in-file, + shared enums), `scene.ts` (the `exportRiv()` entry: Backboard→Artboard→Node-per-part-at-pivot — geometry baked to docPoint−pivot, rest scale/skew baked in, rotation in RADIANS — Shape/PointsPath/CubicDetachedVertex geometry, Fill/Stroke/SolidColor with opacity folded into alpha, draw-order-REVERSED shape emission; bones emit as RootBone), `geometry.ts` (path-data → Rive polar-handle vertex conversion, shared by scene/skin; records per-vertex weight-source samples), `skin.ts` (skeletal deformation: Skin+Tendon per skinned PointsPath + CubicWeight per vertex from stored bind data — the frame-model derivation is in its header), `animation.ts` (one LinearAnimation per clip with KeyedObject/KeyedProperty/KeyFrameDouble + CubicEaseInterpolators — interpolators emitted BEFORE animations, animation objects consume no component index; keyed bone tx/ty map to RootBone x/y keys), `stateMachine.ts` (the SM object tree). Deterministic bytes; playback-only (the Rive editor cannot import .riv). The standalone test decoder lives in `src/__tests__/rivDecoder.ts` |
 | `geometry/ik.ts` | Analytic IK: `solveTwoBone` (law-of-cosines two-joint solve, bend-direction preserving, reach-clamped) and `solveAim`, both in degrees/root space |
 | `geometry/skin.ts` | Skinning math: `distToSegment`, `skinWeights` (normalized inverse-square distance to bind-time bone segments) |
 | `timeline/graph.ts` | Curve editor panel: value-vs-time plot per track, draggable keys, per-segment bezier handles writing `Keyframe.bezier` |
@@ -245,7 +245,9 @@ verified as of 2026-07-11; "v3 — Future" is the out-of-scope / next-up list.
   never double-applied; the joint is stored in the art's local frame). The art's bones
   compose through the preserved chain, so the limb still follows a group move. Weights
   are runtime-derived from `bindSeg` distances. Skinned parts don't respond to pose
-  drags and export rigidly. NEVER zero a skinned art's `parentId` (the "bones leave
+  drags; they export rigidly to LOTTIE, while the .riv export emits real Rive
+  Skin/Tendon deformation (skinned-part export wave, 2026-07-13 — see `io/riv/skin.ts`).
+  NEVER zero a skinned art's `parentId` (the "bones leave
   their parent object on assign" hoisting regression — bind used to detach nested art
   to root).
 - **Tool semantics** (`state.tool`): 'select' keeps the classic mode-dependent drags;
@@ -526,7 +528,8 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
 - **Skinned-part UX (user ruling 2026-07-12: rotate+translate ALLOWED).** A skinned
   part accepts the SAME rotate/translate pose drags as any part — its bones are
   parented under it, so those channels carry the whole chain and the LBS-deformed art
-  follows (matching the .riv export's rigid Node transform); IK remains the
+  follows (the .riv export matches: the part's Node carries its bones, and the
+  exported Skin follows them); IK remains the
   articulation gesture (its own first-checked sub-branch in the artwork pipeline).
   SCALE and SKEW stay blocked: they don't propagate to children in the editor (the
   bones wouldn't ride) while Rive Node scale WOULD — a WYSIWYG divergence — so no
@@ -535,8 +538,26 @@ wrist→hand), and the art bends at the joints — no node editing, no bind step
   Skinning section explain the rule. The AI is taught the same model (bones-first
   articulation; part-level rotate/tx/ty as a layered accent; sx/sy tracks on skinned
   parts dropped by `clampRawClip`). Pinned by `interaction/skinnedPose.test.ts`.
-- **Export limitation (unchanged).** Skinned parts export RIGIDLY — LBS is not
-  representable in Lottie/Rive transform replay. `io/` is untouched by Bones 2.0.
+- **Export: .riv articulates, Lottie stays rigid** (skinned-part export wave,
+  2026-07-13 — supersedes the old "skinned parts export RIGIDLY" limitation). The .riv
+  exporter emits Rive-native skeletal deformation: every `kind:'bone'` part exports as
+  a **RootBone** (typeKey 41 — same x/y/rotation transform semantics as a Node, chosen
+  over plain Bone because chains root on art parts and attachedRoot bones carry loose
+  offsets; animation.ts maps keyed bone tx/ty to RootBone's own x/y keys 90/91), and
+  each skinned PointsPath gets a **Skin + one Tendon per skin bone + a CubicWeight per
+  vertex** built by `io/riv/skin.ts` from the STORED bind data (tendon bind =
+  `invert(restWorldInv)·T(bone.pivot)`, frame-shifted — the frame-model derivation is
+  in skin.ts's header; weights = the same `SKIN_WEIGHT_POWER` auto rows + per-node
+  overrides as `view/skinRender.ts`, constant shared via `geometry/skin.ts`, quantized
+  to Rive's 4-influence bytes summing 255 with 1-BASED tendon slots). A skin
+  referencing a hidden/dangling bone falls back to the old rigid emission. Verified
+  pixel-level in `@rive-app/canvas` (public/riv-check.html's `skinnedCheck`: inner
+  half holds, outer half rotates down 89°) and pinned by `exportRivSkin.test.ts`
+  (mutation-checked: matrix transpose, 0-based slots, short byte sums) + a second
+  golden hash in `goldenRiv.test.ts` — the boneless golden hash deliberately did NOT
+  move. Editor-side length-stretch doesn't export (length isn't keyable, so playback
+  never stretches). LOTTIE still exports skinned parts rigidly, as does headless
+  `composePose`/render-frames.
 
 ## Testing interactions (do not regress this)
 
@@ -551,6 +572,30 @@ harness (`src/__tests__/interaction/harness.ts` — use its helpers rather than
 hand-rolling gestures) and enforced by `npm run test:interaction`.
 
 ## Status
+
+### Skinned-part .riv export (Skin/Tendon/CubicWeight) — implemented and verified
+
+Built 2026-07-13. The .riv exporter now emits Rive-native skeletal deformation for
+skinned parts (`part.skin`) instead of the old rigid-at-rest fallback; the full design
+is in the "Export: .riv articulates" convention under Bone system. Shape of the change:
+`io/riv/geometry.ts` (the path→vertex walk moved verbatim out of scene.ts, extended
+with per-vertex weight-source records) + `io/riv/skin.ts` (Skin/Tendon/CubicWeight
+emission; frame-model derivation in its header) + keys.ts additions pinned from
+rive-runtime dev/defs + src/bones/*.cpp (fetched, cited — including the non-obvious
+xx,yx,xy,yy matrix property-key order and the 1-based tendon slot encoding); bones now
+export as RootBone (41) everywhere; `SKIN_WEIGHT_POWER` moved to geometry/skin.ts as
+the single source shared by the canvas LBS and the exporter. Verification: 705 unit /
+37 files (14-test `exportRivSkin.test.ts`, three mutations checked: tendon-matrix
+transpose, 0-based slots, short weight sums — each fails exactly the pinning test), 287
+interaction / 40 files, build clean; the BONELESS golden hash did not move
+(no-regression proof) and a second skinned golden hash is pinned; pixel-level proof in
+the official `@rive-app/canvas` runtime via riv-check.html's `skinnedCheck` (bind-pose
+bar byte-exact at rest; at 89° the inner half holds still, the outer half vacates its
+old region and arrives rotated down; bones resolvable via `ab.bone()`). Harness
+discovery recorded in riv-check.html: pixel readback WORKS headlessly when the
+wrapper's clear/align/draw/flush sequence is invoked directly (rAF never ticks; the
+old "pixel readback unavailable" note is obsolete). Lottie and headless
+composePose/render-frames still render skinned parts rigidly (documented there).
 
 ### The autonomous run (2026-07-12→13, user away) — implemented and verified
 
