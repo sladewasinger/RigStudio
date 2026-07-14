@@ -176,9 +176,18 @@ export function enterGroupsFor(partId: string): void {
  * structural op can strand dimming:
  *  - drop any entered id whose part no longer exists (ungrouped/deleted — the DOC was
  *    correct, the SESSION reference went stale);
- *  - drop any entered id that is not an ancestor of (or equal to) at least one
- *    currently SELECTED part — but only when something IS selected, so the deliberate
+ *  - drop any entered id that is not a STRICT ancestor of at least one currently
+ *    SELECTED part — but only when something IS selected, so the deliberate
  *    "dive in, select nothing" state (dblclick drill-down) is never disturbed.
+ * The strict-ancestor rule means an entered group that becomes a SELECTED part ITSELF
+ * pops its own entry (user bug 2026-07-14, "clicking the selected Girl group again just
+ * selects the child Body"): "open to work inside" and "selected as a whole to
+ * manipulate" are contradictory states — while a group stayed both, the artwork
+ * pipeline's group substitution was suppressed by the entry, so every canvas click
+ * stole the selection down to the child under the cursor and the second-click handle
+ * toggle (rotate corners) was unreachable. Selecting the whole group (Layers row,
+ * context menu, canvas substitution alike — this repair is the one chokepoint they all
+ * render through) expresses the manipulate-as-a-unit intent, so the entry closes.
  * This also gives the least-surprising UX for "group while entered" without any
  * structural-op call site needing to know this repair exists: grouping members that
  * live INSIDE the entered group nests the new group there too (still an ancestor of
@@ -194,8 +203,10 @@ function repairEnteredGroups(): void {
   const selected = selectedParts();
   if (selected.length === 0) return;
   for (const id of [...ctx.enteredGroups]) {
+    // ancestorChain never contains the part itself, so this is the strict-ancestor
+    // test: a selected part that IS the entered group keeps nothing alive.
     const relevant = selected.some(
-      (sp) => sp.id === id || ancestorChain(sp).some((a) => a.id === id),
+      (sp) => ancestorChain(sp).some((a) => a.id === id),
     );
     if (!relevant) ctx.enteredGroups.delete(id);
   }
