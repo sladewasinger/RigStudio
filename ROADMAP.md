@@ -214,6 +214,28 @@ completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
 
+### Headless group-pivot default (follow-up from the far-pivot Girl file)
+
+*2026-07-14, b1fdf49 (worktree wave). Full creation-path map recorded in the
+wave report: 8 paths audited; the one member-wrapping op reachable headlessly
+is `groupParts`, whose pivot was REQUIRED (in-app Ctrl+G passed a DOM-measured
+center; headless callers had nothing sane). Now optional: omitted ⇒ the outer
+members' subtree geometry bbox center, computed PURE-DOC by the new
+`geometry/pathBounds.ts` (first path-bbox walk in the repo — analytic cubic
+extrema, affine-mapped before extrema; hidden excluded, skinned parts map
+through identity since their geometry is baked root-space; bones-only
+selections average member pivots). Explicit pivots always win; normalizeDoc
+never "repairs" pivots on load (deliberate placements stay). 16 mutation-
+checked tests; end-to-end on the user's file: wrapping RightArm+Body
+headlessly lands (271.3, −856.1) — the exact union center — vs the shipped
+(−0.5, 0). RESIDUAL HOLE (mapped, out of scope): headless IMPORT keeps
+placeholder pivots — the canvas render-then-measure seeding only runs in-app,
+and only for pivots EXACTLY (0,0) (the Girl file's root translate made its
+placeholder (−0.529, 0), skipping even the in-app seed); fixing at the import
+surface moves the MAIN golden pin (the golden doc imports PIP_MASTER
+headlessly) — next wave, with the re-pin protocol. Gates: build clean, 827
+unit / 322 interaction, both pins unmoved.*
+
 ### Pin-to-body tracking fix (the "pinned nodes frozen in place" report)
 
 *2026-07-14, bcc5ac6 (worktree wave). Reproduced on the user's exact save:
