@@ -65,7 +65,8 @@ importer preserves SVG document order exactly, exporters express it. Kills
 the two-bucket model (own paths always below children) and its import
 restacking fidelity bug.*
 
-- [ ] **U1 — model + plumbing (zero behavior change)**: `RigPart.childOrder`
+- [x] **U1 — model + plumbing (zero behavior change)** (done 2026-07-13,
+  03f7489): `RigPart.childOrder`
   (ordered slots `{kind:'path'|'part', id}`); normalizeDoc SYNTHESIZES
   paths-first-then-children for docs without it (≡ today's paint order — old
   files render identically) and repairs dangling/missing/duplicate slots; a
@@ -191,6 +192,26 @@ Newest first. Programs/waves below are ordered by their actual git-log
 completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
+
+### Pin-to-body node weights (the armpit-floats-away report)
+
+*2026-07-14, b45f323. The user's report exposed a MODEL gap, not a bug: carry
+overrides `{a,b,t}` only choose WHICH bone moves a node — nothing could say
+"stay with the body". Reproduced on his girl_right_arm_limbed file first
+(armpit nodes drift 25.47/4.16/1.50/19.78 px on a +40° shoulder rotate despite
+100%-shoulder overrides). `SkinOverride.pin` (0..1) holds that fraction of the
+node at its bind-pose position — `deformed = lerp(lbs, bindPos, pin)` in
+skinRender, endpoint + both handles; `a` may now be null (pin-only entries);
+setNodePin/clear independent of carry; "Pin to body" slider in the skin
+section (carry controls relabeled "carried by"). .riv parity: pinned skins
+emit one synthetic never-animated anchor RootBone+Tendon (bind = the part's
+statically-composed world matrix) whose weight share is the pin; weakest-
+eviction when a 4-influence row is full; zero pins ⇒ zero bytes — BOTH golden
+pins asserted unmoved. Verified live on his file (pin=1 → 0.000 px on all four
+nodes, pin=0.5 halves, control node still travels 57.65 px), pixel-verified in
+@rive-app/canvas (pinnedSkinnedCheck via drawNow), 6-scenario interaction
+suite driving the real inspector UI, mutation-checked (lerp disabled → 7.25 px
+vs 0.5 threshold). Gates: build clean, 762 unit / 293 interaction.*
 
 ### Skinned-part .riv export (Skin/Tendon/CubicWeight)
 
