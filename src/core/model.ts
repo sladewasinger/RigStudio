@@ -20,9 +20,13 @@
  *                        factories, the artboard frame helpers.
  *   childOrder.ts     — the U1 unified-child-ordering CHOKEPOINT: slotAddPath/
  *                        slotRemovePath/slotAddChild/slotRemoveChild/slotMoveWithin/
- *                        reconcileChildOrder, plus the effectiveChildOrder / reassignKindOrder
+ *                        reconcileChildOrder (+ U4's beginExplicitChildOrder for the
+ *                        importer), plus the effectiveChildOrder / reassignKindOrder
  *                        reads and the isChildOrderCoherent /
  *                        childOrderAgreesWithCanonicalPartOrder integrity predicates.
+ *   slotReorder.ts    — U4: moveChildSlot, the slot-space reorder op behind the Layers
+ *                        drag, PageUp/PageDown and the stacking arrows (slot moves
+ *                        first, then re-derives the paths[]/doc.parts authorities).
  *   paintOrder.ts     — U2: flattenPaintOrder, the pure childOrder → paint-sequence
  *                        algorithm shared by the live canvas and headless composePose.
  *   idGen.ts          — freshId/bumpIdCounter, shared by every module above.
@@ -37,5 +41,6 @@ export * from './partHierarchy';
 export * from './structuralOps';
 export * from './serialization';
 export * from './childOrder';
+export * from './slotReorder';
 export * from './paintOrder';
 export * from './idGen';

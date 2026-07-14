@@ -15,6 +15,7 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { checkpoint, undo } from '../../core/history';
 import {
   setKeyframeAt, notify, selectPart as modelSelectPart, isCanonicalPartOrder,
+  flattenPaintOrder,
 } from '../../core/model';
 import {
   bootRig, resetRig, state, setEditorMode, repaint, rootGEl, partByLabel, simulateDragDrop,
@@ -196,8 +197,10 @@ describe('scenario — panel drag reorder moves a SUBTREE\'s whole paint block',
     expect(ids.indexOf(eyes.id)).toBe(ids.indexOf(face.id) + 1);
     // body's block now sits above (higher index than) face's whole block.
     expect(ids.indexOf(bodyChild.id)).toBeGreaterThan(ids.indexOf(eyes.id));
-    // Canvas DOM paint order matches the model exactly (same relative order for all parts).
-    expect(domPartOrder().filter((id) => ids.includes(id))).toEqual(ids);
+    // Canvas DOM paint order matches the model's own paint algorithm exactly. (Since U4
+    // the sample's recorded childOrder interleaves — body's own shadow run paints AFTER
+    // its nested child — so the reference is the childOrder flatten, not raw doc.parts.)
+    expect(domPartOrder()).toEqual(flattenPaintOrder(state.doc!, () => 0).map((r) => r.partId));
   });
 });
 
@@ -215,8 +218,9 @@ describe('scenario — PageUp on a parent moves its whole subtree block, never s
     const ids = state.doc!.parts.map((p) => p.id);
     // body is still IMMEDIATELY followed by its own child — the block moved as one unit.
     expect(ids.indexOf(bodyChild.id)).toBe(ids.indexOf(body.id) + 1);
-    // The DOM paint order (canvas) reflects the same move.
-    expect(domPartOrder().indexOf(body.id)).toBeLessThan(domPartOrder().indexOf(bodyChild.id));
+    // The DOM paint order (canvas) reflects the same move, per the childOrder flatten
+    // (U4: body's own shadow run paints AFTER its nested child — recorded doc order).
+    expect(domPartOrder()).toEqual(flattenPaintOrder(state.doc!, () => 0).map((r) => r.partId));
   });
 });
 
@@ -241,10 +245,16 @@ describe('scenario — keyed z re-sorts the CANVAS only; the Layers panel never 
   });
 
   it('Edit mode ignores keyed z entirely: canvas shows pure rest/authored order', () => {
+    // Capture the Edit-mode rest paint order FIRST — since U4 that is the childOrder
+    // flatten (body/face interleave), not raw doc.parts order, so the baseline is the
+    // rendered truth itself rather than a doc.parts-derived approximation.
+    setEditorMode('setup');
+    repaint();
+    const restOrder = domPartOrder();
+
     setEditorMode('animate');
     const behind = state.doc!.parts[0];
     const front = state.doc!.parts[1];
-    const authoredOrder = state.doc!.parts.map((p) => p.id);
 
     checkpoint();
     setKeyframeAt(behind.id, 'z', 500, 5);
@@ -254,9 +264,7 @@ describe('scenario — keyed z re-sorts the CANVAS only; the Layers panel never 
 
     setEditorMode('setup'); // Edit mode: poseTime() is null, so effectiveZ ignores the key
     repaint();
-    expect(domIndexOf(behind.id)).toBeLessThan(domIndexOf(front.id)); // back to authored order
-    expect(domPartOrder().filter((id) => authoredOrder.includes(id))).toEqual(
-      authoredOrder.filter((id) => domPartOrder().includes(id)),
-    );
+    expect(domIndexOf(behind.id)).toBeLessThan(domIndexOf(front.id)); // back under `front`
+    expect(domPartOrder()).toEqual(restOrder); // byte-identical rest order, key ignored
   });
 });

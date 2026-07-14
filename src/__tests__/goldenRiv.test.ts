@@ -23,7 +23,17 @@ import { importSvgHeadless } from '../headless/importSvgHeadless';
 import { exportRiv } from '../io/riv';
 import { normalizeDoc, RigDoc, RigPart, Clip } from '../core/model';
 
-const GOLDEN_SHA256 = 'a1c6ff4b7e97d94293cf50c2d936115cff409aaf07a5968ddafb00a37511e3c6';
+/** RE-PINNED for U4 (2026-07-14, from a1c6ff4b…): the importer now records TRUE SVG
+ *  document order into childOrder, and PIP_MASTER genuinely interleaves in two places
+ *  (`body` = [part body, path shadow], `face` = [part eyes, path path3]), so the .riv
+ *  drawable order legitimately moved. Verified per the re-pin protocol: headless
+ *  render-frames before/after at 0/300/600/900/1200ms — the ONLY pixel difference is
+ *  the body's authored shadow crescent now painting ABOVE the nested body (the exact
+ *  restacking-fidelity correction U4 exists for; the face's path3-above-eyes correction
+ *  is real but invisible, they don't overlap), and the AFTER frames match a raw-SVG
+ *  resvg render of PIP_MASTER pixel-exactly in the body region (0 mismatched px, vs
+ *  8062 before). The skinned golden below did NOT move (hand-authored doc, no import). */
+const GOLDEN_SHA256 = '581d5b1ff165e352414c2a7aed03fbc7f557c321dc993f53a5dfac5e14a7f17f';
 
 /** Second pin: the SKELETAL-DEFORMATION surface (skinned-part export wave, 2026-07-13).
  *  The main golden doc has no bones/skin (its hash deliberately did NOT move when the

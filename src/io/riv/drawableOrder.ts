@@ -13,12 +13,13 @@
  * order TOPMOST (scene.ts's DRAW ORDER comment pinning rive-runtime/src/artboard.cpp),
  * while the flatten is bottom→top paint order — so emission order is the flatten fully
  * reversed at BOTH levels: runs back-to-front, and each run's own paths back-to-front.
- * A doc whose childOrders are all absent or synthesized paths-first (every legacy doc,
- * and everything until U4 lets a user hand-interleave) flattens to exactly one run per
- * part in doc.parts order, so the reversal degenerates to the pre-U3 emission — parts
- * in reverse doc order, each part's paths in reverse array order — BYTE-IDENTICALLY
- * (pinned by exportRivDrawableOrder.test.ts's captured pre-U3 hash and both
- * goldenRiv.test.ts pins).
+ * A doc whose childOrders are all absent or synthesized paths-first (every pre-U4
+ * save — since U4, fresh imports and Layers reorders produce genuinely interleaved
+ * docs) flattens to exactly one run per part in doc.parts order, so the reversal
+ * degenerates to the pre-U3 emission — parts in reverse doc order, each part's paths
+ * in reverse array order — BYTE-IDENTICALLY (pinned by exportRivDrawableOrder.test.ts's
+ * captured pre-U3 hash; the MAIN golden pin moved at U4 because PIP_MASTER itself
+ * interleaves — see goldenRiv.test.ts's re-pin note — while the skinned pin held).
  *
  * EVERY part contributes at least one run (partless bones/groups as their empty anchor
  * run), preserving the pre-U3 loop's "visit every part" shape so scene.ts can keep

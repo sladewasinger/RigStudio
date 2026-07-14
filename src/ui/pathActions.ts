@@ -5,8 +5,8 @@
  * render-neutral primitive rather than inventing new geometry math:
  *  - Raise/Lower in part reuse `actions.ts`'s `bringForward`/`sendBackward`, which already
  *    special-case `state.selectedPathId` (`core/structuralOps.ts`'s
- *    `moveSelectedInDrawOrder` — the exact primitive `layersDragAndDrop.ts`'s private
- *    `movePathTo` step-loops through for a drag reorder).
+ *    `moveSelectedInDrawOrder` — since U4 a SLOT step through `core/slotReorder.ts`'s
+ *    `moveChildSlot`, the same chokepoint the Layers drag-reorder executes through).
  *  - Move to part… and Extract path → own part both reuse the view facade's
  *    `movePathToPart` (render-neutral cross-part rebake) + `pathMoveRefusal` chokepoint;
  *    Extract additionally reuses `addNullPart` (canonical z-order insertion) +

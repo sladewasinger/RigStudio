@@ -30,11 +30,14 @@
  * - Sibling paint order: `doc.parts` is populated depth-first in document order (a part
  *   is registered the moment its group is discovered, before its own children are
  *   walked), matching the existing "doc.parts order = paint order, last = topmost"
- *   convention as closely as a flat part list can. LIMITATION: a part's own paths and
- *   its child parts cannot be perfectly interleaved in paint order this way (SVG allows
- *   a group's content and a nested group to interleave freely; the part model paints a
- *   part's paths together as one unit at the part's position) — this is a known,
- *   accepted approximation, not something to try to solve here.
+ *   convention. Since U4 (unified child ordering), the interleaving of a group's own
+ *   drawable children with its nested groups is ALSO preserved exactly: every part gets
+ *   an explicit `childOrder` (`core/childOrder.ts`'s `beginExplicitChildOrder` + one
+ *   slotAddPath/slotAddChild per child, appended in the walk's document order), so a
+ *   path authored ABOVE a nested group paints above it in the editor and the exports —
+ *   the old "paths always paint below child parts" two-bucket approximation (the import
+ *   restacking fidelity bug) is dead. Old saved projects are untouched (their childOrder
+ *   stays lazily synthesized by normalizeDoc); only fresh imports record document order.
  * - <ellipse>/<circle>/<rect> are converted to <path> data so everything downstream
  *   deals with one shape kind.
  * - Pivots are seeded from the artwork wherever possible, in order of preference:
@@ -49,7 +52,10 @@
  *   (tracked separately as a v3 item).
  */
 
-import { PivotHint, RigDoc, RigPart, RigPath, freshId } from '../core/model';
+import {
+  PivotHint, RigDoc, RigPart, RigPath, beginExplicitChildOrder, freshId, slotAddChild,
+  slotAddPath,
+} from '../core/model';
 import { rotationPivotOf } from '../geometry/transforms';
 
 const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
@@ -131,7 +137,9 @@ function walkTopLevel(el: Element, parts: RigPart[]): void {
     const p = shapeToPath(el, el.getAttribute('transform') ?? '');
     if (!p) return;
     const part = registerPart(el, '', null, parts);
+    beginExplicitChildOrder(part); // one-path part — trivially its whole document order
     part.paths.push(p);
+    slotAddPath(part, p.id);
   }
 }
 
@@ -143,19 +151,29 @@ function walkTopLevel(el: Element, parts: RigPart[]): void {
  * new part's full doc-space `transform` (see the doc-space invariant in the file
  * header) and is threaded down unchanged as the next level's `docAccum`.
  */
-function walkGroup(el: Element, docAccum: string, parentId: string | null, parts: RigPart[]): void {
+function walkGroup(
+  el: Element, docAccum: string, parentId: string | null, parts: RigPart[],
+): RigPart {
   const own = el.getAttribute('transform') ?? '';
   const fullTransform = joinTransforms(docAccum, own);
   const part = registerPart(el, fullTransform, parentId, parts);
+  // U4: record the group's TRUE child interleaving — one slot appended per child, in
+  // this walk's document order (see the "Sibling paint order" rule in the file header).
+  beginExplicitChildOrder(part);
   for (const child of Array.from(el.children)) {
     if (child.tagName === 'g') {
-      walkGroup(child, fullTransform, part.id, parts);
+      const childPart = walkGroup(child, fullTransform, part.id, parts);
+      slotAddChild(part, childPart.id);
     } else if (isDrawable(child)) {
       const p = shapeToPath(child, child.getAttribute('transform') ?? '');
-      if (p) part.paths.push(p);
+      if (p) {
+        part.paths.push(p);
+        slotAddPath(part, p.id);
+      }
     }
   }
   part.kind = part.paths.length > 0 ? 'art' : 'group';
+  return part;
 }
 
 /**

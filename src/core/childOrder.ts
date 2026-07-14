@@ -21,7 +21,11 @@
 // rejoins that regime IMMEDIATELY via `seedChildOrderIfActive` when the doc already uses
 // one (a container part's own list must exist from birth, or its children's later
 // `slotAddChild` calls would silently no-op against it — see that function's doc
-// comment); on a never-normalized doc it stays absent, same as everything else.
+// comment); on a never-normalized doc it stays absent, same as everything else. ONE
+// deliberate exception to laziness (U4): the SVG importer materializes every part's
+// childOrder at birth via `beginExplicitChildOrder` + the add helpers, because a fresh
+// import carries true DOCUMENT-ORDER interleaving the paths-first synthesis could never
+// reconstruct after the fact — old saved projects never touch that path and stay lazy.
 //
 // TWO SOURCES OF TRUTH, ONE PER SLOT KIND (U1 spec rule 4): `doc.parts` sibling order
 // stays the DFS pre-order authority for PART-vs-PART order (CLAUDE.md "doc.parts order
@@ -29,7 +33,10 @@
 // (mirrors the same rule) — `childOrder` only additionally records where each kind's
 // slots sit RELATIVE TO EACH OTHER (the interleaving that neither authority can express
 // alone, and the entire point of U1). A childOrder-mutating op therefore never
-// reorders `doc.parts`/`paths[]` itself; it only ever mirrors them. For sites where the
+// reorders `doc.parts`/`paths[]` itself; it only ever mirrors them. (ONE deliberate,
+// documented inversion: U4's `core/slotReorder.ts` — a Layers-row reorder gesture is
+// authored in SLOT space, so there the slot list moves first and the two authorities
+// are re-derived to agree; see that module's header.) For sites where the
 // correct SLOT POSITION is directly known (a brand-new part/path is always appended,
 // setParent's target is always "new topmost child" — see each call site) the five named
 // primitives below are used directly. For sites that reposition potentially several
@@ -90,6 +97,22 @@ export function docUsesChildOrder(parts: RigPart[]): boolean {
 export function seedChildOrderIfActive(part: RigPart, allParts: RigPart[], pathIds: string[] = []): void {
   if (!docUsesChildOrder(allParts)) { delete part.childOrder; return; }
   part.childOrder = pathIds.map((id): ChildSlot => ({ kind: 'path', id }));
+}
+
+/**
+ * Begin an EXPLICIT, initially-empty `childOrder` on a brand-new part whose slots the
+ * caller is about to record in true discovery order via `slotAddPath`/`slotAddChild`
+ * (U4: `io/importSvg.ts` — the importer walks an SVG group's children in DOCUMENT order
+ * and appends a slot per child as it goes, so the recorded interleaving is exactly the
+ * authored stacking, killing the paths-first import approximation). This deliberately
+ * OVERRIDES the LAZY rule for the part it is called on: an imported doc carries real
+ * document-order information the synthesis could never reconstruct, so it must be
+ * materialized at birth — old SAVED projects never pass through here and stay lazy.
+ * Unconditional (unlike `seedChildOrderIfActive`): the importer builds a whole doc from
+ * scratch, so there is no pre-existing regime to defer to.
+ */
+export function beginExplicitChildOrder(part: RigPart): void {
+  part.childOrder = [];
 }
 
 /** Add a PATH slot to `part.childOrder`, if present (no-op otherwise — see the file

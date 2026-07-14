@@ -1,8 +1,14 @@
 /**
  * U2 (rendering honors childOrder) — the live-canvas half of the wave. Covers:
- *  - BYTE-IDENTITY: the bundled Pip sample (a legacy/synthesized doc — no part's
- *    childOrder is hand-authored) renders EXACTLY today's DOM — one run per part, no
- *    `data-run` attribute, doc.parts order, every group's own paths matching part.paths.
+ *  - BYTE-IDENTITY: a LEGACY doc (childOrder stripped from every part, so normalizeDoc
+ *    synthesizes paths-first on load — exactly any pre-U1 save) renders EXACTLY the
+ *    pre-U2 DOM — one run per part, no `data-run` attribute, doc.parts order, every
+ *    group's own paths matching part.paths. (Until U4 the bundled sample itself was
+ *    that doc; the importer now records TRUE document order, so the legacy shape is
+ *    reconstructed here by stripping the recorded slots first.)
+ *  - U4: the freshly imported Pip sample paints its recorded interleaving — the outer
+ *    body's own shadow run comes AFTER the nested body's group (the restacking-fidelity
+ *    correction), and face's own run after eyes'.
  *  - A fabricated INTERLEAVED doc (body: [path shadow_under, child innerA, child innerB,
  *    path shadow_over]) paints in slot order: the two shadow runs bracket the children.
  *  - Animate-mode keyed `z` on a child re-sorts SIBLING part slots only; the bracketing
@@ -16,14 +22,14 @@
  *    this, since it lands at a hand-computed exact value (0) only when the bbox is right.
  *
  * The fabricated doc is installed directly (buildCanvas/resetView/notify — mirrors
- * harness.ts's loadFixtureSvg, minus the SVG-import step) since no current UI path can
- * author a genuinely interleaved childOrder yet (U4's job) — only a hand-built doc can
- * exercise it today.
+ * harness.ts's loadFixtureSvg, minus the SVG-import step) so its slot shapes stay
+ * hand-pinned and independent of the sample's own (now genuinely interleaved, since
+ * U4) recorded order.
  */
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { checkpoint } from '../../core/history';
 import {
-  RigDoc, RigPart, state, notify, setKeyframeAt,
+  RigDoc, RigPart, state, notify, setKeyframeAt, serializeDoc, deserializeDoc,
   isChildOrderCoherent, childOrderAgreesWithCanonicalPartOrder,
 } from '../../core/model';
 import {
@@ -47,8 +53,15 @@ function domRuns(): { partId: string; run: string | undefined; pathIds: string[]
   }));
 }
 
-describe('scenario — byte-identity: the Pip sample (legacy/synthesized doc) renders EXACTLY as before U2', () => {
+describe('scenario — byte-identity: a LEGACY doc (no childOrder) renders EXACTLY as before U2', () => {
   it('one run per part, no data-run attribute, doc.parts order, own paths matching part.paths', () => {
+    // Reconstruct the pre-U1 save shape from the live sample: strip every recorded
+    // childOrder and reload — deserializeDoc's normalizeDoc synthesizes paths-first,
+    // the legacy order.
+    const raw = JSON.parse(serializeDoc(state.doc!));
+    for (const part of raw.doc.parts) delete part.childOrder;
+    installDoc(deserializeDoc(JSON.stringify(raw)));
+
     const runs = domRuns();
     const doc = state.doc!;
     expect(runs.length).toBe(doc.parts.length);
@@ -58,6 +71,24 @@ describe('scenario — byte-identity: the Pip sample (legacy/synthesized doc) re
       const r = runs.find((x) => x.partId === part.id)!;
       expect(r.pathIds, `part ${part.label}`).toEqual(part.paths.map((p) => p.id));
     }
+  });
+});
+
+describe('scenario — U4: the freshly imported sample paints its recorded TRUE document order', () => {
+  it('outer body\'s shadow run paints ABOVE the nested body; face\'s own run above eyes', () => {
+    const doc = state.doc!;
+    const outerBody = doc.parts.find((p) => p.label === 'body' && !p.parentId)!;
+    const innerBody = doc.parts.find((p) => p.label === 'body' && !!p.parentId)!;
+    const face = doc.parts.find((p) => p.label === 'face' && !p.parentId)!;
+    const eyes = doc.parts.find((p) => p.label === 'eyes')!;
+    // The recorded slots (importer document order — see importSvg.test.ts for the model
+    // half; this is the CANVAS half).
+    expect(outerBody.childOrder!.map((s) => s.kind)).toEqual(['part', 'path']);
+    const order = domRuns().map((r) => r.partId);
+    expect(order.indexOf(outerBody.id), 'body\'s own (shadow) run after the nested body')
+      .toBeGreaterThan(order.indexOf(innerBody.id));
+    expect(order.indexOf(face.id), 'face\'s own (mouth) run after eyes')
+      .toBeGreaterThan(order.indexOf(eyes.id));
   });
 });
 

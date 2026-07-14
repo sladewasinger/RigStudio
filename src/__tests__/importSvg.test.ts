@@ -14,6 +14,8 @@ import { importSvg } from '../io/importSvg';
 import { applyMat, matrixOfTransform, multiply } from '../geometry/transforms';
 // eslint-disable-next-line import/no-unresolved
 import GIRL_SVG from '../../public/girl_example.svg?raw';
+// eslint-disable-next-line import/no-unresolved
+import PIP_SVG from '../../public/PIP_MASTER.svg?raw';
 
 const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
 
@@ -378,5 +380,76 @@ describe('girl_example.svg fixture (real-world nested Illustrator/Inkscape expor
       .find((p) => (p.fill ?? '').startsWith('url('));
     expect(gradientPath).toBeDefined();
     expect(gradientPath!.fill).toMatch(/^url\(#/);
+  });
+});
+
+// ---- U4: the importer records TRUE SVG document order into childOrder ----
+//
+// The dying two-bucket approximation put a part's own paths ALWAYS below its child
+// parts; these tests pin that the recorded slots reproduce the authored interleaving
+// instead — the labeled slot sequence IS the document sequence, per part.
+
+/** ['P:label'|'d:label', ...] of a part's childOrder, resolved against the doc — the
+ *  human-readable shape all the assertions below compare ('P' = child part, 'd' = path). */
+function slotLabels(doc: ReturnType<typeof importSvg>, part: (typeof doc.parts)[number]): string[] {
+  return (part.childOrder ?? []).map((s) => {
+    if (s.kind === 'path') return `d:${part.paths.find((p) => p.id === s.id)!.label}`;
+    return `P:${doc.parts.find((p) => p.id === s.id)!.label}`;
+  });
+}
+
+describe('importSvg — U4 document-order childOrder', () => {
+  it('records paths interleaved between groups exactly as authored', () => {
+    const doc = importSvg(
+      svg(
+        `<g inkscape:label="holder">` +
+          `<path inkscape:label="under" d="M 0,0 L 1,1" />` +
+          `<g inkscape:label="middle">${LEAF}</g>` +
+          `<path inkscape:label="over" d="M 0,0 L 2,2" />` +
+        `</g>`,
+      ),
+      'i.svg',
+    );
+    const holder = doc.parts.find((p) => p.label === 'holder')!;
+    expect(slotLabels(doc, holder)).toEqual(['d:under', 'P:middle', 'd:over']);
+    // paths[] keeps document order too — the slot list mirrors it (U1 rule 4).
+    expect(holder.paths.map((p) => p.label)).toEqual(['under', 'over']);
+  });
+
+  it('gives EVERY imported part an explicit childOrder, including one-shape parts', () => {
+    const doc = importSvg(
+      svg(`<ellipse cx="5" cy="5" rx="2" ry="2" id="blob" /><g inkscape:label="grp">${LEAF}</g>`),
+      'e.svg',
+    );
+    for (const part of doc.parts) expect(part.childOrder).toBeDefined();
+    const blob = doc.parts.find((p) => p.label === 'blob')!;
+    expect(blob.childOrder).toEqual([{ kind: 'path', id: blob.paths[0].id }]);
+  });
+
+  it('girl fixture: Head interleaves part,part,path,part,path; Pants puts paths ABOVE its parts', () => {
+    const doc = importSvg(GIRL_SVG, 'girl_example.svg');
+    const head = doc.parts.find((p) => p.label === 'Head')!;
+    expect(slotLabels(doc, head)).toEqual(
+      ['P:g142-7', 'P:g173-9', 'd:path174-4', 'P:g181-1', 'd:path182-7'],
+    );
+    // Pants (the outer one, under Girl): two wrapper groups and a nested Pants group
+    // first, its own two paths LAST (drawn on top) — the exact reverse of the old
+    // paths-first synthesis.
+    const girl = doc.parts.find((p) => p.label === 'Girl')!;
+    const pantsOuter = doc.parts.find((p) => p.label === 'Pants' && p.parentId === girl.id)!;
+    expect(slotLabels(doc, pantsOuter)).toEqual(
+      ['P:g112-5', 'P:g118-5', 'P:Pants', 'd:path126-7', 'd:path129-8'],
+    );
+  });
+
+  it('PIP_MASTER: body\'s shadow paints ABOVE the nested body; face\'s mouth above the eyes', () => {
+    // THE ORIGINATING U4 COMPLAINT ("I STILL can't move PIP's body shading (called
+    // shadow) up or down in this layer"): the author drew the shading AFTER the nested
+    // body group, so it belongs on top — the two-bucket import buried it underneath.
+    const doc = importSvg(PIP_SVG, 'PIP_MASTER.svg');
+    const outerBody = doc.parts.find((p) => p.label === 'body' && !p.parentId)!;
+    expect(slotLabels(doc, outerBody)).toEqual(['P:body', 'd:shadow']);
+    const face = doc.parts.find((p) => p.label === 'face' && !p.parentId)!;
+    expect(slotLabels(doc, face)).toEqual(['P:eyes', 'd:path3']);
   });
 });

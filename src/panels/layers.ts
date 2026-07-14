@@ -1,13 +1,20 @@
 /**
  * Layers panel: a folder-style tree — parts nest under their parent part (bone
- * hierarchy) and each part folds open to show the SVG objects (paths) inside it. Drag
- * a part onto another to parent it; drop it on the "un-parent" strip to detach; drag a
- * path onto a sibling to reorder or onto another part to move it there (render-neutral).
- * Double-click renames (names carry through into exported files). This module owns tree
- * building + inline rename; ALL drag-and-drop wiring lives in layersDragAndDrop.ts.
+ * hierarchy) and each part folds open to show its children in SLOT order (U4 — unified
+ * child ordering): path rows and child-part rows interleave exactly as
+ * `RigPart.childOrder` records them, top row = topmost paint, so the tree IS the paint
+ * order at every level (Inkscape's Objects panel model). Drag any row above/below any
+ * sibling row to restack; drop a part onto another to parent it; drop it on the
+ * "un-parent" strip to detach; drag a path onto another part to move it there
+ * (render-neutral). Double-click renames (names carry through into exported files).
+ * This module owns tree building + inline rename; ALL drag-and-drop wiring lives in
+ * layersDragAndDrop.ts.
  */
 
-import { state, notify, selectedPart, selectPart, ancestorChain, RigPart } from '../core/model';
+import {
+  state, notify, selectedPart, selectPart, ancestorChain, effectiveChildOrder, RigPart,
+  RigPath,
+} from '../core/model';
 import { renderPose, enterGroupsFor } from '../view';
 import { checkpoint } from '../core/history';
 import { showContextMenu } from '../ui/contextMenu';
@@ -94,9 +101,10 @@ export function buildLayersPanel(el: HTMLElement): void {
   const hint = document.createElement('p');
   hint.className = 'hint';
   hint.textContent =
-    'Click ▸ to fold parts open. Drag one part onto another to parent it (limbs chain). ' +
-    'Drag a path onto its siblings to reorder paint order, or onto another part to move ' +
-    'it there (the artwork stays put). Double-click renames.';
+    'Click ▸ to fold parts open. Row order IS paint order: drag any row above/below its ' +
+    'sibling rows to restack (paths and parts interleave). Drop a part onto another to ' +
+    'parent it (limbs chain); drop a path onto another part to move it there (the ' +
+    'artwork stays put). Double-click renames.';
   el.appendChild(hint);
 
   if (hadFocus) {
@@ -126,8 +134,8 @@ function partNode(part: RigPart, visible: Set<string> | null): HTMLElement {
   // without manual clicks) WITHOUT touching the persistent `expanded` Set — clearing the
   // query restores whatever fold state the user had before searching, untouched.
   const isOpen = expanded.has(part.id) || (visible !== null && visible.has(part.id));
-  const children = [...doc.parts].reverse()
-    .filter((p) => p.parentId === part.id && (!visible || visible.has(p.id)));
+  const visibleChildCount = doc.parts
+    .filter((p) => p.parentId === part.id && (!visible || visible.has(p.id))).length;
 
   const chevron = document.createElement('span');
   chevron.className = 'chevron';
@@ -161,7 +169,9 @@ function partNode(part: RigPart, visible: Set<string> | null): HTMLElement {
 
   const count = document.createElement('span');
   count.className = 'layer-count';
-  count.textContent = children.length > 0 ? `${part.paths.length}+${children.length}` : `${part.paths.length}`;
+  count.textContent = visibleChildCount > 0
+    ? `${part.paths.length}+${visibleChildCount}`
+    : `${part.paths.length}`;
   row.appendChild(count);
 
   // Layers eye: editor-only visibility, NEVER keyable — the same `part.hidden` flag in
@@ -239,51 +249,63 @@ function partNode(part: RigPart, visible: Set<string> | null): HTMLElement {
   if (isOpen) {
     const kids = document.createElement('ul');
     kids.className = 'layer-children';
-    for (const child of children) kids.appendChild(partNode(child, visible));
-    for (const path of [...part.paths].reverse()) {
-      const pathLi = document.createElement('li');
-      const pathRow = document.createElement('div');
-      pathRow.className = 'layer-row path';
-      pathRow.dataset.pathId = path.id; // unambiguous lookup, mirrors row.dataset.partId above
-      if (state.selectedPathId === path.id) pathRow.classList.add('selected');
-      pathRow.title = path.label; // full label on hover, same rationale as the part row above
-      pathRow.innerHTML = `<span class="path-icon">◇</span>`;
-      const pathName = document.createElement('span');
-      pathName.className = 'layer-name';
-      pathName.textContent = path.label;
-      pathRow.appendChild(pathName);
-      pathRow.onclick = () => {
-        // Enter the part and select this object — the inspector shows its style and
-        // node editing scopes to it.
-        selectPart(part.id);
-        state.selectedPathId = path.id;
-        notify();
-        renderPose();
-      };
-      pathRow.ondblclick = (ev) => {
-        ev.stopPropagation();
-        beginInlineRename(pathRow, pathName, path);
-      };
-      pathRow.addEventListener('contextmenu', (ev) => {
-        // See the part row's contextmenu handler above — suppression is the chokepoint's
-        // job, not this listener's.
-        selectPart(part.id);
-        state.selectedPathId = path.id;
-        notify();
-        renderPose();
-        showContextMenu(
-          buildPathContextMenu(part, path, ev.clientX, ev.clientY, () => beginInlineRename(pathRow, pathName, path)),
-          ev.clientX, ev.clientY,
-        );
-      });
-      wirePathRowDrag(pathRow, part, path);
-      wirePathRowDrop(pathRow, part, path);
-      pathLi.appendChild(pathRow);
-      kids.appendChild(pathLi);
+    // U4: rows render in SLOT order, reversed (top row = last slot = topmost paint) —
+    // path rows and child-part rows interleave exactly as childOrder records. A pure
+    // read (effectiveChildOrder): painting the tree never materializes a lazy list.
+    for (const slot of [...effectiveChildOrder(part, doc.parts)].reverse()) {
+      if (slot.kind === 'part') {
+        const child = doc.parts.find((p) => p.id === slot.id);
+        if (child && (!visible || visible.has(child.id))) kids.appendChild(partNode(child, visible));
+      } else {
+        const path = part.paths.find((p) => p.id === slot.id);
+        if (path) kids.appendChild(pathNode(part, path));
+      }
     }
     li.appendChild(kids);
   }
   return li;
+}
+
+function pathNode(part: RigPart, path: RigPath): HTMLElement {
+  const pathLi = document.createElement('li');
+  const pathRow = document.createElement('div');
+  pathRow.className = 'layer-row path';
+  pathRow.dataset.pathId = path.id; // unambiguous lookup, mirrors row.dataset.partId above
+  if (state.selectedPathId === path.id) pathRow.classList.add('selected');
+  pathRow.title = path.label; // full label on hover, same rationale as the part row
+  pathRow.innerHTML = `<span class="path-icon">◇</span>`;
+  const pathName = document.createElement('span');
+  pathName.className = 'layer-name';
+  pathName.textContent = path.label;
+  pathRow.appendChild(pathName);
+  pathRow.onclick = () => {
+    // Enter the part and select this object — the inspector shows its style and
+    // node editing scopes to it.
+    selectPart(part.id);
+    state.selectedPathId = path.id;
+    notify();
+    renderPose();
+  };
+  pathRow.ondblclick = (ev) => {
+    ev.stopPropagation();
+    beginInlineRename(pathRow, pathName, path);
+  };
+  pathRow.addEventListener('contextmenu', (ev) => {
+    // See the part row's contextmenu handler — suppression is the chokepoint's job, not
+    // this listener's.
+    selectPart(part.id);
+    state.selectedPathId = path.id;
+    notify();
+    renderPose();
+    showContextMenu(
+      buildPathContextMenu(part, path, ev.clientX, ev.clientY, () => beginInlineRename(pathRow, pathName, path)),
+      ev.clientX, ev.clientY,
+    );
+  });
+  wirePathRowDrag(pathRow, part, path);
+  wirePathRowDrop(pathRow, part, path);
+  pathLi.appendChild(pathRow);
+  return pathLi;
 }
 
 /**

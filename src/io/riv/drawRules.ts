@@ -72,10 +72,12 @@
  * pre-U3 GLOBAL-order semantics and keeps them; since U3 the editor's animate-time z
  * re-sort is SIBLING-SCOPED (core/paintOrder.ts re-sorts PART slots within their
  * parent's childOrder only) and the static drawable order is the slot flatten. For
- * every doc whose childOrders are the synthesized paths-first shape (all docs until U4
- * lets a user hand-interleave) the two models coincide and the export is byte-identical
- * to pre-U3; for a hand-INTERLEAVED doc that ALSO keys z, editor and runtime can
- * diverge in three narrow ways:
+ * every doc whose childOrders are the synthesized paths-first shape (every pre-U4
+ * save; NOTE — U4 has now LANDED: fresh imports record true document order and the
+ * Layers panel reorders slots freely, so interleaved docs are ordinary user documents
+ * and the divergence below is user-reachable; the deferred decision stands) the two
+ * models coincide and the export is byte-identical to pre-U3; for an INTERLEAVED doc
+ * that ALSO keys z, editor and runtime can diverge in three narrow ways:
  *   (a) SCOPE: rule 2 above ranks core/structuralOps.ts's `drawOrder` — the doc-wide,
  *       hierarchy-blind z sort — to pick neighbors/anchors, so a z-keyed part nested
  *       under an interleaved parent may resolve different neighbors than the canvas's

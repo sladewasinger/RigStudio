@@ -33,7 +33,8 @@ import {
 } from '../core/model';
 import { checkpoint, undo, redo } from '../core/history';
 import {
-  renderPose, reorderCanvas, hasSelectedNode, nudgeSelectedNodes, nudgeSelectedParts, selectAllNodes,
+  renderPose, refreshSelectedStackingDom, hasSelectedNode, nudgeSelectedNodes,
+  nudgeSelectedParts, selectAllNodes,
 } from '../view';
 import { groupAction, ungroupAction } from '../panels';
 import {
@@ -245,18 +246,21 @@ export const FILE_EDIT_BINDINGS: ShortcutBinding[] = [
     patterns: [{ key: 'PageUp' }, { key: 'PageDown' }],
     run(ev) {
       // Step the entered path (within its part) or the selected part through the draw
-      // order: PageUp = bring forward (up the layer list), PageDown = send back.
+      // order: PageUp = bring forward (up the layer list), PageDown = send back. One step
+      // = one SLOT in the parent's mixed child list (U4), so it crosses interleaved rows
+      // of the other kind exactly as the Layers tree shows them.
       const delta = ev.key === 'PageUp' ? 1 : -1;
       if (!canMoveSelectedInDrawOrder(delta)) return;
       ev.preventDefault();
       checkpoint();
       moveSelectedInDrawOrder(delta);
-      reorderCanvas();
+      refreshSelectedStackingDom();
       notify();
     },
     help: {
       keys: 'PageUp / PageDown',
-      description: 'Bring the selected part (or entered path) forward / send it backward in draw order ' +
+      description: 'Bring the selected part (or entered path) forward / send it backward in draw order — ' +
+        'one Layers row per step, crossing sibling paths and parts alike ' +
         '(rest stacking; animate a per-part z offset in Animate mode to restack over time)',
       context: 'Edit',
     },

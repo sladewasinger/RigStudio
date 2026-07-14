@@ -206,9 +206,16 @@ const nearIdentity = (m: Mat): boolean =>
  * kind 'art' iff a part has direct paths); an art source emptied of its last path keeps
  * its kind (matches delete-path behavior elsewhere). Syncs both parts' path DOM in place
  * (no canvas rebuild) and repaints; the CALLER owns the checkpoint (one per drop).
+ *
+ * `destSlotIndex` (U4) pins WHERE in `dest`'s mixed childOrder the arriving path's slot
+ * lands (the Layers drop passes the exact row position); when omitted it is derived from
+ * `destIndex` so the slot keeps mirroring `paths[]` on an INTERLEAVED destination too:
+ * appended-last lands after every existing slot (topmost — the pre-U4 raw `paths[]`
+ * index only agreed with that on paths-first lists), and an interior insert lands
+ * immediately before the slot of the path it displaced upward.
  */
 export function movePathToPart(
-  src: RigPart, dest: RigPart, pathId: string, destIndex?: number,
+  src: RigPart, dest: RigPart, pathId: string, destIndex?: number, destSlotIndex?: number,
 ): boolean {
   if (src.id === dest.id || pathMoveRefusal(src, dest) !== null) return false;
   const from = src.paths.findIndex((p) => p.id === pathId);
@@ -225,8 +232,12 @@ export function movePathToPart(
   const at = destIndex === undefined
     ? dest.paths.length
     : Math.max(0, Math.min(destIndex, dest.paths.length));
+  const displaced = dest.paths[at]; // the path the insert lands just below, if any
   dest.paths.splice(at, 0, path);
-  slotAddPath(dest, pathId, at); // same interleaved index as the paths[] splice just above
+  const slotAt = destSlotIndex ?? (displaced === undefined
+    ? dest.childOrder?.length
+    : dest.childOrder?.findIndex((s) => s.kind === 'path' && s.id === displaced.id));
+  slotAddPath(dest, pathId, slotAt === -1 ? undefined : slotAt);
   if (dest.kind === 'group') dest.kind = 'art';
   syncPartPathDom(src);
   syncPartPathDom(dest);

@@ -7,7 +7,10 @@ import {
   isUsableBoneTip, boneDeletionCascade, restWorldMatOf, foldRestWorldIntoOwnPose,
 } from './boneOps';
 import { freshId } from './idGen';
-import { reconcileChildOrder, seedChildOrderIfActive, slotAddChild } from './childOrder';
+import {
+  effectiveChildOrder, reconcileChildOrder, seedChildOrderIfActive, slotAddChild,
+} from './childOrder';
+import { moveChildSlot } from './slotReorder';
 import { IDENTITY, Mat } from '../geometry/transforms';
 
 /** Structural edits the AI assistant may request (opt-in). */
@@ -366,49 +369,63 @@ export function drawOrder(parts: RigPart[], zOf: (part: RigPart) => number): Rig
 }
 
 /** Parts sharing `part`'s parent, in current relative sibling order — on a canonical
- *  array this is exactly the sequence PageUp/PageDown/the stacking row step through:
- *  distinct siblings' subtree blocks never interleave, so this flat filtered list is the
- *  whole story regardless of how large any one sibling's own subtree is. */
+ *  array this is exactly the sequence a ROOT-level part steps through (roots have no
+ *  containing part, hence no childOrder — see stepScope below): distinct siblings'
+ *  subtree blocks never interleave, so this flat filtered list is the whole story
+ *  regardless of how large any one sibling's own subtree is. */
 function siblingsOf(part: RigPart, parts: RigPart[]): RigPart[] {
   return parts.filter((p) => p.parentId === part.parentId);
 }
 
-/** Whether the current selection (entered path, else part) can move a step in z. Part
- *  moves are SIBLING-scoped (see siblingsOf): a part can't be draw-order-stepped past its
- *  own parent's children into a different parent's block — that's what re-parenting is
- *  for. */
-export function canMoveSelectedInDrawOrder(delta: 1 | -1): boolean {
+/**
+ * What one PageUp/PageDown/stacking-arrow step moves through, resolved from the current
+ * selection (U4 — slot-aware): the entered path steps through its OWN part's mixed slot
+ * list, a parented part through its PARENT's, so a step crosses interleaved rows of the
+ * other kind exactly as the Layers tree shows them. A ROOT part has no containing slot
+ * list — it steps through the root sibling sequence instead (`container: null`).
+ */
+function stepScope(): { container: RigPart | null; slotId: string; index: number; length: number } | null {
   const doc = state.doc;
   const part = selectedPart();
-  if (!doc || !part) return false;
-  if (state.selectedPathId) {
-    const i = part.paths.findIndex((p) => p.id === state.selectedPathId);
-    return i >= 0 && i + delta >= 0 && i + delta < part.paths.length;
+  if (!doc || !part) return null;
+  const container = state.selectedPathId
+    ? part
+    : part.parentId ? partById(part.parentId) : null;
+  const slotId = state.selectedPathId ?? part.id;
+  if (container) {
+    const order = effectiveChildOrder(container, doc.parts); // pure read — no write
+    const index = order.findIndex((s) => s.id === slotId);
+    return index < 0 ? null : { container, slotId, index, length: order.length };
   }
   const sibs = siblingsOf(part, doc.parts);
-  const i = sibs.indexOf(part);
-  return i + delta >= 0 && i + delta < sibs.length;
+  const index = sibs.indexOf(part);
+  return index < 0 ? null : { container: null, slotId, index, length: sibs.length };
+}
+
+/** Whether the current selection (entered path, else part) can move a step in z. Steps
+ *  are scoped to ONE parent's slot list (see stepScope): a part can't be draw-order-
+ *  stepped out of its parent's children into a different parent's block — that's what
+ *  re-parenting is for. */
+export function canMoveSelectedInDrawOrder(delta: 1 | -1): boolean {
+  const scope = stepScope();
+  if (!scope) return false;
+  return scope.index + delta >= 0 && scope.index + delta < scope.length;
 }
 
 /**
- * Move the entered path (within its part) or the selected part one z step (+1 = up). A
- * part with children moves as ONE paint-order unit: its whole subtree block swaps places
- * with its adjacent sibling's whole subtree block (see siblingsOf/subtreeIds) — neither
- * block is ever split, and the move never crosses into a different parent's children.
+ * Move the entered path or the selected part one step up/down its parent's SLOT list
+ * (+1 = up the layer tree = drawn later): `slotReorder.ts`'s `moveChildSlot`, so the step
+ * crosses interleaved rows of the other kind and both authorities follow. A part with
+ * children moves as ONE paint-order unit (moveChildSlot re-splices whole subtree blocks —
+ * never splits one). ROOT parts keep the pre-U4 sibling-block swap: there is no root
+ * childOrder (roots are always parts, so the doc.parts sibling order IS their slot list).
  */
 export function moveSelectedInDrawOrder(delta: 1 | -1): boolean {
   if (!canMoveSelectedInDrawOrder(delta)) return false;
   const doc = state.doc!;
   const part = selectedPart()!;
-  if (state.selectedPathId) {
-    const i = part.paths.findIndex((p) => p.id === state.selectedPathId);
-    [part.paths[i], part.paths[i + delta]] = [part.paths[i + delta], part.paths[i]];
-    // The swapped pair need not be childOrder-adjacent (a child part could sit between
-    // their slots) — reconcile re-derives the path-slot run fresh from the now-swapped
-    // paths[] (the path-order authority) rather than hand-deriving the target index.
-    reconcileChildOrder(part, doc.parts);
-    return true;
-  }
+  const scope = stepScope()!;
+  if (scope.container) return moveChildSlot(scope.container, scope.slotId, scope.index + delta);
   const sibs = siblingsOf(part, doc.parts);
   const i = sibs.indexOf(part);
   const neighbor = sibs[i + delta];
@@ -428,11 +445,6 @@ export function moveSelectedInDrawOrder(delta: 1 | -1): boolean {
   ).length;
   rest.splice(insertAt, 0, ...laterBlock, ...earlierBlock); // swap: later's block now leads
   doc.parts = rest;
-  // `earlier`/`later` are SIBLINGS (see siblingsOf above) — only their shared parent's
-  // part-slot order could have changed; reconcile re-derives it from the now-swapped
-  // doc.parts (rule 4). A root-level swap has no parent childOrder to fix.
-  const parent = part.parentId ? partById(part.parentId) : null;
-  if (parent) reconcileChildOrder(parent, doc.parts);
   return true;
 }
 

@@ -22,7 +22,9 @@
  * all). undo/redo rebuilds via buildCanvas, so path/run reconciliation here is forward-only.
  */
 
-import { RigPart, RigPath, state, partOwnRuns, flattenPaintOrder } from '../core/model';
+import {
+  RigPart, RigPath, state, partOwnRuns, flattenPaintOrder, partById, selectedPart,
+} from '../core/model';
 import { ctx, SVG_NS, primaryPartGroup, partOwnBBox, partOwnPathElements } from './context';
 import { renderPose } from './render';
 import { renderOverlay } from './overlay';
@@ -76,6 +78,26 @@ export function reorderCanvas(): void {
     if (g) ctx.rootGroup.appendChild(g);
   }
   renderPose();
+}
+
+/**
+ * DOM follow-up for one `moveSelectedInDrawOrder` step (PageUp/PageDown, the stacking
+ * arrows, the path context menu's raise/lower): since U4 a step moves a SLOT in its
+ * container's mixed child list, so crossing a slot of the other kind can restructure the
+ * container's own paint RUNS (a path hopping over a child part splits one run into two,
+ * or merges two back) — `syncPartPathDom` first, THEN the global re-append. The affected
+ * container is derived from the selection by the same rule `structuralOps.ts`'s
+ * `stepScope` uses: the entered path's own part, else the selected part's parent; a ROOT
+ * part step never restructures runs (roots swap whole sibling blocks), so plain
+ * `reorderCanvas` suffices there.
+ */
+export function refreshSelectedStackingDom(): void {
+  const part = selectedPart();
+  const container = state.selectedPathId
+    ? part
+    : part?.parentId ? partById(part.parentId) : null;
+  if (container) syncPartPathDom(container);
+  reorderCanvas();
 }
 
 /** Reconcile ONE run group's own `<path>` DOM against `pathIds` (exactly the pre-U2

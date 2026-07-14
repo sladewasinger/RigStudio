@@ -26,7 +26,8 @@ export {
 export { renderPose, setPoseSampler, resetSkinRenderWarnings } from './render';
 export { invalidateSkinCache } from './skinRender';
 export {
-  updatePathAttrs, reorderCanvas, registerPart, unregisterPart, syncPartPathDom,
+  updatePathAttrs, reorderCanvas, refreshSelectedStackingDom, registerPart, unregisterPart,
+  syncPartPathDom,
 } from './partDom';
 export {
   hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, selectedNodesType,

@@ -2,37 +2,47 @@
  * Layers-panel drag-and-drop wiring — every dragstart/dragover/drop handler the tree's
  * rows carry. Split out of layers.ts (CLAUDE.md "Small, focused files"); layers.ts keeps
  * tree building + inline rename and calls the wire* functions below on each row it makes.
+ * The pure "what should this drop do" math lives in `layersDropRules.ts` (U4); this
+ * module only dispatches events, shows feedback, and executes the returned plan.
  *
- * The system is a 2×2 ACCEPTANCE TABLE (payload type × row kind), each cell one branch:
+ * The system is a 2×2 ACCEPTANCE TABLE (payload type × row kind); since U4 every cell
+ * supports EDGE zones (sibling insertion at the exact slot — paths and parts interleave,
+ * so "sibling" means the mixed row list of the reference row's container):
  *
- *   | payload \ target  | PART row                        | PATH row                    |
- *   |-------------------|---------------------------------|-----------------------------|
- *   | `text/rig-part`   | reparent / sibling-reorder      | (not accepted)              |
- *   | `text/rig-path`   | move path INTO the part         | reorder (same part) or move |
- *   |                   | (append last = topmost);        | with above/below insertion  |
- *   |                   | own part row = send to top      | (cross part)                |
+ *   | payload \ target  | PART row                          | PATH row                    |
+ *   |-------------------|-----------------------------------|-----------------------------|
+ *   | `text/rig-part`   | edges: sibling slot insertion     | edges: become a CHILD of    |
+ *   |                   | (root rows: block splice);        | the path's owner, slotted   |
+ *   |                   | middle: parent INTO (append top)  | between its rows            |
+ *   | `text/rig-path`   | edges: sibling slot insertion in  | edges: reorder (same part)  |
+ *   |                   | the row's own container (root     | or cross-part move at the   |
+ *   |                   | rows REFUSE — see layersDropRules |exact slot                  |
+ *   |                   | for the Inkscape rule); middle:   |                             |
+ *   |                   | move INTO (append topmost); own   |                             |
+ *   |                   | header row = send to top          |                             |
  *
  * Cross-part path moves go through the view facade's `movePathToPart` (render-neutral
- * frame rebake) and are gated by its `pathMoveRefusal` CHOKEPOINT — the dragover shows
- * the refusal as the row's title and withholds both preventDefault and the drop-zone
- * class, so the browser shows its native "can't drop here" cursor and no 'drop' event
- * fires at all: the rejection is a structural non-event, not a branch that could
- * accidentally mutate. Same-part path reordering is untouched (byte-identical to the
- * pre-split behavior).
+ * frame rebake) and are gated by its `pathMoveRefusal` CHOKEPOINT — a refused (or
+ * structurally illegal) PATH hover shows the reason as the row's title and withholds
+ * both preventDefault and the drop-zone class, so the browser shows its native "can't
+ * drop here" cursor and no 'drop' event fires at all: the rejection is a structural
+ * non-event, not a branch that could accidentally mutate. Same-container reorders go
+ * through `core/slotReorder.ts`'s `moveChildSlot` — the one chokepoint every slot-space
+ * gesture funnels through (PageUp/PageDown and the stacking arrows share it).
  *
  * A PART drop that reparents (`wireDropTarget`'s un-parent strip, `wirePartRowDrop`'s
  * "into" zone) tries the view facade's `reattachRootBone` FIRST (Unified Skeleton Phase
  * 1: a chain-root bone dropped onto another chain's bone, or an already-attached root
  * dropped back to the un-parent strip, reparents world-preservingly instead of jumping)
- * and falls back to plain `setParent` when it declines (every other drag combination —
- * see that function's doc comment for the exact gesture table) — `reattachRootBone(...)
- * || setParent(...)` is safe to chain unconditionally: a decline never mutates, and a
- * cycle refusal inside `reattachRootBone` leaves `setParent`'s own cycle check to fail
- * (and message) identically.
+ * and falls back to plain `setParent` when it declines — `reattachRootBone(...) ||
+ * setParent(...)` is safe to chain unconditionally: a decline never mutates, and a cycle
+ * refusal inside `reattachRootBone` leaves `setParent`'s own cycle check to fail (and
+ * message) identically. EDGE drops stay plain `setParent` sibling insertion (pre-U4
+ * parity — attach semantics remain an explicitly "into"-shaped gesture).
  */
 
 import {
-  state, selectPart, setParent, movePartRelativeTo, moveSelectedInDrawOrder, notify,
+  state, selectPart, setParent, movePartRelativeTo, moveChildSlot, notify,
   RigPart, RigPath,
 } from '../core/model';
 import { checkpoint } from '../core/history';
@@ -41,8 +51,11 @@ import {
   renderPose, syncPartPathDom, reorderCanvas, movePathToPart, pathMoveRefusal,
   reattachRootBone,
 } from '../view';
+import {
+  DropZone, SlotDropPlan, planPartEdgeDrop, planPathEdgeDrop, planPathToTop,
+} from './layersDropRules';
 
-/** Reparent `draggedId` onto `newParentId` for a Layers drop — see the module doc. */
+/** Reparent `draggedId` onto `newParentId` for a Layers "into" drop — see the module doc. */
 function reparentForDrop(draggedId: string, newParentId: string | null): boolean {
   const dragged = state.doc?.parts.find((p) => p.id === draggedId);
   return (!!dragged && reattachRootBone(dragged, newParentId)) || setParent(draggedId, newParentId);
@@ -50,6 +63,59 @@ function reparentForDrop(draggedId: string, newParentId: string | null): boolean
 
 /** Opens a part's folder in the tree (layers.ts owns the `expanded` set). */
 export type ExpandPart = (partId: string) => void;
+
+/**
+ * Execute a resolved drop plan (one checkpoint per real mutation; 'none' and 'refuse'
+ * never touch history). Returns false for a refusal so PART-payload callers can surface
+ * their dialog (path payloads never reach here refused — their hover was never claimed).
+ */
+function executePlan(plan: SlotDropPlan, expand: ExpandPart): boolean {
+  switch (plan.kind) {
+    case 'none':
+      return true;
+    case 'refuse':
+      return false;
+    case 'reorder': {
+      checkpoint();
+      if (!moveChildSlot(plan.container, plan.slotId, plan.toIndex)) return true;
+      // A slot crossing a slot of the other kind restructures the container's paint
+      // RUNS — rebuild them, then the global re-append (which also repaints).
+      syncPartPathDom(plan.container);
+      reorderCanvas();
+      notify();
+      return true;
+    }
+    case 'movePath': {
+      checkpoint();
+      if (!movePathToPart(plan.src, plan.dest, plan.pathId, plan.pathsIndex, plan.slotIndex)) return true;
+      // The moved path stays the working selection in its NEW part (entered-part
+      // semantics, like clicking its row).
+      selectPart(plan.dest.id);
+      state.selectedPathId = plan.pathId;
+      expand(plan.dest.id);
+      reorderCanvas();
+      notify();
+      return true;
+    }
+    case 'reparentAtSlot': {
+      checkpoint();
+      if (!setParent(plan.partId, plan.container.id)) return false; // cycle (pre-checked; defensive)
+      moveChildSlot(plan.container, plan.partId, plan.toIndex);
+      syncPartPathDom(plan.container);
+      expand(plan.container.id);
+      reorderCanvas();
+      notify();
+      return true;
+    }
+    case 'rootRelative': {
+      checkpoint();
+      if (!movePartRelativeTo(plan.partId, plan.refId, plan.place)) return false;
+      reorderCanvas();
+      notify();
+      return true;
+    }
+  }
+}
 
 // ---- Part-row drags (text/rig-part) ----
 
@@ -89,7 +155,7 @@ export function wireDropTarget(el: HTMLElement, newParentId: string | null, expa
 const DROP_CLASSES = ['drop-target', 'drop-above', 'drop-below'];
 
 /** Which drop action the pointer position means: near the edges reorders, middle parents. */
-function dropZoneOf(ev: DragEvent, el: HTMLElement): 'above' | 'into' | 'below' {
+function dropZoneOf(ev: DragEvent, el: HTMLElement): DropZone | 'into' {
   const r = el.getBoundingClientRect();
   const f = (ev.clientY - r.top) / r.height;
   if (f < 0.25) return 'above';
@@ -97,13 +163,19 @@ function dropZoneOf(ev: DragEvent, el: HTMLElement): 'above' | 'into' | 'below' 
   return 'into';
 }
 
+function showZoneFeedback(row: HTMLElement, zone: DropZone | 'into'): void {
+  row.classList.toggle('drop-target', zone === 'into');
+  row.classList.toggle('drop-above', zone === 'above');
+  row.classList.toggle('drop-below', zone === 'below');
+}
+
 /**
- * Part rows accept three drops from ANOTHER PART: top edge = draw just above this part,
- * bottom edge = just below (both adopt this part's parent — sibling insertion), middle =
- * parent the dragged part into this one. They also accept a PATH drag (see the acceptance
- * table in the module doc): the whole row is one "into" zone — the path is appended last
- * in this part's paints (topmost within the part), render-neutrally; dropping a path on
- * its OWN part's header row sends it to the top of that same paint order.
+ * Part rows accept three drops from ANOTHER PART: top/bottom edge = sibling slot
+ * insertion just above/below this row, middle = parent the dragged part into this one.
+ * They also accept a PATH drag (see the acceptance table): edges = sibling slot
+ * insertion in THIS row's container (refused at the root level), middle = move the path
+ * into this part appended last (topmost); a path's own part header row sends it to the
+ * top of that same part.
  */
 export function wirePartRowDrop(row: HTMLElement, part: RigPart, expand: ExpandPart): void {
   row.addEventListener('dragover', (ev) => {
@@ -113,14 +185,11 @@ export function wirePartRowDrop(row: HTMLElement, part: RigPart, expand: ExpandP
     }
     if (!ev.dataTransfer?.types.includes('text/rig-part')) return;
     ev.preventDefault();
-    const zone = dropZoneOf(ev, row);
-    row.classList.toggle('drop-target', zone === 'into');
-    row.classList.toggle('drop-above', zone === 'above');
-    row.classList.toggle('drop-below', zone === 'below');
+    showZoneFeedback(row, dropZoneOf(ev, row));
   });
   row.addEventListener('dragleave', () => {
     row.classList.remove(...DROP_CLASSES);
-    row.title = '';
+    row.title = part.label; // restore the full-label hover (layers.ts sets it)
   });
   row.addEventListener('drop', (ev) => {
     if (draggingPath) {
@@ -132,21 +201,24 @@ export function wirePartRowDrop(row: HTMLElement, part: RigPart, expand: ExpandP
     row.classList.remove(...DROP_CLASSES);
     const draggedId = ev.dataTransfer?.getData('text/rig-part');
     if (!draggedId || draggedId === part.id) return;
-    checkpoint();
-    const ok = zone === 'into'
-      ? reparentForDrop(draggedId, part.id)
-      : movePartRelativeTo(draggedId, part.id, zone);
-    if (!ok) {
-      void dialog.alert('That drop would create a parenting cycle.');
+    if (zone === 'into') {
+      checkpoint();
+      if (!reparentForDrop(draggedId, part.id)) {
+        void dialog.alert('That drop would create a parenting cycle.');
+        return;
+      }
+      expand(part.id);
+      reorderCanvas();
+      notify();
       return;
     }
-    if (zone === 'into') expand(part.id);
-    reorderCanvas();
-    notify();
+    if (!executePlan(planPartEdgeDrop(draggedId, { part }, zone), expand)) {
+      void dialog.alert('That drop would create a parenting cycle.');
+    }
   });
 }
 
-// ---- Path drags (text/rig-path): same-part reorder + cross-part move ----
+// ---- Path drags (text/rig-path): slot reorders + cross-part moves ----
 
 /**
  * The path currently mid-drag, tracked in-module. `dataTransfer.getData` is only readable
@@ -175,180 +247,115 @@ export function wirePathRowDrag(row: HTMLElement, part: RigPart, path: RigPath):
   row.addEventListener('dragend', () => { draggingPath = null; });
 }
 
-/** Paths don't nest, so there's no "into" zone — just above/below, split at the row's midline. */
-function pathDropZoneOf(ev: DragEvent, el: HTMLElement): 'above' | 'below' {
+/** Paths don't nest, so a PATH ROW has no "into" zone — just above/below at the midline.
+ *  (A part row keeps its three zones — see dropZoneOf.) Also the zone rule for a PART
+ *  payload over a path row: a part can't go "into" a path either. */
+function pathDropZoneOf(ev: DragEvent, el: HTMLElement): DropZone {
   const r = el.getBoundingClientRect();
   return (ev.clientY - r.top) / r.height < 0.5 ? 'above' : 'below';
 }
 
-/**
- * The `part.paths` (model-order) index the dragged path should land at for a drop at `zone`
- * relative to `refPathId`, computed in the ON-SCREEN list order the tree actually renders
- * (`[...part.paths].reverse()` — row 0 = last in the array = topmost/drawn-last, mirroring
- * the parts tree's own topmost-first convention). Pure; returns -1 if either id is missing.
- */
-function pathDropTargetIndex(
-  part: RigPart, draggedId: string, refPathId: string, zone: 'above' | 'below',
-): number {
-  const visual = [...part.paths].reverse();
-  const n = visual.length;
-  const srcV = visual.findIndex((p) => p.id === draggedId);
-  const refV = visual.findIndex((p) => p.id === refPathId);
-  if (srcV < 0 || refV < 0) return -1;
-  const withoutSrc = visual.filter((_, i) => i !== srcV);
-  let insertV = withoutSrc.findIndex((p) => p.id === refPathId);
-  if (zone === 'below') insertV += 1;
-  return n - 1 - insertV;
+/** Resolve the plan a PATH drag over/onto a part row's zone means: edges = sibling slot
+ *  insertion in this row's container, middle = move INTO this part (own header row =
+ *  send to top). */
+function pathOnPartRowPlan(src: RigPart, pathId: string, part: RigPart, zone: DropZone | 'into'): SlotDropPlan {
+  if (zone !== 'into') return planPathEdgeDrop(src, pathId, { part }, zone);
+  if (src.id === part.id) return planPathToTop(src, pathId);
+  return planPathIntoPart(src, pathId, part);
 }
 
-/**
- * The `dest.paths` (model-order) index an INCOMING path (not currently in `dest`) should
- * land at for a drop at `zone` relative to `refPathId` — the cross-part sibling of
- * pathDropTargetIndex above, in the same on-screen (reversed) list convention. After the
- * insert the array has length n+1, so visual slot `insertV` is model index `n − insertV`.
- * Pure; returns -1 if the reference row's path is missing.
- */
-function crossPartDropIndex(dest: RigPart, refPathId: string, zone: 'above' | 'below'): number {
-  const visual = [...dest.paths].reverse();
-  const refV = visual.findIndex((p) => p.id === refPathId);
-  if (refV < 0) return -1;
-  const insertV = refV + (zone === 'below' ? 1 : 0);
-  return dest.paths.length - insertV;
+/** Middle drop on a foreign part row: move INTO, appended last = topmost (pre-U4 parity —
+ *  the slot appends after EVERY existing slot, which on an interleaved destination is not
+ *  the raw `paths.length` position the old code assumed). */
+function planPathIntoPart(src: RigPart, pathId: string, dest: RigPart): SlotDropPlan {
+  const refusal = pathMoveRefusal(src, dest);
+  if (refusal) return { kind: 'refuse', reason: refusal };
+  return {
+    kind: 'movePath', src, dest, pathId,
+    pathsIndex: dest.paths.length,
+    slotIndex: dest.childOrder?.length ?? dest.paths.length,
+  };
 }
 
-/**
- * Move `pathId` to `targetIndex` within `part.paths` by reusing the EXACT adjacent-swap
- * mutation PageUp/PageDown drives on an entered path (`moveSelectedInDrawOrder`), one step
- * at a time — a drag reorder ends up byte-identical to pressing that key N times rather than
- * a second array-splice mutation. Temporarily borrows the entered-path selection to drive
- * it (that function reads `state.selectedPartId`/`selectedPathId`), then restores whatever
- * was selected before the drag — a reorder drag doesn't change selection, matching
- * `wirePartRowDrop`'s reorder branch above.
- */
-function movePathTo(part: RigPart, pathId: string, targetIndex: number): boolean {
-  const from = part.paths.findIndex((p) => p.id === pathId);
-  if (from < 0 || targetIndex < 0 || targetIndex >= part.paths.length) return false;
-  const prevPartId = state.selectedPartId;
-  const prevPathId = state.selectedPathId;
-  state.selectedPartId = part.id;
-  state.selectedPathId = pathId;
-  const step = targetIndex > from ? 1 : -1;
-  let i = from;
-  let ok = true;
-  while (i !== targetIndex) {
-    if (!moveSelectedInDrawOrder(step)) { ok = false; break; }
-    i += step;
-  }
-  state.selectedPartId = prevPartId;
-  state.selectedPathId = prevPathId;
-  return ok;
-}
-
-/** A path drag hovering a part row: claim it (drop-target highlight) unless refused. */
+/** A path drag hovering a part row: claim it (zone feedback) unless the plan refuses. */
 function pathOverPartRow(ev: DragEvent, row: HTMLElement, part: RigPart): void {
   const src = draggingPathSource();
   if (!src) return;
-  if (src.id !== part.id) {
-    const refusal = pathMoveRefusal(src, part);
-    if (refusal) {
-      // No preventDefault → the browser keeps its native "can't drop here" cursor and no
-      // 'drop' fires; the title is the visible WHY (the visible-counterpart GOTCHA).
-      row.title = refusal;
-      return;
-    }
+  const zone = dropZoneOf(ev, row);
+  const plan = pathOnPartRowPlan(src, draggingPath!.pathId, part, zone);
+  if (plan.kind === 'refuse') {
+    // No preventDefault → the browser keeps its native "can't drop here" cursor and no
+    // 'drop' fires; the title is the visible WHY (the visible-counterpart GOTCHA).
+    row.classList.remove(...DROP_CLASSES);
+    row.title = plan.reason;
+    return;
   }
   ev.preventDefault();
-  row.classList.add('drop-target');
+  showZoneFeedback(row, zone);
 }
 
-/** A path dropped on a part row: cross-part move (append last) / own-row send-to-top. */
+/** A path dropped on a part row: execute whatever the hover's plan said. */
 function pathDropOnPartRow(ev: DragEvent, row: HTMLElement, part: RigPart, expand: ExpandPart): void {
   ev.preventDefault();
   row.classList.remove(...DROP_CLASSES);
-  row.title = '';
+  row.title = part.label;
   const dragged = draggingPath;
   draggingPath = null;
   if (!dragged) return;
   const src = state.doc?.parts.find((p) => p.id === dragged.partId);
   if (!src) return;
-  if (src.id === part.id) {
-    // Own header row = send the path to the TOP of its own paint order (append last),
-    // through the same one-step mutation family as sibling reordering.
-    const from = part.paths.findIndex((p) => p.id === dragged.pathId);
-    const top = part.paths.length - 1;
-    if (from < 0 || from === top) return; // no-op drop: nothing to checkpoint
-    checkpoint();
-    if (!movePathTo(part, dragged.pathId, top)) return;
-    syncPartPathDom(part);
-    renderPose();
-    notify();
-    return;
-  }
-  if (pathMoveRefusal(src, part) !== null) return; // refused hovers never claim, but re-guard
-  checkpoint();
-  if (!movePathToPart(src, part, dragged.pathId)) return;
-  // The moved path stays the working selection in its NEW part (entered-part semantics,
-  // like clicking its row); the folder opens so the landing spot is visible.
-  selectPart(part.id);
-  state.selectedPathId = dragged.pathId;
-  expand(part.id);
-  notify();
+  const plan = pathOnPartRowPlan(src, dragged.pathId, part, dropZoneOf(ev, row));
+  executePlan(plan, expand); // refused hovers never claim; a fabricated drop no-ops here
 }
 
 /**
- * Path rows accept drops from any other path row: SAME part = reorder that part's own
- * paint order (unchanged behavior); ANOTHER part = move the path into this part at the
- * above/below insertion point, render-neutrally via `movePathToPart` (unless
- * `pathMoveRefusal` refuses — skinned source/destination or a bone).
+ * Path rows accept drops from any other path row (SAME part = slot reorder, ANOTHER
+ * part = cross-part move at the exact slot, render-neutrally via `movePathToPart` unless
+ * `pathMoveRefusal` refuses) AND from part rows (the dragged part becomes a CHILD of
+ * this path's owner, slotted just above/below this row — the "drag a part between two
+ * paths" gesture).
  */
 export function wirePathRowDrop(row: HTMLElement, part: RigPart, path: RigPath): void {
+  const planFor = (ev: DragEvent): SlotDropPlan | null => {
+    const zone = pathDropZoneOf(ev, row);
+    if (draggingPath) {
+      const src = draggingPathSource();
+      if (!src || draggingPath.pathId === path.id) return null; // a row never targets its own drag
+      return planPathEdgeDrop(src, draggingPath.pathId, { ownerPart: part, pathId: path.id }, zone);
+    }
+    if (ev.dataTransfer?.types.includes('text/rig-part')) {
+      // dataTransfer's payload is unreadable during dragover — but the drop id is all
+      // the DROP needs, and the hover only needs "some part is being dragged".
+      const draggedId = ev.dataTransfer.getData('text/rig-part');
+      if (!draggedId) return { kind: 'none' }; // hover: claim; the drop re-plans with the real id
+      return planPartEdgeDrop(draggedId, { ownerPart: part, pathId: path.id }, zone);
+    }
+    return null;
+  };
   row.addEventListener('dragover', (ev) => {
-    if (!ev.dataTransfer?.types.includes('text/rig-path')) return;
-    const src = draggingPathSource();
-    if (!src || draggingPath!.pathId === path.id) return; // a row never targets its own drag
-    if (src.id !== part.id) {
-      const refusal = pathMoveRefusal(src, part);
-      if (refusal) {
-        row.title = refusal; // see pathOverPartRow — same structural non-event rejection
-        return;
-      }
+    const plan = planFor(ev);
+    if (plan === null) return;
+    if (plan.kind === 'refuse') {
+      row.classList.remove('drop-above', 'drop-below');
+      row.title = plan.reason; // structural non-event rejection — see pathOverPartRow
+      return;
     }
     ev.preventDefault();
-    const zone = pathDropZoneOf(ev, row);
-    row.classList.toggle('drop-above', zone === 'above');
-    row.classList.toggle('drop-below', zone === 'below');
+    showZoneFeedback(row, pathDropZoneOf(ev, row));
   });
   row.addEventListener('dragleave', () => {
     row.classList.remove('drop-above', 'drop-below');
-    row.title = '';
+    row.title = path.label; // restore the full-label hover (layers.ts sets it)
   });
   row.addEventListener('drop', (ev) => {
     ev.preventDefault();
     row.classList.remove('drop-above', 'drop-below');
-    row.title = '';
-    const dragged = draggingPath;
+    row.title = path.label;
+    const wasPathDrag = !!draggingPath;
+    const plan = planFor(ev);
     draggingPath = null;
-    if (!dragged || dragged.pathId === path.id) return;
-    const zone = pathDropZoneOf(ev, row);
-    if (dragged.partId === part.id) {
-      const from = part.paths.findIndex((p) => p.id === dragged.pathId);
-      const targetIndex = pathDropTargetIndex(part, dragged.pathId, path.id, zone);
-      if (targetIndex < 0 || targetIndex === from) return; // no-op drop: nothing to checkpoint
-      checkpoint();
-      if (!movePathTo(part, dragged.pathId, targetIndex)) return;
-      syncPartPathDom(part);
-      renderPose();
-      notify();
-      return;
-    }
-    const src = state.doc?.parts.find((p) => p.id === dragged.partId);
-    if (!src || pathMoveRefusal(src, part) !== null) return;
-    const destIndex = crossPartDropIndex(part, path.id, zone);
-    if (destIndex < 0) return;
-    checkpoint();
-    if (!movePathToPart(src, part, dragged.pathId, destIndex)) return;
-    selectPart(part.id); // moved path stays selected in its NEW part (see pathDropOnPartRow)
-    state.selectedPathId = dragged.pathId;
-    notify();
+    if (plan === null) return;
+    const ok = executePlan(plan, () => {});
+    if (!ok && !wasPathDrag) void dialog.alert('That drop would create a parenting cycle.');
   });
 }

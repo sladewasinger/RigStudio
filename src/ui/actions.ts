@@ -12,7 +12,9 @@ import {
   state, notify, selectedParts, selectPart, deleteParts, duplicateParts,
   canMoveSelectedInDrawOrder, moveSelectedInDrawOrder, partById, RigPart,
 } from '../core/model';
-import { renderPose, reorderCanvas, unregisterPart, buildCanvas, syncPartPathDom } from '../view';
+import {
+  renderPose, refreshSelectedStackingDom, unregisterPart, buildCanvas, syncPartPathDom,
+} from '../view';
 import { checkpoint } from '../core/history';
 import { flipAction, groupAction, ungroupAction } from '../panels';
 import { dialog } from './dialogs';
@@ -94,7 +96,7 @@ function moveInDrawOrder(delta: 1 | -1): void {
   if (!canMoveSelectedInDrawOrder(delta)) return;
   checkpoint();
   moveSelectedInDrawOrder(delta);
-  reorderCanvas();
+  refreshSelectedStackingDom(); // slot steps can restructure the container's paint runs (U4)
   notify();
 }
 export function bringForward(): void { moveInDrawOrder(1); }
