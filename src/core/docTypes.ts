@@ -93,13 +93,28 @@ export interface SkinBone {
  * A manual per-node weight override (Bones 2.0 refinement mode). A node keyed by this
  * blends bone `a` at weight (1−t) with bone `b` at weight `t` — i.e. an origin↔tip
  * lerp when `a` and `b` share a joint (a's tip == b's origin). `b === null` means 100%
- * bone `a`. Both ids reference the part's own `skin.bones`; dangling refs are pruned by
- * normalizeDoc. Overrides win over auto weights per node in the LBS render.
+ * bone `a`. `a === null` means this node carries no bone-choice override at all (a
+ * PIN-ONLY entry — see `pin` below); otherwise both ids reference the part's own
+ * `skin.bones`. Dangling refs are pruned by normalizeDoc. Overrides win over auto
+ * weights per node in the LBS render.
  */
 export interface SkinOverride {
-  a: string;
+  a: string | null;
   b: string | null;
   t: number;
+  /**
+   * PIN-TO-REST (0..1, PIN-TO-REST wave 2026-07-14): the fraction of this node held at
+   * its BIND-POSE root-space position instead of following the `a`/`b` bone blend above
+   * — deformed = lerp(lbsResult, restPosition, pin). Absent/0 = fully bone-driven
+   * (today's behavior, back-compat). Independent of `a`/`b`/`t`: a node can carry a pin
+   * with no bone choice at all (`a: null`), blending pure auto weights toward rest. Both
+   * the editor render (view/skinRender.ts) and the .riv export (io/riv/skin.ts's
+   * synthetic per-part anchor bone) implement this identically. Exists because the
+   * origin/tip blend above only ever chooses WHICH ARM BONE carries a node — there was
+   * no way to say "don't follow any bone at all, stay near the body" (the reported
+   * armpit-floats-away bug: an origin-end override still rotates with that bone).
+   */
+  pin?: number;
 }
 
 export interface RigPart {

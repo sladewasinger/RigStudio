@@ -16,11 +16,14 @@ import { fullPoseTransform, effectivePivot, effectiveTip } from './pose';
 // SKIN_WEIGHT_POWER lives in geometry/skin.ts (single source of truth shared with the
 // .riv exporter's Skin/Tendon weights) — see its doc comment there for the "why 4".
 
-// Runtime cache: parsed rest geometry + per-point weights, invalidated when the
-// rest path data changes (node edits) or the binding changes.
+// Runtime cache: parsed rest geometry + per-point weights + per-point pins, invalidated
+// when the rest path data changes (node edits) or the binding (incl. pins) changes.
 const skinCache = new Map<string, {
   sig: string;
-  paths: { id: string; cmds: PathCmd[]; pts: { x: number; y: number }[][]; weights: number[][] }[];
+  paths: {
+    id: string; cmds: PathCmd[]; pts: { x: number; y: number }[][];
+    weights: number[][]; pins: number[];
+  }[];
 }>();
 
 /** Drop a part's cached rest geometry/weights (bind, unbind, structural node edits). */
@@ -70,7 +73,17 @@ function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get
         return (ov && overrideWeightRow(boneIds, ov)) || row;
       })
       : auto;
-    return { id: p.id, cmds, pts, weights };
+    // PIN-TO-REST (2026-07-14): independent of the bone-CARRY override above — a node
+    // can carry a pin fraction with no override at all, or with an override whose
+    // `a` is null (a pin-only entry, see SkinOverride's doc comment). 0 everywhere
+    // when the path has no overrides at all (back-compat: absent pin == 0).
+    const pins: number[] = hasOverrides
+      ? nodeKeyFlat.map((node) => {
+        const ov = pathOverrides[String(node)];
+        return ov && Number.isFinite(ov.pin) ? Math.min(1, Math.max(0, ov.pin!)) : 0;
+      })
+      : flat.map(() => 0);
+    return { id: p.id, cmds, pts, weights, pins };
   });
   const entry = { sig, paths };
   skinCache.set(part.id, entry);
@@ -142,7 +155,9 @@ export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | nul
     let k = 0;
     const out: PathCmd[] = pd.cmds.map((c, i) => {
       const mapped = pd.pts[i].map((pt) => {
-        const w = pd.weights[k++];
+        const idx = k++;
+        const w = pd.weights[idx];
+        const pin = pd.pins[idx];
         let x = 0, y = 0;
         for (let bi = 0; bi < xf.length; bi++) {
           const { m, s } = xf[bi];
@@ -155,6 +170,13 @@ export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | nul
           }
           x += w[bi] * (m.a * sx + m.c * sy + m.e);
           y += w[bi] * (m.b * sx + m.d * sy + m.f);
+        }
+        // PIN-TO-REST: hold the fraction `pin` of this point at its own bind/rest
+        // coordinate (`pt`) instead of the bone-blended result above — independent of
+        // which bone(s) would otherwise carry it (CLAUDE.md's Bone system section).
+        if (pin > 0) {
+          x += (pt.x - x) * pin;
+          y += (pt.y - y) * pin;
         }
         if (!Number.isFinite(x) || !Number.isFinite(y)) {
           // Last-resort per-point safety net: a NaN/Infinity coordinate must never reach

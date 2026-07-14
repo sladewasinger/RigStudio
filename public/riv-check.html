@@ -492,6 +492,79 @@
         return { bones, rest, bent, checks, pass };
       }
 
+      /**
+       * PIN-TO-REST pixel check (2026-07-14): the SAME two-bone bar as skinnedCheck, but
+       * the outer half's four corner nodes (1,2,3,4 — everything at x=50 and x=90; only
+       * the two innermost nodes at x=10 are left unpinned) get `pin: 1` on the exported
+       * skin.overrides. Pinning ALL FOUR corners of that quad freezes it RIGIDLY at rest
+       * (the render only deforms the polygon's vertices; four frozen corners is a frozen
+       * quad, full stop) — so unlike skinnedCheck's plain version, where the outer half
+       * visibly leaves (`outer` un-reds) and arrives rotated `below`, the PINNED outer
+       * half must stay exactly put: `outer` stays red and `below` stays un-red even after
+       * the same 89deg b2 rotation. This is the inverse of skinnedCheck's own two
+       * assertions, which is exactly the point — proves the exported anchor
+       * Skin/Tendon/CubicWeight combination actually holds pixels, not just component
+       * bytes (io/riv/skin.ts's exportRivSkin.test.ts covers the byte level).
+       */
+      function pinnedSkinnedDoc() {
+        const doc = skinnedDoc();
+        const limb = doc.parts.find((p) => p.id === 'p_limb');
+        limb.skin.overrides = {
+          limb_path: {
+            1: { a: null, b: null, t: 0, pin: 1 },
+            2: { a: null, b: null, t: 0, pin: 1 },
+            3: { a: null, b: null, t: 0, pin: 1 },
+            4: { a: null, b: null, t: 0, pin: 1 },
+          },
+        };
+        return doc;
+      }
+
+      async function pinnedSkinnedCheck() {
+        const bytes = exportRiv(pinnedSkinnedDoc());
+        const canvas = document.getElementById('c2');
+        const inst = await loadRive(bytes, canvas);
+        const rt = inst.runtime, ab = inst.artboard;
+        const ctx2d = canvas.getContext('2d');
+        const px = (x, y) => Array.from(ctx2d.getImageData(x, y, 1, 1).data);
+        const isRed = (p) => p[3] > 200 && p[0] > 150 && p[1] < 120 && p[2] < 160;
+        const drawNow = () => {
+          const renderer = inst.renderer;
+          renderer.clear();
+          renderer.save();
+          inst.alignRenderer();
+          ab.draw(renderer);
+          renderer.restore();
+          renderer.flush();
+          if (typeof rt.resolveAnimationFrame === 'function') rt.resolveAnimationFrame();
+        };
+
+        const anim = ab.animationByName('bend');
+        const li = new rt.LinearAnimationInstance(anim, ab);
+        li.advance(0); li.apply(1.0); ab.advance(0);
+        drawNow();
+        const rest = { inner: px(25, 50), outer: px(75, 50), below: px(52, 80) };
+
+        li.advance(0.99); li.apply(1.0); ab.advance(0); // 89.1deg, same as skinnedCheck
+        drawNow();
+        const bent = { inner: px(25, 50), outer: px(75, 50), below: px(52, 80) };
+
+        const pixelsReadable = rest.inner.some((v) => v !== 0) || rest.outer.some((v) => v !== 0);
+        const checks = {
+          loadedWithoutError: true,
+          pixelsReadable,
+          restBarPresent: isRed(rest.inner) && isRed(rest.outer) && !isRed(rest.below),
+          innerHalfHeldStill: isRed(bent.inner), // unpinned but near-static anyway (b1 never rotates)
+          pinnedOuterHalfStayedPut: isRed(bent.outer), // INVERSE of skinnedCheck's bentOuterHalfLeft
+          pinnedOuterNeverArrivedBelow: !isRed(bent.below), // INVERSE of skinnedCheck's bentSegmentArrivedBelow
+        };
+        const hard = pixelsReadable
+          ? ['restBarPresent', 'innerHalfHeldStill', 'pinnedOuterHalfStayedPut', 'pinnedOuterNeverArrivedBelow']
+          : [];
+        const pass = checks.loadedWithoutError && hard.every((k) => checks[k]);
+        return { rest, bent, checks, pass };
+      }
+
       async function main() {
         try {
           if (!window.rive) throw new Error('Rive runtime failed to load');
@@ -501,6 +574,7 @@
           const wholeDoc = await wholeDocCheck();
           const drawOrderOpacityHidden = await drawOrderOpacityHiddenCheck();
           const skinned = await skinnedCheck();
+          const pinnedSkinned = await pinnedSkinnedCheck();
           report({
             status: 'ok',
             note: 'Transform-level checks + pixel-level skinned articulation (drawNow flush).',
@@ -509,6 +583,7 @@
             wholeDoc,
             drawOrderOpacityHidden,
             skinned,
+            pinnedSkinned,
           });
         } catch (e) {
           report({ status: 'error', error: String((e && e.message) || e) });

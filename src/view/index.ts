@@ -38,7 +38,7 @@ export {
   flipSelected, nudgeSelectedParts, applyRootDeltas, bindSelectedToBones,
   bindPartsToBones, autoBindPlacedBone, unbindSelectedSkin,
   startBonePlacement, cancelBonePlacement, endBoneChain, rebindFrozenChain,
-  primaryNodeBinding, setNodeBinding, clearNodeBinding, resetNodeBindings,
+  primaryNodeBinding, setNodeBinding, setNodePin, clearNodeBinding, resetNodeBindings,
   recomputeAutoWeights, bindSelectedNodesToBone, quickNodeBindTarget,
   movePathToPart, pathMoveRefusal, reattachRootBone,
 } from './rigOps';

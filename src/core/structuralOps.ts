@@ -121,7 +121,7 @@ export function deleteParts(ids: string[]): string[] {
         const rec = part.skin.overrides[pathId];
         for (const key of Object.keys(rec)) {
           const ov = rec[key];
-          if (dead.has(ov.a) || (ov.b != null && dead.has(ov.b))) delete rec[key];
+          if ((ov.a != null && dead.has(ov.a)) || (ov.b != null && dead.has(ov.b))) delete rec[key];
         }
         if (Object.keys(rec).length === 0) delete part.skin.overrides[pathId];
       }

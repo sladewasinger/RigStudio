@@ -48,7 +48,9 @@ import { emitAnimations, OpacityColorTarget } from './animation';
 import { emitStateMachines } from './stateMachine';
 import { setupDrawRules } from './drawRules';
 import { bakedMatrix, pathToLocalSubpaths } from './geometry';
-import { buildSkinPlan, emitSkin, emitVertexWeight, SkinPlan, subpathWeights } from './skin';
+import {
+  attachPinAnchor, buildSkinPlan, emitSkin, emitVertexWeight, SkinPlan, subpathWeights,
+} from './skin';
 import {
   argb, DEG2RAD, P_BONE_LENGTH, P_COLOR, P_HEIGHT, P_IN_DISTANCE, P_IN_ROTATION,
   P_IS_CLOSED, P_NAME, P_NODE_X, P_NODE_Y, P_OUT_DISTANCE, P_OUT_ROTATION, P_PARENT_ID,
@@ -214,8 +216,10 @@ export function exportRiv(doc: RigDoc): Uint8Array {
     const part = doc.parts[pi];
     if (hiddenIds.has(part.id)) continue; // Layers eye: fully excluded, no Shapes either.
     // Skeletal deformation plan (skinned parts): resolved once per part, null = the
-    // rigid fallback (skin.ts's buildSkinPlan documents when and why).
+    // rigid fallback (skin.ts's buildSkinPlan documents when and why). PIN-TO-REST: a
+    // no-op unless the plan has a pinned node (skin.ts's attachPinAnchor/header).
     const skinPlan = part.skin ? buildSkinPlan(doc, part, partIndex, ox, oy) : null;
+    if (skinPlan) attachPinAnchor(scene, doc, part, skinPlan, partIndex.get(part.id)!, ox, oy);
     for (let qi = part.paths.length - 1; qi >= 0; qi--) {
       const shapeIndex = emitShape(scene, part, part.paths[qi], partIndex.get(part.id)!, opacityTargets, skinPlan);
       if (shapeIndex !== null && !partShapeIndex.has(part.id)) partShapeIndex.set(part.id, shapeIndex);

@@ -236,6 +236,9 @@ describe('overrideWeightRow', () => {
   it('returns null when a is unresolvable (caller falls back to auto)', () => {
     expect(overrideWeightRow(ids, { a: 'ghost', b: null, t: 0 })).toBeNull();
   });
+  it('returns null when a is null (PIN-TO-REST pin-only entry: caller falls back to auto)', () => {
+    expect(overrideWeightRow(ids, { a: null, b: null, t: 0 })).toBeNull();
+  });
 });
 
 describe('skinWeights sharpening', () => {
@@ -329,6 +332,38 @@ describe('normalizeDoc override pruning', () => {
   it('keeps a null b (100% a)', () => {
     const doc = normalizeDoc(docWithSkin({ p1: { '2': { a: 'b2', b: null, t: 0 } } }));
     expect(doc.parts[0].skin!.overrides!.p1['2']).toEqual({ a: 'b2', b: null, t: 0 });
+  });
+
+  // PIN-TO-REST (2026-07-14).
+  it('clamps an out-of-range pin into [0,1] alongside a bone-carry override', () => {
+    const doc = normalizeDoc(docWithSkin({ p1: { '1': { a: 'b1', b: 'b2', t: 0.5, pin: 5 } } }));
+    expect(doc.parts[0].skin!.overrides!.p1['1']).toEqual({ a: 'b1', b: 'b2', t: 0.5, pin: 1 });
+    const doc2 = normalizeDoc(docWithSkin({ p1: { '1': { a: 'b1', b: 'b2', t: 0.5, pin: -3 } } }));
+    expect(doc2.parts[0].skin!.overrides!.p1['1']).toEqual({ a: 'b1', b: 'b2', t: 0.5, pin: 0 });
+  });
+
+  it('keeps a PIN-ONLY entry (a: null) with a positive pin, canonicalizing b/t to null/0', () => {
+    const doc = normalizeDoc(docWithSkin({ p1: { '3': { a: null, b: 'b1', t: 0.7, pin: 0.6 } } }));
+    expect(doc.parts[0].skin!.overrides!.p1['3']).toEqual({ a: null, b: null, t: 0, pin: 0.6 });
+  });
+
+  it('drops a fully degenerate entry: a null AND pin 0/absent carries no information', () => {
+    const doc = normalizeDoc(docWithSkin({ p1: { '3': { a: null, b: null, t: 0, pin: 0 } } }));
+    expect(doc.parts[0].skin!.overrides).toBeUndefined();
+    const doc2 = normalizeDoc(docWithSkin({ p1: { '3': { a: null, b: null, t: 0 } } }));
+    expect(doc2.parts[0].skin!.overrides).toBeUndefined();
+  });
+
+  it('drops an entry with a non-finite pin (keeping the rest of the shape valid otherwise)', () => {
+    const doc = normalizeDoc(docWithSkin({ p1: { '1': { a: 'b1', b: null, t: 0, pin: NaN } } }));
+    expect(doc.parts[0].skin!.overrides).toBeUndefined();
+  });
+
+  it('back-compat: an entry with no pin field at all round-trips with pin absent', () => {
+    const doc = normalizeDoc(docWithSkin({ p1: { '1': { a: 'b1', b: null, t: 0 } } }));
+    const ov = doc.parts[0].skin!.overrides!.p1['1'];
+    expect(ov).toEqual({ a: 'b1', b: null, t: 0 });
+    expect('pin' in ov).toBe(false);
   });
 });
 

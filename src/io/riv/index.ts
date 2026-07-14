@@ -15,9 +15,13 @@
 import { exportRiv } from './scene';
 import { cubicFor, toFrame } from './animation';
 import { ByteWriter } from './writer';
+import { packRow } from './skin';
 import { argb, COND_OP, EASING_CUBIC, FIELD_TYPE, LISTENER_TYPE } from './keys';
 
 export { exportRiv };
 
 /** @internal Exposed for unit tests only — not part of the public export surface. */
-export const __riv = { ByteWriter, argb, toFrame, cubicFor, FIELD_TYPE, EASING_CUBIC, COND_OP, LISTENER_TYPE };
+export const __riv = {
+  ByteWriter, argb, toFrame, cubicFor, FIELD_TYPE, EASING_CUBIC, COND_OP, LISTENER_TYPE,
+  packRow,
+};

@@ -1,7 +1,7 @@
 // ---- Skinning ----
 import { state, notify, RigPart } from '../../core/model';
 import {
-  unbindSelectedSkin, selectedNodeCount, setNodeBinding, clearNodeBinding,
+  unbindSelectedSkin, selectedNodeCount, setNodeBinding, setNodePin, clearNodeBinding,
   recomputeAutoWeights, primaryNodeBinding,
 } from '../../view';
 import { checkpoint } from '../../core/history';
@@ -102,12 +102,12 @@ function buildNodeBindingEditor(el: HTMLElement, part: RigPart, bones: RigPart[]
   if (count === 1) {
     const info = document.createElement('p');
     info.className = 'hint';
-    if (cur?.override) {
+    if (cur?.override && cur.override.a != null) {
       const la = bones.find((b) => b.id === cur.override!.a)?.label ?? '?';
       const lb = cur.override.b ? bones.find((b) => b.id === cur.override!.b)?.label ?? '?' : null;
       info.textContent = lb
-        ? `Node override: ${la} ${Math.round((1 - cur.override.t) * 100)}% / ${lb} ${Math.round(cur.override.t * 100)}%.`
-        : `Node override: 100% ${la}.`;
+        ? `Carried by ${la} ${Math.round((1 - cur.override.t) * 100)}% / ${lb} ${Math.round(cur.override.t * 100)}%.`
+        : `Carried by ${la} 100%.`;
     } else {
       info.textContent = 'Node uses auto weights.';
     }
@@ -146,14 +146,14 @@ function buildNodeBindingEditor(el: HTMLElement, part: RigPart, bones: RigPart[]
     return { row, sel };
   };
 
-  const aCtrl = boneSelect('origin bone (a)', aId, false);
-  const bCtrl = boneSelect('tip bone (b)', bId, true);
+  const aCtrl = boneSelect('carried by (bone a)', aId, false);
+  const bCtrl = boneSelect('and (bone b)', bId, true);
 
-  // t readout + slider (origin a ↔ tip b).
+  // t readout + slider — the blend from bone a toward bone b (origin ↔ tip weight).
   const tRow = document.createElement('label');
   tRow.className = 'field';
   const tSpan = document.createElement('span');
-  const tLabel = () => `tip weight ${Math.round(t * 100)}%`;
+  const tLabel = () => `weight toward b ${Math.round(t * 100)}%`;
   tSpan.textContent = tLabel();
   const slider = document.createElement('input');
   slider.type = 'range';
@@ -188,7 +188,7 @@ function buildNodeBindingEditor(el: HTMLElement, part: RigPart, bones: RigPart[]
   const grid = document.createElement('div');
   grid.className = 'align-grid';
   const apply = document.createElement('button');
-  apply.textContent = 'apply to selected nodes';
+  apply.textContent = 'apply carry to selected nodes';
   apply.onclick = () => {
     checkpoint();
     if (!setNodeBinding(aId, bId, t)) return;
@@ -197,6 +197,7 @@ function buildNodeBindingEditor(el: HTMLElement, part: RigPart, bones: RigPart[]
   grid.appendChild(apply);
   const clear = document.createElement('button');
   clear.textContent = 'clear override';
+  clear.title = 'Resets this node to auto weights AND clears any pin below';
   clear.onclick = () => {
     checkpoint();
     if (!clearNodeBinding()) return;
@@ -204,4 +205,73 @@ function buildNodeBindingEditor(el: HTMLElement, part: RigPart, bones: RigPart[]
   };
   grid.appendChild(clear);
   el.appendChild(grid);
+
+  buildPinEditor(el, cur);
+}
+
+/**
+ * PIN-TO-REST (2026-07-14): independent of the bone-carry controls above — holds a
+ * fraction of the selected node(s) at their BIND-POSE position instead of following
+ * whichever bone(s) would otherwise carry them (view/skinRender.ts / io/riv/skin.ts's
+ * synthetic anchor bone implement the same lerp). Reachable with NO bone carry chosen at
+ * all (a node can be pinned while still using pure auto weights for the rest) — the
+ * origin/tip controls above only ever pick WHICH bone carries a node; this is the "don't
+ * follow any bone, stay near the body" affordance that was missing (the reported
+ * armpit-floats-away bug: an origin-end carry override still rotates with that bone).
+ */
+function buildPinEditor(el: HTMLElement, cur: ReturnType<typeof primaryNodeBinding>): void {
+  const title = document.createElement('h3');
+  title.textContent = 'Pin to body';
+  el.appendChild(title);
+
+  const hint = document.createElement('p');
+  hint.className = 'hint';
+  hint.textContent = '0% is fully bone-driven (today\'s behavior); 100% holds the node at ' +
+    'its bind-pose position no matter how the bones above move. Applies on top of the ' +
+    'carry settings — even with none chosen.';
+  el.appendChild(hint);
+
+  let pin = cur?.override?.pin ?? 0;
+  const pinRow = document.createElement('label');
+  pinRow.className = 'field';
+  const pinSpan = document.createElement('span');
+  const pinLabel = () => `pin to body ${Math.round(pin * 100)}%`;
+  pinSpan.textContent = pinLabel();
+  const pinSlider = document.createElement('input');
+  pinSlider.type = 'range';
+  pinSlider.min = '0';
+  pinSlider.max = '100';
+  pinSlider.step = '1';
+  pinSlider.value = String(Math.round(pin * 100));
+  pinSlider.oninput = () => {
+    pin = Number(pinSlider.value) / 100;
+    pinSpan.textContent = pinLabel();
+  };
+  pinRow.appendChild(pinSpan);
+  pinRow.appendChild(pinSlider);
+  el.appendChild(pinRow);
+
+  const pinGrid = document.createElement('div');
+  pinGrid.className = 'align-grid';
+  const applyPin = document.createElement('button');
+  applyPin.textContent = 'apply pin';
+  applyPin.onclick = () => {
+    checkpoint();
+    if (!setNodePin(pin)) return;
+    notify();
+  };
+  pinGrid.appendChild(applyPin);
+  const clearPin = document.createElement('button');
+  clearPin.textContent = 'clear pin';
+  clearPin.title = 'Sets pin back to 0 — keeps any carry override untouched';
+  clearPin.onclick = () => {
+    checkpoint();
+    pin = 0;
+    pinSlider.value = '0';
+    pinSpan.textContent = pinLabel();
+    if (!setNodePin(0)) return;
+    notify();
+  };
+  pinGrid.appendChild(clearPin);
+  el.appendChild(pinGrid);
 }

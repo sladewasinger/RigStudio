@@ -10,7 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { exportRiv } from '../io/riv';
+import { exportRiv, __riv } from '../io/riv';
 import { Clip, RigDoc, RigPart, RigPath, SkinBone } from '../core/model';
 import { matrixOfTransform, invertMat, multiply, Mat } from '../geometry/transforms';
 import { decodeRiv, DecodedObject, PROP, TYPE } from './rivDecoder';
@@ -252,6 +252,146 @@ describe('exportRiv skeletal deformation: Skin/Tendon/CubicWeight', () => {
     const a = exportRiv(skinnedDoc());
     const b = exportRiv(skinnedDoc());
     expect(Buffer.from(a).equals(Buffer.from(b))).toBe(true);
+  });
+});
+
+describe('exportRiv skeletal deformation: PIN-TO-REST synthetic anchor bone', () => {
+  it('a plan with zero pinned nodes emits no anchor bone or extra tendon (no-op path)', () => {
+    const d = decodeRiv(exportRiv(skinnedDoc()));
+    expect(d.objects.some((o) => o.props[PROP.NAME] === 'limb anchor')).toBe(false);
+    expect(d.objects.filter((o) => o.typeKey === TYPE.TENDON).length).toBe(2); // the 2 real bones only
+    expect(d.objects.filter((o) => o.typeKey === TYPE.ROOT_BONE).length).toBe(2); // b1, b2 only
+  });
+
+  it('a pinned node gets one extra anchor RootBone + Tendon, static and never keyed', () => {
+    const doc = skinnedDoc();
+    const limb = doc.parts.find((p) => p.id === 'p_limb')!;
+    limb.skin!.overrides = { limb_path: { '1': { a: 'p_b2', b: null, t: 0, pin: 1 } } };
+    const d = decodeRiv(exportRiv(doc));
+    const anchor = byLabel(d, TYPE.ROOT_BONE, 'limb anchor')!;
+    expect(anchor).toBeTruthy();
+    expect(anchor.props[PROP.PARENT_ID]).toBe(byLabel(d, TYPE.NODE, 'limb')!.index);
+    expect(anchor.props[PROP.ROOT_BONE_X]).toBeCloseTo(0, 6);
+    expect(anchor.props[PROP.ROOT_BONE_Y]).toBeCloseTo(0, 6);
+    // Never animated: no KeyedObject in the 'bend' animation targets it, even though
+    // the SAME clip keys b2's rotate/tx.
+    const targetsAnchor = d.animations[0].objects.some((o) => o.objectId === anchor.index);
+    expect(targetsAnchor).toBe(false);
+    const tendons = d.objects.filter((o) => o.typeKey === TYPE.TENDON);
+    expect(tendons.length).toBe(3); // 2 real bones + 1 anchor, appended last
+    expect(tendons[2].props[PROP.TENDON_BONE_ID]).toBe(anchor.index);
+    // limb sits at the top level with zero rest rotation and no rotated ancestor, so the
+    // anchor's STATIC bind equals the Skin's own bind matrix exactly (T(pivot -
+    // frameOrigin), identity rotation) — see io/riv/skin.ts's header derivation.
+    expect(tendons[2].props[PROP.TENDON_XX]).toBeCloseTo(1, 6);
+    expect(tendons[2].props[PROP.TENDON_YY]).toBeCloseTo(1, 6);
+    expect(tendons[2].props[PROP.TENDON_XY]).toBeCloseTo(0, 6);
+    expect(tendons[2].props[PROP.TENDON_YX]).toBeCloseTo(0, 6);
+    expect(tendons[2].props[PROP.TENDON_TX]).toBeCloseTo(50, 4);
+    expect(tendons[2].props[PROP.TENDON_TY]).toBeCloseTo(50, 4);
+  });
+
+  it('folds pin proportionally into the weight row: pin=1 -> single anchor influence (slot 3)', () => {
+    const doc = skinnedDoc();
+    doc.parts.find((p) => p.id === 'p_limb')!.skin!.overrides = {
+      limb_path: { '1': { a: 'p_b2', b: null, t: 0, pin: 1 } },
+    };
+    const d = decodeRiv(exportRiv(doc));
+    const w = weightOfVertexAt(d, 40, -5); // (90,45) - pivot(50,50), the overridden node
+    expect(Number(w.props[PROP.WEIGHT_VALUES])).toBe(255);
+    // 2 real bones -> tendons 1,2; the anchor is appended third -> 1-based slot 3.
+    expect(Number(w.props[PROP.WEIGHT_INDICES])).toBe(3);
+  });
+
+  it('pin=0.5 splits the row ~evenly between the carried bone and the anchor', () => {
+    const doc = skinnedDoc();
+    doc.parts.find((p) => p.id === 'p_limb')!.skin!.overrides = {
+      limb_path: { '1': { a: 'p_b2', b: null, t: 0, pin: 0.5 } },
+    };
+    const d = decodeRiv(exportRiv(doc));
+    const w = weightOfVertexAt(d, 40, -5);
+    const values = bytes4(Number(w.props[PROP.WEIGHT_VALUES]));
+    const indices = bytes4(Number(w.props[PROP.WEIGHT_INDICES]));
+    expect(values.reduce((a, b) => a + b, 0)).toBe(255); // still sums exactly to 255
+    const slotOf = (slot: number) => values[indices.indexOf(slot)] ?? 0;
+    expect(slotOf(2)).toBeGreaterThan(100); // bone b2 (slot 2), ~50%
+    expect(slotOf(2)).toBeLessThan(155);
+    expect(slotOf(3)).toBeGreaterThan(100); // the anchor (slot 3), ~50%
+    expect(slotOf(3)).toBeLessThan(155);
+  });
+
+  it("an unpinned node in the same skinned part is unaffected by another node's pin", () => {
+    const pinnedDoc = skinnedDoc();
+    pinnedDoc.parts.find((p) => p.id === 'p_limb')!.skin!.overrides = {
+      limb_path: { '1': { a: 'p_b2', b: null, t: 0, pin: 1 } },
+    };
+    const pinned = decodeRiv(exportRiv(pinnedDoc));
+    const plain = decodeRiv(exportRiv(skinnedDoc()));
+    // Vertex near b1's origin (node 0, untouched by the override on node 1) — identical
+    // weights whether or not some OTHER node on the same part is pinned.
+    const wPinned = weightOfVertexAt(pinned, -40, -5);
+    const wPlain = weightOfVertexAt(plain, -40, -5);
+    expect(wPinned.props[PROP.WEIGHT_VALUES]).toBe(wPlain.props[PROP.WEIGHT_VALUES]);
+    expect(wPinned.props[PROP.WEIGHT_INDICES]).toBe(wPlain.props[PROP.WEIGHT_INDICES]);
+  });
+
+  it('falls back rigidly (no anchor either) when a skin bone is hidden, even with a pin set', () => {
+    const doc = skinnedDoc();
+    const limb = doc.parts.find((p) => p.id === 'p_limb')!;
+    limb.skin!.overrides = { limb_path: { '1': { a: 'p_b2', b: null, t: 0, pin: 1 } } };
+    doc.parts.find((p) => p.id === 'p_b2')!.hidden = true;
+    const d = decodeRiv(exportRiv(doc));
+    expect(d.objects.some((o) => o.typeKey === TYPE.SKIN)).toBe(false);
+    expect(d.objects.some((o) => o.props[PROP.NAME] === 'limb anchor')).toBe(false);
+  });
+
+  it('export stays deterministic with pins present (two runs, identical bytes)', () => {
+    const build = () => {
+      const doc = skinnedDoc();
+      doc.parts.find((p) => p.id === 'p_limb')!.skin!.overrides = {
+        limb_path: { '1': { a: 'p_b2', b: null, t: 0, pin: 0.5 } },
+      };
+      return exportRiv(doc);
+    };
+    expect(Buffer.from(build()).equals(Buffer.from(build()))).toBe(true);
+  });
+
+  // 4-INFLUENCE EVICTION (whitebox unit test of packRow's mustKeepIndex rule, exposed
+  // via the __riv test-only bag — see io/riv/index.ts): 5 equal-weight candidates,
+  // index 4 standing in for the pin/anchor slot. Without eviction support, the plain
+  // top-4-by-weight cut drops index 4 (ties resolve toward the LOWEST index, so index 4
+  // loses every tie); with `mustKeepIndex`, it always survives by evicting the weakest
+  // (here, tied) currently-picked entry, and the row still sums to exactly 255.
+  it('packRow evicts the weakest influence to admit a must-keep pin when already at the 4-cap', () => {
+    const row = [0.2, 0.2, 0.2, 0.2, 0.2];
+    const toIndices = (packed: { indices: number }) => {
+      const b = [packed.indices & 0xff, (packed.indices >>> 8) & 0xff,
+        (packed.indices >>> 16) & 0xff, (packed.indices >>> 24) & 0xff];
+      return b.filter((x) => x !== 0).map((x) => x - 1); // back to 0-based row indices
+    };
+    const sumBytes = (packed: { values: number }) =>
+      [packed.values & 0xff, (packed.values >>> 8) & 0xff,
+        (packed.values >>> 16) & 0xff, (packed.values >>> 24) & 0xff]
+        .reduce((a, b) => a + b, 0);
+
+    const withoutMustKeep = __riv.packRow(row);
+    expect(toIndices(withoutMustKeep)).not.toContain(4);
+    expect(toIndices(withoutMustKeep).length).toBe(4);
+
+    const withMustKeep = __riv.packRow(row, 4);
+    expect(toIndices(withMustKeep)).toContain(4);
+    expect(toIndices(withMustKeep).length).toBe(4); // still exactly 4, one evicted to make room
+    expect(sumBytes(withMustKeep)).toBe(255);
+  });
+
+  it('packRow is a no-op passthrough for a row that already contains the must-keep index', () => {
+    const row = [0.4, 0.3, 0.3]; // only 3 candidates — the top-4 slice keeps all of them
+    expect(__riv.packRow(row, 0)).toEqual(__riv.packRow(row));
+  });
+
+  it('packRow is a no-op when the must-keep index itself is zero (nothing to protect)', () => {
+    const row = [0, 0.5, 0.3, 0.2]; // 3 real candidates, none at index 0
+    expect(__riv.packRow(row, 0)).toEqual(__riv.packRow(row));
   });
 });
 

@@ -103,12 +103,14 @@ export function segIntersectsBox(
 /**
  * The weight row for a manual per-node override: bone `a` at (1−t), bone `b` at t
  * (both indexed into `boneIds`). `b === null`, a missing `b`, or a dangling id collapses
- * to 100% `a`. Returns null when `a` itself is unresolvable (caller falls back to auto
- * weights). Pure — unit-testable.
+ * to 100% `a`. Returns null when `a` is null/unresolvable (caller falls back to auto
+ * weights — this is also how a PIN-ONLY override, `a: null`, defers to auto weights
+ * before the pin blend is applied on top). Pure — unit-testable.
  */
 export function overrideWeightRow(
-  boneIds: string[], ov: { a: string; b: string | null; t: number },
+  boneIds: string[], ov: { a: string | null; b: string | null; t: number },
 ): number[] | null {
+  if (ov.a == null) return null;
   const ia = boneIds.indexOf(ov.a);
   if (ia < 0) return null;
   const row = new Array(boneIds.length).fill(0);

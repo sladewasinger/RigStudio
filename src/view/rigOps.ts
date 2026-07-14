@@ -29,7 +29,7 @@ export {
 } from './rigOpsBind';
 
 export {
-  primaryNodeBinding, setNodeBinding, quickNodeBindTarget, bindSelectedNodesToBone,
+  primaryNodeBinding, setNodeBinding, setNodePin, quickNodeBindTarget, bindSelectedNodesToBone,
   clearNodeBinding, resetNodeBindings, recomputeAutoWeights,
 } from './rigOpsNodeBinding';
 export type { NodeBindingInfo } from './rigOpsNodeBinding';

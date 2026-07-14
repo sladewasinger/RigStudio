@@ -28,8 +28,11 @@ export function primaryNodeBinding(): NodeBindingInfo | null {
 }
 
 /**
- * Pin every selected node's weight to bone `a` at (1−t) blended with bone `b` at t
- * (b null = 100% a). Both ids must reference the part's bound bones. Caller checkpoints.
+ * Set every selected node's bone-CARRY: bone `a` at (1−t) blended with bone `b` at t
+ * (b null = 100% a). Both ids must reference the part's bound bones. Each node's own
+ * PIN fraction (independent, see SkinOverride's doc comment) is preserved as-is — this
+ * only touches which bone(s) carry the node, never whether it's held toward rest.
+ * Caller checkpoints.
  */
 export function setNodeBinding(a: string, b: string | null, t: number): boolean {
   const part = selectedPart();
@@ -41,11 +44,54 @@ export function setNodeBinding(a: string, b: string | null, t: number): boolean 
   const value: SkinOverride = { a, b: bb, t: Math.min(1, Math.max(0, t)) };
   for (const key of ctx.selectedNodes) {
     const { pathId, cmdIndex } = parseNodeKey(key);
-    (overrides[pathId] ?? (overrides[pathId] = {}))[String(cmdIndex)] = { ...value };
+    const rec = overrides[pathId] ?? (overrides[pathId] = {});
+    const prevPin = rec[String(cmdIndex)]?.pin;
+    rec[String(cmdIndex)] = prevPin !== undefined ? { ...value, pin: prevPin } : { ...value };
   }
   invalidateSkinCache(part.id);
   renderPose();
   return true;
+}
+
+/**
+ * Set every selected node's PIN-TO-REST fraction (0..1) — independent of the bone-CARRY
+ * override above; preserves each node's own a/b/t if it has one. `pin <= 0` on a node
+ * with no bone-carry override (`a: null`) drops the now-empty entry entirely rather than
+ * leaving a degenerate `{a:null,pin:0}` on the doc; a node WITH a bone-carry override
+ * just loses its `pin` field (the override itself survives). Caller checkpoints. Returns
+ * whether anything actually changed (so a no-op "apply pin" costs no undo step).
+ */
+export function setNodePin(pin: number): boolean {
+  const part = selectedPart();
+  if (!part?.skin || ctx.selectedNodes.size === 0) return false;
+  const clamped = Math.min(1, Math.max(0, pin));
+  const overrides = part.skin.overrides ?? (part.skin.overrides = {});
+  let changed = false;
+  for (const key of ctx.selectedNodes) {
+    const { pathId, cmdIndex } = parseNodeKey(key);
+    const rec = overrides[pathId];
+    const cur = rec?.[String(cmdIndex)];
+    if (clamped <= 0) {
+      if (!cur) continue;
+      if (cur.a == null) {
+        delete rec![String(cmdIndex)];
+        if (Object.keys(rec!).length === 0) delete overrides[pathId];
+      } else {
+        delete cur.pin;
+      }
+      changed = true;
+      continue;
+    }
+    const target = overrides[pathId] ?? (overrides[pathId] = {});
+    target[String(cmdIndex)] = cur ? { ...cur, pin: clamped } : { a: null, b: null, t: 0, pin: clamped };
+    changed = true;
+  }
+  if (Object.keys(overrides).length === 0) delete part.skin.overrides;
+  if (changed) {
+    invalidateSkinCache(part.id);
+    renderPose();
+  }
+  return changed;
 }
 
 /**

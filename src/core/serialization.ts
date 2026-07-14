@@ -204,17 +204,33 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
       if (part.skin.bones.length === 0) part.skin = null;
     }
     // Prune per-node weight overrides: drop entries whose bone refs no longer resolve
-    // to a bound bone, or whose blend factor is non-finite; clamp t into [0,1].
+    // to a bound bone, or whose blend factor is non-finite; clamp t/pin into [0,1].
+    // `a === null` is a valid PIN-ONLY entry (no bone-choice override, just a pin) —
+    // see SkinOverride's doc comment — so it is NOT itself grounds for dropping.
     if (part.skin && part.skin.overrides) {
       const boneIds = new Set(part.skin.bones.map((b) => b.id));
       for (const pathId of Object.keys(part.skin.overrides)) {
         const rec = part.skin.overrides[pathId];
         for (const key of Object.keys(rec)) {
           const ov = rec[key];
-          const bad = !ov || typeof ov.a !== 'string' || !boneIds.has(ov.a)
-            || (ov.b != null && !boneIds.has(ov.b)) || !Number.isFinite(ov.t);
-          if (bad) delete rec[key];
-          else ov.t = Math.min(1, Math.max(0, ov.t));
+          const aOk = !!ov && (ov.a == null || (typeof ov.a === 'string' && boneIds.has(ov.a)));
+          const bOk = !!ov && (ov.b == null || boneIds.has(ov.b));
+          const tOk = !!ov && Number.isFinite(ov.t);
+          const pinPresent = !!ov && ov.pin !== undefined && ov.pin !== null;
+          const pinOk = !pinPresent || Number.isFinite(ov.pin);
+          if (!ov || !aOk || !bOk || !tOk || !pinOk) { delete rec[key]; continue; }
+          ov.t = Math.min(1, Math.max(0, ov.t));
+          if (pinPresent) ov.pin = Math.min(1, Math.max(0, ov.pin!));
+          if (ov.a == null) {
+            // No bone-choice override — b/t carry no meaning without a; keep the shape
+            // canonical rather than letting a hand-edited file smuggle a stray b/t
+            // through unused.
+            ov.b = null;
+            ov.t = 0;
+            // A pin-only entry with no pin left (0/absent) carries no information at
+            // all — drop it so a doc round-trip doesn't accumulate empty overrides.
+            if (!(ov.pin! > 0)) { delete rec[key]; continue; }
+          }
         }
         if (Object.keys(rec).length === 0) delete part.skin.overrides[pathId];
       }
