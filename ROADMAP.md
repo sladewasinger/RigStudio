@@ -73,7 +73,7 @@ restacking fidelity bug.*
   slot CHOKEPOINT so every structural op (add/remove path or child, group/
   ungroup/delete/duplicate/reparent/movePathToPart/extract) maintains slots;
   serialization round-trip; per-op integrity tests. Renderer untouched.
-- [ ] **U2 — rendering honors slots**: canvas paint = per-parent slot order
+- [x] **U2 — rendering honors slots** (done 2026-07-14, 7690d2f): canvas paint = per-parent slot order
   (a part's paths render as document-ordered RUNS interleaved with child
   part groups — flat sibling `<g>`s sharing the part's composed transform,
   no inheritance change); headless composePose same flatten; animate-time
@@ -192,6 +192,26 @@ Newest first. Programs/waves below are ordered by their actual git-log
 completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
+
+### U2 — rendering honors childOrder (run-splitting)
+
+*2026-07-14, 7690d2f (worktree wave; clean cherry-pick over the pin + deletion
+waves). `core/paintOrder.ts` (`flattenPaintOrder`) is the pure childOrder →
+paint-sequence kernel shared verbatim by the canvas and headless composePose
+(the geometry/pose.ts shared-kernel precedent): contiguous own paths = one
+RUN, runs interleave with recursively-flattened children, partless parts emit
+one empty ANCHOR run (emitted FIRST — the paths-first synthesis position),
+animate-time keyed z re-sorts PART slots only, stable, sibling-scoped (global
+`drawOrder` untouched — still backs exporters/stacking UI until U3).
+`ctx.partGroups` → id→`SVGGElement[]`; every consumer audited (10 files),
+union-bbox/primary-group helpers homed in `view/context.ts` (layering) and
+re-exported by partDom.ts; skinned-path DOM lookups go through ctx.rootGroup.
+Synthesized docs render BYTE-IDENTICALLY (one run per part, no data-run —
+pinned by a dedicated interaction test + all 287 pre-existing scenarios
+pixel-stable). Two live mutation checks (always-synthesize; single-group bbox
+revert → the hand-predicted −30px flip error). Known gap flagged: renderOnion
+ghosts stay flat per-part (approximate editing aid). Gates on integrated
+main: build clean, 785 unit / 306 interaction, both golden pins hold.*
 
 ### Bone deletion: unbind fold + chain cascade
 
