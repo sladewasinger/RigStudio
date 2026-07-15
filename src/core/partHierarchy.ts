@@ -2,7 +2,7 @@
 
 import { IDENTITY, applyMat, matrixOfTransform, multiply, rotationMat } from '../geometry/transforms';
 import { Bounds, boundsCenter, pathBoundsThroughMatrix, unionBounds } from '../geometry/pathBounds';
-import { Channel, Easing, RigPart, Track, Vec2 } from './docTypes';
+import { Channel, Easing, RigDoc, RigPart, Track, Vec2 } from './docTypes';
 import { selectPart, state } from './appState';
 import { sampleKeyList } from './channels';
 import { restRenderMatrixOf } from './boneOps';
@@ -250,6 +250,37 @@ export function memberGeometryPivot(members: RigPart[], parts: RigPart[]): Vec2 
     x: members.reduce((sum, p) => sum + p.pivot.x, 0) / members.length,
     y: members.reduce((sum, p) => sum + p.pivot.y, 0) / members.length,
   };
+}
+
+/**
+ * Resolve every pivotHint a fresh IMPORT left behind into a real pivot, PURE-DOC — the
+ * headless counterpart of the in-app canvas render-then-measure seed (view/canvas.ts).
+ * importSvg marks every part whose rotation fixed point it couldn't recover with a hint
+ * (a plain `bboxCenter` marker, or an Inkscape `centerOffset` crosshair); this seeds each
+ * to its own subtree geometry bbox center (`memberGeometryPivot`, so a partless wrapper
+ * group pivots around everything it carries — the Girl case), plus the crosshair offset
+ * when present. Without it a headless import (CLI/MCP) keeps placeholder pivots and every
+ * later rotation orbits a point off the artwork (the 2026-07-14 far-orbit defect, whose
+ * true provenance was headless import — not group creation). Idempotent (a seeded part
+ * has no hint). Scoped `state.doc` swap because `memberGeometryPivot`'s hidden-check
+ * ancestor walk (`isEffectivelyHidden`) resolves parent links through `state.doc`.
+ */
+export function seedImportedPivots(doc: RigDoc): void {
+  const prev = state.doc;
+  state.doc = doc;
+  try {
+    for (const part of doc.parts) {
+      const hint = part.pivotHint;
+      if (!hint) continue;
+      const center = memberGeometryPivot([part], doc.parts);
+      part.pivot = hint.kind === 'centerOffset'
+        ? { x: center.x + hint.dx, y: center.y + hint.dy }
+        : center;
+      part.pivotHint = null;
+    }
+  } finally {
+    state.doc = prev;
+  }
 }
 
 /**

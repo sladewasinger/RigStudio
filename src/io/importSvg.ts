@@ -45,8 +45,12 @@
  *      or the matrix(...) Inkscape rewrites it into) — its fixed point is the joint;
  *   2. inkscape:transform-center-x/y — where the artist parked Inkscape's rotation
  *      crosshair, stored as an offset from the bbox center with +y UP. The bbox isn't
- *      measurable until layout, so this becomes a pivotHint the canvas resolves.
- *   3. otherwise the canvas falls back to the rendered bbox center.
+ *      measurable until layout, so this becomes a `centerOffset` pivotHint.
+ *   3. otherwise a `bboxCenter` pivotHint (the plain geometry-center placeholder).
+ *   Both hints are resolved once geometry is measurable — live by the canvas in-app
+ *   (view/canvas.ts), pure-doc by `seedImportedPivots` for a headless import (CLI/MCP,
+ *   which have no canvas). Every non-rotation part therefore carries a hint until seeded,
+ *   so seeding never has to guess which pivots are unresolved from their coordinates.
  * - Gradient fills (`fill: url(#...)`) are passed through verbatim as an opaque fill
  *   string, same as before nesting support — gradients are not otherwise interpreted
  *   (tracked separately as a v3 item).
@@ -117,7 +121,15 @@ function registerPart(
   // chain, not just the element's own local transform — see the doc-space invariant).
   const rotationPivot = rotationPivotOf(transform);
   const pivot = rotationPivot ?? { x: 0, y: 0 };
-  const pivotHint = rotationPivot ? null : transformCenterHint(el);
+  // When no rotation fixed point is recovered, `pivot` above is a PLACEHOLDER to be
+  // seeded once geometry is measurable — the canvas does it live in-app, seedImportedPivots
+  // pure-doc for a headless import. The hint records HOW: an Inkscape crosshair offset,
+  // else a plain bbox-center marker. Recording the placeholder EXPLICITLY (never inferring
+  // it from `pivot == (0,0)`) is load-bearing — a composed ancestor translate can leave
+  // the placeholder at a non-zero point (see the PivotHint doc).
+  const pivotHint: PivotHint | null = rotationPivot
+    ? null
+    : (transformCenterHint(el) ?? { kind: 'bboxCenter' });
 
   const part: RigPart = {
     id: freshId('part'), label: labelOf(el), kind: 'art', transform, pivot, pivotHint,

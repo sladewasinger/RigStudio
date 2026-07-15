@@ -113,8 +113,12 @@ export function buildCanvas(container: HTMLElement): void {
     if (!m || !rootM) continue;
     const center = local.matrixTransform(m).matrixTransform(rootM.inverse());
     if (part.pivotHint) {
-      // Authored rotation center (Inkscape crosshair), offset from the bbox center.
-      part.pivot = { x: center.x + part.pivotHint.dx, y: center.y + part.pivotHint.dy };
+      // A `centerOffset` hint is the Inkscape crosshair (offset from the bbox center); a
+      // `bboxCenter` hint is the plain placeholder (zero offset), so both resolve here —
+      // the latter matching what the old raw pivot==(0,0) branch produced, now driven by
+      // the explicit marker so a non-origin placeholder ((-0.5,0)-style) also seeds.
+      const off = part.pivotHint.kind === 'centerOffset' ? part.pivotHint : { dx: 0, dy: 0 };
+      part.pivot = { x: center.x + off.dx, y: center.y + off.dy };
       part.pivotHint = null;
     } else {
       part.pivot = { x: center.x, y: center.y };

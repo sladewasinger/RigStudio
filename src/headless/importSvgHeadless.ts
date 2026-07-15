@@ -12,7 +12,7 @@
  * a real DOMParser a host process already set up — would be an avoidable side effect.
  */
 import { JSDOM } from 'jsdom';
-import { RigDoc } from '../core/model';
+import { RigDoc, seedImportedPivots } from '../core/model';
 import { importSvg } from '../io/importSvg';
 
 export function importSvgHeadless(svgText: string, name: string): RigDoc {
@@ -20,7 +20,13 @@ export function importSvgHeadless(svgText: string, name: string): RigDoc {
   const previous = target.DOMParser;
   target.DOMParser = new JSDOM().window.DOMParser;
   try {
-    return importSvg(svgText, name);
+    const doc = importSvg(svgText, name);
+    // No canvas to render-then-measure headlessly (view/canvas.ts's job in-app), so seed
+    // the import's placeholder pivots from pure-doc geometry here — otherwise every part
+    // whose rotation pivot wasn't recovered keeps a (near-)origin pivot and later
+    // rotations orbit off the artwork (the CLI/MCP consumers hit exactly this).
+    seedImportedPivots(doc);
+    return doc;
   } finally {
     target.DOMParser = previous;
   }

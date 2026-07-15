@@ -37,10 +37,21 @@ export interface RigPath {
   transform: string;
 }
 
-/** Where a part's pivot should land once geometry is measurable (resolved by the canvas). */
+/**
+ * Where a part's pivot should land once geometry is measurable — an EXPLICIT
+ * "unresolved placeholder" marker recorded by importSvg the moment rotation recovery
+ * fails, resolved by the canvas render-then-measure pass in-app (view/canvas.ts) or by
+ * `seedImportedPivots` pure-doc for a headless import. Recording it explicitly (rather
+ * than inferring "the pivot is (0,0)") is load-bearing: a composed ancestor translate
+ * can leave the placeholder at a NON-zero point (e.g. (-0.5,0)), which coordinate
+ * sniffing would miss — the 2026-07-14 far-orbit Girl file.
+ */
 export type PivotHint =
-  /** Offset from the part's rendered bbox center, in document units (+y down). */
-  { kind: 'centerOffset'; dx: number; dy: number };
+  /** Offset from the part's rendered bbox center, in document units (+y down) — the
+   *  Inkscape rotation crosshair (inkscape:transform-center-x/y). */
+  | { kind: 'centerOffset'; dx: number; dy: number }
+  /** No rotation fixed point and no crosshair: seed at the plain geometry bbox center. */
+  | { kind: 'bboxCenter' };
 
 /**
  * One entry in a part's ordered, MIXED child list — see `RigPart.childOrder`. `id`

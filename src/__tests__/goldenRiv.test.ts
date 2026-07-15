@@ -23,17 +23,21 @@ import { importSvgHeadless } from '../headless/importSvgHeadless';
 import { exportRiv } from '../io/riv';
 import { normalizeDoc, RigDoc, RigPart, Clip } from '../core/model';
 
-/** RE-PINNED for U4 (2026-07-14, from a1c6ff4b…): the importer now records TRUE SVG
- *  document order into childOrder, and PIP_MASTER genuinely interleaves in two places
- *  (`body` = [part body, path shadow], `face` = [part eyes, path path3]), so the .riv
- *  drawable order legitimately moved. Verified per the re-pin protocol: headless
- *  render-frames before/after at 0/300/600/900/1200ms — the ONLY pixel difference is
- *  the body's authored shadow crescent now painting ABOVE the nested body (the exact
- *  restacking-fidelity correction U4 exists for; the face's path3-above-eyes correction
- *  is real but invisible, they don't overlap), and the AFTER frames match a raw-SVG
- *  resvg render of PIP_MASTER pixel-exactly in the body region (0 mismatched px, vs
- *  8062 before). The skinned golden below did NOT move (hand-authored doc, no import). */
-const GOLDEN_SHA256 = '581d5b1ff165e352414c2a7aed03fbc7f557c321dc993f53a5dfac5e14a7f17f';
+/** RE-PINNED for headless-import pivot seeding (2026-07-14, from 581d5b1f…): a headless
+ *  import now seeds every part whose rotation pivot wasn't recovered to its geometry bbox
+ *  center (seedImportedPivots) instead of leaving a (near-)origin placeholder, so this
+ *  doc's Node positions (pivots) and pivot-relative baked geometry legitimately moved.
+ *  Verified per the re-pin protocol: headless render-frames before/after at 0/300/600/
+ *  700/1200ms. The STATIC frames (t=0, t=1200 — every channel at its base) are
+ *  PIXEL-IDENTICAL: moving a pivot is render-neutral while rest rotate=0/scale=1. The
+ *  only differences (t=300/600/700, ≤1782px, confined to an ~80×40px box on the FACE)
+ *  are the keyed `face.sx/sy` scale, which anchors at the pivot — BEFORE it scaled the
+ *  face about the SVG origin (eyes splayed down-right, asymmetric); AFTER it scales about
+ *  the face's own center (eyes stay symmetric, grows in place). That is the correction
+ *  the fix exists for, verified visually. right_arm (keyed rotate, pivot rotation-
+ *  recovered so UNCHANGED) and left_arm (keyed translate, pivot-independent) render
+ *  byte-identically. The skinned golden below did NOT move (hand-authored doc, no import). */
+const GOLDEN_SHA256 = '5f20e55014dbf29abb80a1afefc90c6ecc8fb748ca7b293307f8b770d38595c0';
 
 /** Second pin: the SKELETAL-DEFORMATION surface (skinned-part export wave, 2026-07-13).
  *  The main golden doc has no bones/skin (its hash deliberately did NOT move when the
