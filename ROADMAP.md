@@ -214,6 +214,38 @@ completion timestamps (not by topic), so this really is a changelog you can
 trust; the long v1/v2.x version history at the very bottom keeps its original
 internal order, formatting-fixed only.
 
+### Headless import pivot seeding (closes the group-pivot wave's residual hole)
+
+*2026-07-14, 9153506 (main-tree, hands-on — the delegated Fable agent died on
+credits before writing anything; picked up its clean worktree and finished in
+the main tree on Opus). The ACTUAL provenance of the far-orbit Girl file: a
+headless import kept the importer's placeholder pivot for every part whose
+rotation fixed point wasn't recovered, because the in-app canvas
+render-then-measure seed never runs headlessly — and that in-app seed only
+fired for a pivot EXACTLY (0,0), which a composed ancestor translate dodges.
+Reproduced on PIP: 8 of 9 parts land at placeholder (0,0) headlessly (only
+`right_arm` recovers a rotation joint). Fix records the placeholder EXPLICITLY
+(no coordinate-sniffing): `PivotHint` gains a `bboxCenter` variant, importSvg
+marks every non-rotation part with a hint, and `seedImportedPivots`
+(partHierarchy.ts, beside memberGeometryPivot) resolves each pure-doc to its
+SUBTREE geometry bbox center (partless wrapper groups pivot around their whole
+content — the Girl case) plus the crosshair offset; importSvgHeadless calls it
+so CLI + MCP + the golden all seed. In-app canvas.ts handles both hint kinds,
+which also fixes the (−0.5,0)-style non-origin placeholder in-app (the exact-
+(0,0) trigger widened to the explicit marker). Rotation joints untouched;
+normalizeDoc still never repairs saved docs. MAIN GOLDEN RE-PINNED (581d5b1f →
+5f20e550): render-frames before/after — static frames (t=0/1200) PIXEL-
+IDENTICAL (pivot move is render-neutral at rest identity); the only diffs
+(t=300/600/700, ≤1782px, on the face) are the keyed face.sx/sy scale now
+anchoring at the face center instead of the SVG origin (eyes symmetric vs
+splayed — the correction, verified visually). Skinned golden unmoved. 9 tests
++ 2 mutation checks. KNOWN in-app asymmetry (documented, not a regression): a
+partless wrapper group imported IN-BROWSER still seeds to its transform origin
+(canvas.ts measures own-bbox, empty for a partless group), while headless uses
+the subtree center — the browser-import-of-a-Girl-like-SVG case; the headless
+path users actually hit is fully fixed. Gates: build clean, 836 unit / 322
+interaction.*
+
 ### Headless group-pivot default (follow-up from the far-pivot Girl file)
 
 *2026-07-14, b1fdf49 (worktree wave). Full creation-path map recorded in the
