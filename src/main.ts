@@ -8,7 +8,8 @@ import {
   enterGroupsFor, clearGroupEntry, resetInteractionState, resetSkinRenderWarnings,
   artworkUnderPointer,
 } from './view';
-import { buildLayersPanel, buildInspector, buildCanvasTools } from './panels';
+import { buildLayersPanel, buildInspector, buildCanvasTools, buildWarpWorkspace } from './panels';
+import { createWarpTriangleSquareSample } from './samples/warpTriangleSquare';
 import { buildTimeline, render as renderTimeline, clearKeySelection } from './timeline/timeline';
 import { exportLottie } from './io/exportLottie';
 import { exportRiv } from './io/riv';
@@ -74,6 +75,8 @@ function afterDocReplaced(): void {
   state.currentTime = 0;
   state.playing = false;
   state.projectFileHandle = null; // D1: a fresh/replaced doc has no on-disk file yet —
+  state.warpSetupId = null;
+  state.warpPreviewAmount = 0;
   // openFlow.ts re-establishes it right after for a project (.json) open.
   clearKeySelection();
   clearGroupEntry(); // entered-group ids from the old doc don't resolve in the new one
@@ -329,6 +332,13 @@ undoBtn.onclick = () => {
   endBoneChain();
   undo();
 };
+
+document.getElementById('btn-warp-sample')?.addEventListener('click', async () => {
+  if (!(await confirmReplaceIfDirty())) return;
+  state.doc = createWarpTriangleSquareSample();
+  state.editorMode = 'animate';
+  afterDocReplaced();
+});
 redoBtn.onclick = () => {
   endBoneChain();
   redo();
@@ -352,6 +362,7 @@ subscribe(() => {
   buildLayersPanel(layersEl);
   buildCanvasTools(canvasToolsEl);
   buildInspector(inspectorEl);
+  buildWarpWorkspace();
   renderTimeline();
   scheduleAutosave();
   // buildCanvas() (which populates #canvas for a real doc, clearing it first) only runs
