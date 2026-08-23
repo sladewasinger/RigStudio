@@ -130,16 +130,24 @@ function referenceWarpForPart(doc: RigDoc, part: RigPart) {
 
 function applyWarpCrossfades(doc: RigDoc, part: RigPart, time: number | null): void {
   if (!ctx.rootGroup) return;
+  const referenceWarp = referenceWarpForPart(doc, part);
+  const sourceWarp = doc.warps?.find((warp) => {
+    let current: RigPart | null = part;
+    while (current) {
+      if (current.id === warp.sourcePartId) return true;
+      current = current.parentId ? doc.parts.find((candidate) => candidate.id === current!.parentId) ?? null : null;
+    }
+    return false;
+  });
   // Edit mode owns ordinary artwork visibility. Warp reference suppression is an
   // Animate/export semantic only; endpoint eye states remain independent in Edit.
   if (state.editorMode === 'setup') {
-    for (const path of part.paths) {
+    if (referenceWarp || sourceWarp) for (const path of part.paths) {
       const element = ctx.rootGroup.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
       element?.removeAttribute('visibility'); element?.removeAttribute('opacity');
     }
     return;
   }
-  const referenceWarp = referenceWarpForPart(doc, part);
   for (const path of part.paths) {
     const element = ctx.rootGroup.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
     if (!element) continue;
@@ -152,14 +160,6 @@ function applyWarpCrossfades(doc: RigDoc, part: RigPart, time: number | null): v
       }
       continue;
     }
-    const sourceWarp = doc.warps?.find((warp) => {
-      let current: RigPart | null = part;
-      while (current) {
-        if (current.id === warp.sourcePartId) return true;
-        current = current.parentId ? doc.parts.find((candidate) => candidate.id === current!.parentId) ?? null : null;
-      }
-      return false;
-    });
     if (sourceWarp && !sourceWarp.pairs.some((pair) => pair.sourcePathId === path.id)) {
       element.setAttribute('opacity', String(1 - warpAmount(sourceWarp.id, time)));
     } else element.removeAttribute('opacity');

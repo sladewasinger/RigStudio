@@ -19,10 +19,14 @@ export function setEditorMode(mode: EditorMode): void {
   endBoneChain();
   state.editorMode = mode;
   state.playing = false;
+  state.warpPreviewActive = false;
   if (mode === 'animate') state.mode = 'rig'; // node editing is Setup-only
   if (mode === 'setup') clearKeySelection();
   notify();
   renderPose();
+  // Preserve the long-standing Animate entry point while keeping Claude isolated
+  // in its own dock tab instead of rebuilding it inside the Inspector.
+  if (mode === 'animate') document.dispatchEvent(new CustomEvent('rig-open-dock-tab', { detail: 'claude' }));
 }
 
 /**
