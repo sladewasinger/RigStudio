@@ -128,7 +128,6 @@ input[type='number'],
 .right-dock-tabs [role='tab'] { border: 0; border-radius: 0; background: transparent; padding: 0 10px; white-space: nowrap; font-size: 11px; color: var(--text-muted); border-bottom: 2px solid transparent; }
 .right-dock-tabs [role='tab'].active { color: var(--text); border-bottom-color: var(--accent-2); background: var(--panel); }
 .right-dock-tabs [role='tab']:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; }
-.right-dock-pin { margin-left: auto; border: 0; border-left: 1px solid var(--divider); border-radius: 0; }
 .right-dock-content { flex: 1 1 auto; overflow: auto; background: var(--panel); scrollbar-gutter: stable; }
 #right-dock-splitter { position: relative; cursor: col-resize; background: var(--divider); touch-action: none; }
 #right-dock-splitter:hover, #right-dock-splitter.dragging, #right-dock-splitter:focus-visible { background: var(--accent-2); }
@@ -139,7 +138,7 @@ input[type='number'],
 .warps-panel > header span, .warp-list-row span, .warp-list-row small { color: var(--text-muted); font-size: 11px; }
 .warp-empty { margin: 12px; padding: 18px; border: 1px dashed var(--border-strong); border-radius: 6px; text-align: center; color: var(--text-muted); }
 .warps-list { display: grid; max-height: 220px; overflow: auto; border-bottom: 1px solid var(--divider); }
-.warp-list-row { display: grid; gap: 2px; padding: 9px 12px; border: 0; border-radius: 0; border-bottom: 1px solid var(--divider); background: var(--panel); text-align: left; }
+.warp-list-row { display: grid; gap: 3px; height: auto; min-height: 58px; padding: 9px 12px; border: 0; border-radius: 0; border-bottom: 1px solid var(--divider); background: var(--panel); text-align: left; justify-content: stretch; }
 .warp-list-row.active { background: rgba(122,162,247,.14); box-shadow: inset 3px 0 var(--accent-2); }
 .warp-active { padding: 12px; display: grid; gap: 10px; }
 .warp-active > input { width: 100%; font-weight: 700; }

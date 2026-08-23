@@ -83,6 +83,7 @@ function keyToggle(label: string): HTMLButtonElement {
 describe('scenario — keyed part sy scales the rendered artwork about its pivot across a scrub', () => {
   it('grows ~1.6x at the key, ~1.3x at the midpoint, keeps the pivot screen-fixed, and never scales children', () => {
     setEditorMode('animate');
+    document.getElementById('right-dock-tab-inspector')!.click();
     const part = artPart();
     // A child bone parented to the part: its transform composes the part's POSE (rotate +
     // translate) but NOT the part's innermost scale, so it must stay put as the part scales.
@@ -147,6 +148,7 @@ describe('scenario — Edit mode renders rest scale, ignoring a keyed sy at the 
 describe('scenario — Animate inspector exposes keyable scale x / scale y fields', () => {
   it('shows the keyed sy filled at the playhead, Edit has only the rest field, and one undo clears the key', () => {
     setEditorMode('animate');
+    document.getElementById('right-dock-tab-inspector')!.click();
     const part = artPart();
     selectByLabel(part.label);
 

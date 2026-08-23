@@ -15,6 +15,9 @@ describe('Warp dock workflow', () => {
     load(); state.doc!.warps = []; state.doc!.clips[0].tracks = [];
     state.editorMode = 'setup'; notify(); renderPose();
     expect(Array.from(document.querySelectorAll('#canvas-tools button')).some((item) => item.textContent === 'Create Warp')).toBe(false);
+    expect(document.querySelector('.right-dock-tabs')).toBeNull();
+    expect(document.querySelectorAll('#right-dock .ai-panel, #right-dock .warps-panel')).toHaveLength(0);
+    expect(document.querySelector('.right-dock-pin')).toBeNull();
     state.editorMode = 'animate'; selectPart('triangle_group'); selectPart('square_group', true); notify();
     const create = Array.from(document.querySelectorAll<HTMLButtonElement>('#canvas-tools button')).find((item) => item.textContent === 'Create Warp')!;
     expect(create.disabled).toBe(false); create.click();
@@ -22,6 +25,8 @@ describe('Warp dock workflow', () => {
     (prompt.querySelector('input') as HTMLInputElement).value = 'Hand turn';
     (prompt.querySelector('.ui-dialog-primary') as HTMLButtonElement).click();
     const panel = await waitFor(() => document.querySelector<HTMLElement>('.warps-panel'));
+    expect(Array.from(document.querySelectorAll('[role="tab"]')).map((item) => item.textContent)).toEqual(['Inspector', 'Warps', 'Animate with Claude']);
+    expect(document.querySelectorAll('#right-dock > .right-dock-content')).toHaveLength(1);
     expect(document.querySelector('[aria-selected="true"]')?.textContent).toBe('Warps');
     expect(panel.textContent).toContain('Hand turn'); expect(panel.querySelectorAll('.warp-pair')).toHaveLength(2);
     expect(state.selectedPartIds).toEqual(['triangle_group']);

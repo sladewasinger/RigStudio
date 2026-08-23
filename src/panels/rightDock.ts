@@ -8,13 +8,11 @@ export type RightDockTab = 'inspector' | 'warps' | 'claude';
 
 const WIDTH_KEY = 'rig-studio-right-dock-width';
 const TAB_KEY = 'rig-studio-right-dock-tab';
-const PIN_KEY = 'rig-studio-right-dock-pinned';
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 620;
 const DEFAULT_WIDTH = 340;
 let inspectorElement: HTMLElement | null = null;
 let activeTab: RightDockTab = (localStorage.getItem(TAB_KEY) as RightDockTab) || 'inspector';
-let pinned = localStorage.getItem(PIN_KEY) === 'true';
 
 const clamp = (value: number) => Math.min(Math.min(MAX_WIDTH, window.innerWidth * .55), Math.max(MIN_WIDTH, value));
 
@@ -78,8 +76,9 @@ function ensureShell(inspector: HTMLElement): HTMLElement {
 }
 
 export function openRightDockTab(tab: RightDockTab): void {
+  if (state.editorMode === 'setup' && tab !== 'inspector') return;
   activeTab = tab;
-  localStorage.setItem(TAB_KEY, tab);
+  if (state.editorMode === 'animate') localStorage.setItem(TAB_KEY, tab);
   if (inspectorElement) buildRightDock(inspectorElement);
 }
 
@@ -90,15 +89,25 @@ export function buildRightDock(inspector: HTMLElement): void {
     // Claude's panel owns preview lifecycle reconciliation. Run its lightweight
     // unmount pass even though the tab is Animate-only.
     buildAiPanel(document.createElement('div'));
-    if (activeTab === 'claude') activeTab = 'inspector';
   }
   dock.innerHTML = '';
+  // The content host itself survives tab switches. Clear it explicitly so a panel
+  // can never append beneath the previous tab's DOM (Claude intentionally appends).
+  inspector.innerHTML = '';
+  inspector.className = 'right-dock-content';
+  inspector.setAttribute('role', 'tabpanel');
+  if (state.editorMode === 'setup') {
+    inspector.removeAttribute('aria-labelledby');
+    dock.appendChild(inspector);
+    buildInspector(inspector);
+    return;
+  }
   const tabs = document.createElement('div');
   tabs.className = 'right-dock-tabs';
   tabs.setAttribute('role', 'tablist');
   const definitions: { id: RightDockTab; label: string }[] = [
     { id: 'inspector', label: 'Inspector' }, { id: 'warps', label: 'Warps' },
-    ...(state.editorMode === 'animate' ? [{ id: 'claude' as const, label: 'Animate with Claude' }] : []),
+    { id: 'claude', label: 'Animate with Claude' },
   ];
   definitions.forEach((definition, index) => {
     const button = document.createElement('button');
@@ -118,16 +127,7 @@ export function buildRightDock(inspector: HTMLElement): void {
     };
     tabs.appendChild(button);
   });
-  const pin = document.createElement('button');
-  pin.className = 'right-dock-pin';
-  pin.textContent = pinned ? '◆' : '◇';
-  pin.title = pinned ? 'Dock pinned' : 'Pin dock tab';
-  pin.setAttribute('aria-pressed', String(pinned));
-  pin.onclick = () => { pinned = !pinned; localStorage.setItem(PIN_KEY, String(pinned)); buildRightDock(inspector); };
-  tabs.appendChild(pin);
   dock.appendChild(tabs);
-  inspector.className = 'right-dock-content';
-  inspector.setAttribute('role', 'tabpanel');
   inspector.setAttribute('aria-labelledby', `right-dock-tab-${activeTab}`);
   dock.appendChild(inspector);
   if (activeTab === 'inspector') buildInspector(inspector);

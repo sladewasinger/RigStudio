@@ -377,6 +377,7 @@ describe.each(['setup', 'animate'] as const)(
   (mode) => {
     it(`the user's exact recipe: dblclick eye, dblclick eye again enters path scope (${mode})`, () => {
       setEditorMode(mode);
+      if (mode === 'animate') document.getElementById('right-dock-tab-inspector')!.click();
       const face = partByLabel('face');
       const eyes = partByLabel('eyes');
 

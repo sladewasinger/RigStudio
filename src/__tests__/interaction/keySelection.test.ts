@@ -59,6 +59,7 @@ function inspectorHeadings(): string[] {
 describe('scenario — clicking a keyframe selects its target part', () => {
   it('selects the part, and the inspector grows a section headed with its label', () => {
     setEditorMode('animate');
+    document.getElementById('right-dock-tab-inspector')!.click();
     const part = partByLabel('right_arm');
     const pt = clientPointOnPart('right_arm');
     gestureDrag(pt, { x: pt.x + 35, y: pt.y - 20 }); // first-click gizmo drag keys tx/ty

@@ -181,6 +181,7 @@ describe('scenario SP4 — inspector locks scale/skew on a skinned part; rotate/
   it('Animate mode: keyed scale x/y are disabled with a title; rotate/translate x/y stay live', () => {
     skinLimb();
     setEditorMode('animate');
+    document.getElementById('right-dock-tab-inspector')!.click();
     modelSelectPart(partByLabel(LIMB).id);
     notify();
 
