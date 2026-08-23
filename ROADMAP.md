@@ -1404,6 +1404,16 @@ ticked above with their commit trail.*
 
 ## v3 — Future
 
+- [x] **Warp To transitions** (`1407c61`, `2476407`, `f36943d`, `1e010e5`) — two
+  endpoint objects/groups compile into a persistent carrier with durable descendant
+  path correspondences and a keyable 0–100% Warp lane. Dedicated Warp Setup provides
+  live preview and repair controls without growing the Inspector. Geometry normalizes
+  to deterministic cubic topology and composes before bones; Rive export keys native
+  vertices, handles, solid paint, opacity and stroke width. Target variants are
+  editor references and never double-render/export. Lottie refuses Warp docs with an
+  actionable message. The toolbar Warp demo loads a grouped Triangle ↔ Square ↔
+  Triangle regression with main and hard-shadow children plus committed visual QA.
+
 - Per-bone length/stiffness constraints; pole targets for IK.
 - Skin weight painting (manual override of the automatic weights).
 - Path boolean ops (union/subtract/intersect), stroke→path outline conversion.
