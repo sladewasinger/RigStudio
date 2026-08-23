@@ -9,9 +9,13 @@
 
 import { state, RigPart } from '../core/model';
 import { parsePath, serializePath, pathToCubics, PathCmd } from '../geometry/paths';
-import { skinWeights, overrideWeightRow, Seg, SKIN_WEIGHT_POWER } from '../geometry/skin';
+import {
+  skinWeights, overrideWeightRow, Seg, SKIN_WEIGHT_POWER, influenceProfileOwner,
+  influenceProfileWeights, expandBindTarget,
+} from '../geometry/skin';
 import { Mat, matrixOfTransform, multiply } from '../geometry/transforms';
 import { fullPoseTransform, effectivePivot, effectiveTip } from './pose';
+import { ctx } from './context';
 
 // SKIN_WEIGHT_POWER lives in geometry/skin.ts (single source of truth shared with the
 // .riv exporter's Skin/Tendon weights) — see its doc comment there for the "why 4".
@@ -36,10 +40,20 @@ export function invalidateSkinCache(partId: string): void {
 
 function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get>> {
   const overrides = part.skin?.overrides ?? {};
+  const doc = state.doc;
+  const profileOwner = doc ? influenceProfileOwner(doc.parts, part) : null;
+  const sessionTarget = doc && ctx.influenceSession
+    ? doc.parts.find((candidate) => candidate.id === ctx.influenceSession!.targetId) ?? null
+    : null;
+  const draft = sessionTarget && ctx.influenceSession &&
+    expandBindTarget(doc!.parts, sessionTarget).some((candidate) => candidate.id === part.id)
+    ? ctx.influenceSession.draft : null;
+  const profile = draft ?? profileOwner?.influenceProfile ?? null;
   const sig =
     part.paths.map((p) => `${p.id}:${p.d.length}`).join('|') +
     '#' + (part.skin?.bones.map((b) => b.id).join(',') ?? '') +
-    '#' + JSON.stringify(overrides);
+    '#' + JSON.stringify(overrides) +
+    '#' + JSON.stringify(profile);
   const hit = skinCache.get(part.id);
   if (hit && hit.sig === sig) return hit;
 
@@ -56,7 +70,9 @@ function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get
       return [{ x: (c as { x: number }).x, y: (c as { y: number }).y }];
     });
     const flat = pts.flat();
-    const auto = skinWeights(flat, segs, SKIN_WEIGHT_POWER);
+    const auto = profile && part.skin
+      ? influenceProfileWeights(flat, part.skin.bones, profile)
+      : skinWeights(flat, segs, SKIN_WEIGHT_POWER);
 
     // Which node's override governs each flattened point (parallel to `flat`). A C
     // command's outgoing handle (x1) belongs to the PREVIOUS node it leaves; its

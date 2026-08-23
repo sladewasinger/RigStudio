@@ -173,6 +173,9 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     // for boneTip:null (nothing to heal) or an already-usable tip.
     part.skin = part.skin ?? null;
     if (part.skin && !Array.isArray(part.skin.bones)) part.skin = null;
+    part.influenceProfile = part.influenceProfile && Array.isArray(part.influenceProfile.bands)
+      ? part.influenceProfile
+      : null;
     part.pivotHint = part.pivotHint ?? null;
     part.paths.forEach((p, i) => {
       trackId(p.id);
@@ -203,6 +206,18 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
       // (un-saved) version of this; this is the load-time equivalent.
       part.skin.bones = part.skin.bones.filter((b) => boneKindIds.has(b.id) && isValidSkinBone(b));
       if (part.skin.bones.length === 0) part.skin = null;
+    }
+    if (part.influenceProfile) {
+      part.influenceProfile.bands = part.influenceProfile.bands.filter((band) =>
+        !!band && typeof band.parentBoneId === 'string' && typeof band.childBoneId === 'string' &&
+        boneKindIds.has(band.parentBoneId) && boneKindIds.has(band.childBoneId) &&
+        Number.isFinite(band.center) && Number.isFinite(band.width) && band.width > 0,
+      ).map((band) => ({
+        ...band,
+        center: Math.max(-1e6, Math.min(1e6, band.center)),
+        width: Math.max(1, Math.min(1e6, band.width)),
+      }));
+      if (part.influenceProfile.bands.length === 0) part.influenceProfile = null;
     }
     // The PART-level bind record (pin-tracking fix — docTypes.ts's skin.restWorldInv):
     // a malformed/non-finite matrix would poison the PIN-TO-BODY render target, so drop

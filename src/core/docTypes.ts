@@ -130,6 +130,27 @@ export interface SkinOverride {
   pin?: number;
 }
 
+/**
+ * One group-authoring crossover between two adjacent bones. `center` is a signed
+ * document-space offset from their shared bind joint along the parent-origin to
+ * child-tip axis. `width` is the full soft-transition span in document units.
+ *
+ * This is an authoring profile, not a new runtime skin format: render and export
+ * evaluate it for every descendant path point/handle, then manual node overrides
+ * retain final precedence. Keeping it spatial and keyed by bone ids makes it stable
+ * across path topology edits.
+ */
+export interface SkinInfluenceBand {
+  parentBoneId: string;
+  childBoneId: string;
+  center: number;
+  width: number;
+}
+
+export interface SkinInfluenceProfile {
+  bands: SkinInfluenceBand[];
+}
+
 export interface RigPart {
   id: string;
   label: string;
@@ -195,6 +216,8 @@ export interface RigPart {
     overrides?: Record<string, Record<string, SkinOverride>>;
     restWorldInv?: Mat;
   } | null;
+  /** Shared group/subtree weight-authoring profile compiled into descendant skins. */
+  influenceProfile?: SkinInfluenceProfile | null;
   paths: RigPath[];
   /**
    * Layers-panel visibility (the eye icon). EDITOR-ONLY, doc data but NEVER keyable and

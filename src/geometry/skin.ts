@@ -7,7 +7,9 @@
  * two bones blend smoothly — the classic cheap auto-weighting.
  */
 
-import type { RigPart } from '../core/model';
+import type {
+  RigPart, SkinBone, SkinInfluenceBand, SkinInfluenceProfile,
+} from '../core/model';
 
 /**
  * Auto-weight falloff exponent used everywhere a skinned part's LOOK is produced —
@@ -60,6 +62,128 @@ export function skinWeights(points: Pt[], segs: Seg[], power = 2): number[][] {
     const sum = raw.reduce((a, b) => a + b, 0);
     return raw.map((w) => (sum > 0 ? w / sum : 1 / raw.length));
   });
+}
+
+const clamp = (value: number, lo: number, hi: number): number =>
+  Math.min(hi, Math.max(lo, value));
+
+/** Deterministic starting bands for every ordinary parent -> child joint in a skin. */
+export function autoInfluenceProfile(bones: SkinBone[]): SkinInfluenceProfile {
+  const ids = new Set(bones.map((b) => b.id));
+  const bands: SkinInfluenceBand[] = [];
+  for (const child of bones) {
+    const parent = bones.find((candidate) =>
+      candidate.id !== child.id &&
+      ids.has(candidate.id) &&
+      Math.hypot(
+        candidate.bindSeg.q.x - child.bindSeg.p.x,
+        candidate.bindSeg.q.y - child.bindSeg.p.y,
+      ) < 1e-3,
+    );
+    if (!parent) continue;
+    const parentLen = Math.hypot(
+      parent.bindSeg.q.x - parent.bindSeg.p.x,
+      parent.bindSeg.q.y - parent.bindSeg.p.y,
+    );
+    const childLen = Math.hypot(
+      child.bindSeg.q.x - child.bindSeg.p.x,
+      child.bindSeg.q.y - child.bindSeg.p.y,
+    );
+    bands.push({
+      parentBoneId: parent.id,
+      childBoneId: child.id,
+      center: 0,
+      width: Math.max(2, Math.min(parentLen, childLen) * 0.7),
+    });
+  }
+  return { bands };
+}
+
+/** Repair a saved/draft profile against the current binding, adding new joints safely. */
+export function normalizeInfluenceProfile(
+  profile: SkinInfluenceProfile | null | undefined,
+  bones: SkinBone[],
+): SkinInfluenceProfile {
+  const auto = autoInfluenceProfile(bones);
+  const saved = new Map((profile?.bands ?? []).map((b) => [
+    `${b.parentBoneId}>${b.childBoneId}`, b,
+  ]));
+  return {
+    bands: auto.bands.map((fallback) => {
+      const prior = saved.get(`${fallback.parentBoneId}>${fallback.childBoneId}`);
+      if (!prior) return fallback;
+      const parent = bones.find((b) => b.id === fallback.parentBoneId)!;
+      const child = bones.find((b) => b.id === fallback.childBoneId)!;
+      const span = Math.max(2, Math.min(
+        Math.hypot(parent.bindSeg.q.x - parent.bindSeg.p.x, parent.bindSeg.q.y - parent.bindSeg.p.y),
+        Math.hypot(child.bindSeg.q.x - child.bindSeg.p.x, child.bindSeg.q.y - child.bindSeg.p.y),
+      ));
+      return {
+        ...fallback,
+        center: Number.isFinite(prior.center) ? clamp(prior.center, -span * 0.8, span * 0.8) : 0,
+        width: Number.isFinite(prior.width) ? clamp(prior.width, 1, span * 1.8) : fallback.width,
+      };
+    }),
+  };
+}
+
+/**
+ * Compile one shared influence profile into normalized per-point rows. The nearest
+ * crossover owns a sample and blends only its adjacent parent/child bones (MVP), which
+ * guarantees two influences per generated row and therefore stays below Rive's max four.
+ */
+export function influenceProfileWeights(
+  points: Pt[], bones: SkinBone[], profile: SkinInfluenceProfile,
+): number[][] {
+  const boneIds = bones.map((b) => b.id);
+  const bands = normalizeInfluenceProfile(profile, bones).bands.flatMap((band) => {
+    const parentIndex = boneIds.indexOf(band.parentBoneId);
+    const childIndex = boneIds.indexOf(band.childBoneId);
+    if (parentIndex < 0 || childIndex < 0) return [];
+    const parent = bones[parentIndex].bindSeg;
+    const child = bones[childIndex].bindSeg;
+    const joint = child.p;
+    let ax = child.q.x - parent.p.x;
+    let ay = child.q.y - parent.p.y;
+    const len = Math.hypot(ax, ay);
+    if (len < 1e-6) { ax = child.q.x - child.p.x; ay = child.q.y - child.p.y; }
+    const axisLen = Math.hypot(ax, ay) || 1;
+    ax /= axisLen;
+    ay /= axisLen;
+    const cx = joint.x + ax * band.center;
+    const cy = joint.y + ay * band.center;
+    return [{ band, parentIndex, childIndex, ax, ay, cx, cy }];
+  });
+  if (bands.length === 0) return skinWeights(points, bones.map((b) => b.bindSeg), SKIN_WEIGHT_POWER);
+  return points.map((point) => {
+    let chosen = bands[0];
+    let best = Infinity;
+    for (const candidate of bands) {
+      const distance = Math.hypot(point.x - candidate.cx, point.y - candidate.cy);
+      if (distance < best) { best = distance; chosen = candidate; }
+    }
+    const signed = (point.x - chosen.cx) * chosen.ax + (point.y - chosen.cy) * chosen.ay;
+    const half = Math.max(0.5, chosen.band.width / 2);
+    const linear = clamp((signed + half) / (half * 2), 0, 1);
+    const t = linear * linear * (3 - 2 * linear);
+    const row = new Array(bones.length).fill(0);
+    row[chosen.parentIndex] = 1 - t;
+    row[chosen.childIndex] = t;
+    return row;
+  });
+}
+
+/** Nearest persisted profile owner for an art part; closest ancestor wins. */
+export function influenceProfileOwner(parts: RigPart[], part: RigPart): RigPart | null {
+  const byId = new Map(parts.map((p) => [p.id, p]));
+  let cursor: RigPart | undefined = part;
+  const seen = new Set<string>();
+  while (cursor && !seen.has(cursor.id)) {
+    seen.add(cursor.id);
+    if (cursor.influenceProfile?.bands?.length) return cursor;
+    cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
+  }
+  return null;
 }
 
 /**

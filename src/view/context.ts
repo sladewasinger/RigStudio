@@ -9,7 +9,7 @@
  * skinRender.ts owns it privately.)
  */
 
-import { state, Channel, RigPart } from '../core/model';
+import { state, Channel, RigPart, SkinInfluenceProfile } from '../core/model';
 import { Mat } from '../geometry/transforms';
 import { SnapCandidate } from '../geometry/snap';
 
@@ -24,6 +24,11 @@ export const MAX_SCALE = 50;
 export const MIN_BONE_LENGTH_PX = 6;
 
 export type DragState =
+  | {
+      kind: 'influenceBand'; targetId: string; bandIndex: number;
+      handle: 'center' | 'widthStart' | 'widthEnd';
+      startClient: { x: number; y: number }; active: boolean;
+    }
   | {
       kind: 'rotate';
       /** Every selected part with its starting (absolute) value; setup writes rest. */
@@ -237,6 +242,13 @@ export interface ViewContext {
   selectedNodes: Set<string>;
   selectedNode: { pathId: string; cmdIndex: number } | null;
 
+  /** Transactional group-weight authoring draft; never serialized until Apply. */
+  influenceSession: {
+    targetId: string;
+    draft: SkinInfluenceProfile;
+    selectedBand: number;
+  } | null;
+
   // Current viewBox rect — the zoom/pan state. Survives canvas rebuilds (undo/redo);
   // reset explicitly on document import.
   viewRect: { x: number; y: number; w: number; h: number } | null;
@@ -268,6 +280,7 @@ export const ctx: ViewContext = {
   snapMarker: null,
   selectedNodes: new Set<string>(),
   selectedNode: null,
+  influenceSession: null,
   viewRect: null,
   placingBone: false,
   boneChain: null,

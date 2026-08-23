@@ -59,8 +59,13 @@
  * identically in both; keep the two targets in step if either side changes.
  */
 
-import { RigDoc, RigPart, SkinOverride } from '../../core/model';
-import { Seg, skinWeights, overrideWeightRow, SKIN_WEIGHT_POWER } from '../../geometry/skin';
+import {
+  RigDoc, RigPart, SkinBone, SkinInfluenceProfile, SkinOverride,
+} from '../../core/model';
+import {
+  Seg, skinWeights, overrideWeightRow, SKIN_WEIGHT_POWER, influenceProfileOwner,
+  influenceProfileWeights,
+} from '../../geometry/skin';
 import {
   Mat, invertMat, multiply, rotationMat, translationMat,
 } from '../../geometry/transforms';
@@ -84,6 +89,8 @@ export interface SkinPlan {
   skinTx: number;
   skinTy: number;
   overrides: Record<string, Record<string, SkinOverride>>;
+  bones: SkinBone[];
+  influenceProfile: SkinInfluenceProfile | null;
   /**
    * Set by `attachPinAnchor` (called once per part, after `buildSkinPlan`, before any of
    * its paths are emitted) when ANY node in `overrides` carries a pin > 0: the synthetic
@@ -112,6 +119,8 @@ export function buildSkinPlan(
     boneIds: [], boneNodeIndex: [], tendonBinds: [], segs: [],
     skinTx: part.pivot.x - ox, skinTy: part.pivot.y - oy,
     overrides: skin.overrides ?? {},
+    bones: skin.bones,
+    influenceProfile: influenceProfileOwner(doc.parts, part)?.influenceProfile ?? null,
     anchorBoneIndex: null, anchorTendonBind: null,
   };
   for (const sb of skin.bones) {
@@ -259,7 +268,10 @@ export function subpathWeights(
   const rowFor = (s: WeightSample): number[] => {
     const ov = pathOverrides[String(s.node)];
     const pinned = ov && overrideWeightRow(plan.boneIds, ov);
-    const base = pinned || skinWeights([{ x: s.x, y: s.y }], plan.segs, SKIN_WEIGHT_POWER)[0];
+    const auto = plan.influenceProfile
+      ? influenceProfileWeights([{ x: s.x, y: s.y }], plan.bones, plan.influenceProfile)[0]
+      : skinWeights([{ x: s.x, y: s.y }], plan.segs, SKIN_WEIGHT_POWER)[0];
+    const base = pinned || auto;
     if (anchorRowIndex == null) return base;
     const pin = ov && Number.isFinite(ov.pin) ? Math.min(1, Math.max(0, ov.pin!)) : 0;
     if (pin <= 0) return base;
