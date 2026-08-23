@@ -227,9 +227,24 @@ describe('exportRiv skeletal deformation: Skin/Tendon/CubicWeight', () => {
     expect(Math.max(...v2)).toBeGreaterThan(200);
   });
 
+  it('exports a group influence band as native per-vertex Rive weights', () => {
+    const doc = skinnedDoc();
+    const limb = doc.parts.find((p) => p.id === 'p_limb')!;
+    limb.influenceProfile = { bands: [{
+      parentBoneId: 'p_b1', childBoneId: 'p_b2', center: -20, width: 72,
+    }] };
+    const dd = decodeRiv(exportRiv(doc));
+    const w = weightOfVertexAt(dd, -40, -5);
+    expect(bytes4(Number(w.props[PROP.WEIGHT_VALUES])).slice(0, 2)).toEqual([223, 32]);
+    expect(bytes4(Number(w.props[PROP.WEIGHT_INDICES])).slice(0, 2)).toEqual([1, 2]);
+  });
+
   it('a per-node override pins its vertex to the chosen bone exactly', () => {
     const doc = skinnedDoc();
     const limb = doc.parts.find((p) => p.id === 'p_limb')!;
+    limb.influenceProfile = { bands: [{
+      parentBoneId: 'p_b1', childBoneId: 'p_b2', center: -20, width: 72,
+    }] };
     // Node/command index 1 = 'L 90,45' — pin it 100% to b2 (t=0, b=null => all a).
     limb.skin! = { ...limb.skin!, overrides: { limb_path: { '1': { a: 'p_b2', b: null, t: 0 } } } };
     const dd = decodeRiv(exportRiv(doc));

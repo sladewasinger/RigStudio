@@ -31,6 +31,10 @@ export interface HitContext {
   isGizmoRing: boolean;
   /** Bone tip reshape handle (data-role="bone-tip"). */
   isBoneTip: boolean;
+  influenceBand: {
+    index: number;
+    handle: 'center' | 'widthStart' | 'widthEnd';
+  } | null;
 
   /** Setup handle-set: corner/side SCALE handle (data-handle="nw"|"n"|...). */
   scaleHandle: string | null;
@@ -63,6 +67,7 @@ export function resolveHit(ev: PointerEvent): HitContext | null {
 
   const nodeEl = svgTarget?.dataset.role === 'node' ? svgTarget : null;
   const pivotEl = target.closest('[data-role="pivot"]') as SVGElement | null;
+  const influenceEl = target.closest('[data-role="influence-band"]') as SVGElement | null;
   const partEl = target.closest('[data-part-id]') as SVGGElement | null;
 
   return {
@@ -72,6 +77,10 @@ export function resolveHit(ev: PointerEvent): HitContext | null {
     gizmoAxis: svgTarget?.dataset.gizmoAxis ?? null,
     isGizmoRing: svgTarget?.dataset.role === 'gizmo-ring',
     isBoneTip: svgTarget?.dataset.role === 'bone-tip',
+    influenceBand: influenceEl ? {
+      index: Number(influenceEl.dataset.bandIndex),
+      handle: influenceEl.dataset.bandHandle as 'center' | 'widthStart' | 'widthEnd',
+    } : null,
     scaleHandle: svgTarget?.dataset.handle ?? null,
     skewSide: svgTarget?.dataset.skewSide ?? null,
     isRotateHandle: svgTarget?.dataset.role === 'rotate-handle',

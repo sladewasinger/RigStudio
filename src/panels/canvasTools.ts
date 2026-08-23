@@ -19,6 +19,7 @@ import {
 import {
   renderPose, partRootBoxes, registerPart, unregisterPart, bonePlacementActive,
   toggleBonePlacement, selectCanvasTool, endBoneChain, flipSelected, reorderCanvas,
+  cancelInfluenceEditing,
 } from '../view';
 import { checkpoint } from '../core/history';
 import { icon, iconButton, ICON_PATHS } from './icons';
@@ -125,6 +126,7 @@ export function buildCanvasTools(el: HTMLElement): void {
     if (active) b.classList.add('active');
     b.setAttribute('aria-pressed', String(active));
     b.onclick = () => {
+      cancelInfluenceEditing();
       selectCanvasTool(tool);
       notify();
       renderPose();
@@ -154,6 +156,7 @@ export function buildCanvasTools(el: HTMLElement): void {
     'Off by default so origins never drag by accident.';
   if (state.freezeMode) freezeBtn.classList.add('active');
   freezeBtn.onclick = () => {
+    cancelInfluenceEditing();
     endBoneChain();
     setFreezeMode(!state.freezeMode);
     notify();
@@ -210,6 +213,7 @@ export function buildCanvasTools(el: HTMLElement): void {
       'Draw a bone chain: click to set the first joint, click again for each bone tip — the ' +
       'chain grows joint-to-joint. Enter / Escape / double-click finishes and auto-binds the limb.',
       () => {
+        cancelInfluenceEditing();
         toggleBonePlacement();
         notify();
         renderPose();

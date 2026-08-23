@@ -23,6 +23,7 @@ export function selectPartContainer(partId: string): void {
   state.selectedPathId = null;
   ctx.selectedNodes.clear();
   ctx.selectedNode = null;
+  ctx.influenceSession = null;
 }
 
 /**

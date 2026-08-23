@@ -33,6 +33,7 @@ import { NODE_PIPELINE } from './pipelines/node';
 import { PIVOT_PIPELINE } from './pipelines/pivot';
 import { NODE_BEND_MARQUEE_PIPELINE } from './pipelines/nodesBendMarquee';
 import { ARTWORK_PIPELINE } from './pipelines/artwork';
+import { INFLUENCE_BAND_PIPELINE } from './pipelines/influenceBand';
 
 /**
  * Non-primary-button guard: none of the DOM-driven checks in the rows below (handles/
@@ -52,6 +53,8 @@ export const GESTURE_PIPELINES: readonly GesturePipeline[] = [
   // 1. Armed pen tool: a click is not a drag, so this must run before anything else can
   //    interpret the press as a handle/gizmo/artwork hit while a chain is in progress.
   BONE_CHAIN_PIPELINE,
+  // Group weight handles own their dedicated authoring session and outrank every pose gizmo.
+  INFLUENCE_BAND_PIPELINE,
   // 2. Tool-gizmo (translate arrows / rotate ring): drawn ON TOP of the Setup handle set
   //    and artwork, so it must win any overlap with `handles`/`artwork` below.
   GIZMO_PIPELINE,

@@ -27,6 +27,11 @@ export {
 export { renderPose, setPoseSampler, resetSkinRenderWarnings } from './render';
 export { invalidateSkinCache } from './skinRender';
 export {
+  activeInfluenceTarget, applyInfluenceEditing, beginInfluenceEditing,
+  cancelInfluenceEditing, influenceTargetFor, refineInfluenceNodes,
+  resetInfluenceEditing, updateInfluenceBand,
+} from './influenceBands';
+export {
   updatePathAttrs, reorderCanvas, refreshSelectedStackingDom, registerPart, unregisterPart,
   syncPartPathDom,
 } from './partDom';

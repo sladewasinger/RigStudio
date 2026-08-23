@@ -173,6 +173,37 @@ export function influenceProfileWeights(
   });
 }
 
+export interface InfluenceBandFrame {
+  joint: Pt;
+  axis: Pt;
+  center: Pt;
+  halfWidth: number;
+}
+
+/** Spatial frame shared by the canvas gizmo and profile compiler. */
+export function influenceBandFrame(
+  band: SkinInfluenceBand, bones: SkinBone[],
+): InfluenceBandFrame | null {
+  const parent = bones.find((b) => b.id === band.parentBoneId);
+  const child = bones.find((b) => b.id === band.childBoneId);
+  if (!parent || !child) return null;
+  const joint = child.bindSeg.p;
+  let ax = child.bindSeg.q.x - parent.bindSeg.p.x;
+  let ay = child.bindSeg.q.y - parent.bindSeg.p.y;
+  if (Math.hypot(ax, ay) < 1e-6) {
+    ax = child.bindSeg.q.x - child.bindSeg.p.x;
+    ay = child.bindSeg.q.y - child.bindSeg.p.y;
+  }
+  const length = Math.hypot(ax, ay) || 1;
+  const axis = { x: ax / length, y: ay / length };
+  return {
+    joint,
+    axis,
+    center: { x: joint.x + axis.x * band.center, y: joint.y + axis.y * band.center },
+    halfWidth: Math.max(0.5, band.width / 2),
+  };
+}
+
 /** Nearest persisted profile owner for an art part; closest ancestor wins. */
 export function influenceProfileOwner(parts: RigPart[], part: RigPart): RigPart | null {
   const byId = new Map(parts.map((p) => [p.id, p]));

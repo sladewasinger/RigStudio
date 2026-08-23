@@ -7,7 +7,7 @@
  */
 
 import { state, notify, markClean, serializeDoc, EditorMode } from '../core/model';
-import { endBoneChain, renderPose } from '../view';
+import { cancelInfluenceEditing, endBoneChain, renderPose } from '../view';
 import { clearKeySelection } from '../timeline/timeline';
 import { dialog } from './dialogs';
 import { getProjectStorage, addRecent } from '../io/storage';
@@ -15,6 +15,7 @@ import { getProjectStorage, addRecent } from '../io/storage';
 /** Tab's action, and the Setup/Animate toolbar buttons'. */
 export function setEditorMode(mode: EditorMode): void {
   if (state.editorMode === mode) return;
+  cancelInfluenceEditing();
   endBoneChain();
   state.editorMode = mode;
   state.playing = false;

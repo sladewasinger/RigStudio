@@ -33,7 +33,9 @@ export function activateDrag(
   const dx = ev.clientX - d.startClient.x;
   const dy = ev.clientY - d.startClient.y;
   if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return false;
-  checkpoint();
+  // Influence-band sessions mutate only an in-memory draft. Apply creates the single
+  // document checkpoint for the whole session; Cancel leaves no history behind.
+  if (d.kind !== 'influenceBand') checkpoint();
   d.active = true;
   return true;
 }

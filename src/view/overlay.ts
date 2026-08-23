@@ -31,6 +31,7 @@ import {
 } from './overlayBones';
 import { renderSelectionHandles } from './overlayHandles';
 import { renderNodeHandles, drawSkinSuspendHint } from './overlayNodes';
+import { renderInfluenceBands } from './overlayInfluenceBands';
 
 // ---- Overlay: selection box, handles, pivots, drag gizmos, node handles ----
 
@@ -51,6 +52,10 @@ export function renderOverlay(): void {
   if (state.cleanPreview && state.editorMode === 'animate') return;
 
   const setup = state.editorMode === 'setup';
+
+  // Group-weight authoring owns the canvas chrome while active. Bone pose handles stay
+  // hidden so the colored crossover controls cannot be confused with skeleton joints.
+  if (renderInfluenceBands()) return;
 
   // Reset the handle cycle when the primary selection changes.
   if (state.selectedPartId !== ctx.handlePartId) {

@@ -15,6 +15,8 @@ import { buildNodeOpsSection } from './nodeOpsSection';
 import { buildPathSection, buildArtboardSection } from './objectSection';
 import { buildAiPanel } from '../ai';
 import { buildEmptyState } from '../../ui/emptyState';
+import { buildInfluenceBandsSection } from './influenceBandsSection';
+import { cancelInfluenceEditing } from '../../view';
 
 // ---- Inspector ----
 
@@ -42,6 +44,7 @@ export function buildInspector(el: HTMLElement): void {
       b.textContent = mode === 'rig' ? 'Pose tool' : 'Node editing';
       if (state.mode === mode) b.classList.add('active');
       b.onclick = () => {
+        cancelInfluenceEditing();
         endBoneChain();
         state.mode = mode;
         notify();
@@ -71,6 +74,7 @@ export function buildInspector(el: HTMLElement): void {
     }
 
     if (setup) buildStackingRow(el, part);
+    if (setup && state.mode === 'rig') buildInfluenceBandsSection(el, part);
     if (part.skin) buildSkinSection(el, part);
     // Not Setup-gated (user ruling 2026-07-13): a dblclick-entered path is navigation, not
     // posing, in either mode — buildPathSection's fields (fill/stroke/opacities/width) are

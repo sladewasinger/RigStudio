@@ -15,7 +15,10 @@
  */
 
 import { state, notify, setFreezeMode } from '../core/model';
-import { hasSelectedNode, deleteSelectedNodes, endBoneChain, stepOutFocus, renderPose } from '../view';
+import {
+  activeInfluenceTarget, cancelInfluenceEditing, hasSelectedNode, deleteSelectedNodes,
+  endBoneChain, stepOutFocus, renderPose,
+} from '../view';
 import { deleteSelectedParts } from './actions';
 import { hasKeySelection, deleteSelectedKeys } from '../timeline/timeline';
 import { smHandleDelete, smHandleEscape } from '../panels/smPanel';
@@ -92,6 +95,16 @@ export const DELETE_HANDLERS: CascadeTier[] = [
 ];
 
 export const ESCAPE_HANDLERS: CascadeTier[] = [
+  {
+    name: 'groupWeights',
+    short: 'cancel group-weight editing',
+    run(ev) {
+      if (!activeInfluenceTarget()) return false;
+      ev.preventDefault();
+      cancelInfluenceEditing();
+      return true;
+    },
+  },
   // 1. Freeze mode exits first (its own early tier) — Escape drops out of origin editing
   //    before anything else, so a stray Escape can't cancel a bone placement or step out
   //    of a group while the user only meant to leave freeze.

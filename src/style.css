@@ -555,6 +555,15 @@ input[type='number'] { width: 90px; }
 
 .bone-line { stroke: rgba(122, 162, 247, 0.55); stroke-width: 1; vector-effect: non-scaling-stroke; }
 
+.influence-band-axis { stroke: rgba(255, 209, 102, 0.72); stroke-width: 5; stroke-linecap: round; vector-effect: non-scaling-stroke; pointer-events: none; }
+.influence-band-edge { stroke: rgba(122, 162, 247, 0.8); stroke-width: 1.25; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.influence-band-center, .influence-band-width { stroke: #fff; stroke-width: 1; vector-effect: non-scaling-stroke; cursor: ew-resize; }
+.influence-band-center { fill: #ffd166; }
+.influence-band-width { fill: var(--accent-2); }
+.influence-band.selected .influence-band-edge { stroke: #ffd166; }
+.influence-band-label { fill: #ffd166; font: 600 11px system-ui, sans-serif; paint-order: stroke; stroke: #202027; stroke-width: 3px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.influence-actions { margin-top: var(--sp-2); }
+
 .select-box.secondary { stroke: rgba(122, 162, 247, 0.45); }
 
 /* Inkscape-style handles. Scale is Edit(Setup)-only (not keyable); .rotate-handle

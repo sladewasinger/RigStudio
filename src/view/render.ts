@@ -90,6 +90,15 @@ let lastPoseDoc: RigDoc | null = null;
 export function renderPose(): void {
   const doc = state.doc;
   if (!doc || !ctx.rootGroup) return;
+  // A group-weight draft belongs exclusively to its selected Setup target. Any
+  // selection/mode change cancels it before skin rows are evaluated, so no stale draft
+  // can flash for one frame or reappear when the old target is selected later.
+  if (ctx.influenceSession && (
+    state.editorMode !== 'setup' || state.selectedPartId !== ctx.influenceSession.targetId
+  )) {
+    ctx.influenceSession = null;
+    if (ctx.drag?.kind === 'influenceBand') ctx.drag = null;
+  }
   const t = poseTime();
 
   // Clean-preview is momentary app state that must not survive a doc REPLACE (New /
