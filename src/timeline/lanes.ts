@@ -93,6 +93,9 @@ function buildLane(track: Track, duration: number, index: number): HTMLElement {
       event.stopPropagation();
       state.warpSetupId = warp.id;
       state.warpPreviewActive = false;
+      state.selectedPartId = warp.sourcePartId;
+      state.selectedPartIds = [warp.sourcePartId];
+      state.selectedPathId = null;
       document.dispatchEvent(new CustomEvent('rig-open-dock-tab', { detail: 'warps' }));
       notify(); renderPose();
     });

@@ -24,6 +24,7 @@ describe('Warp dock workflow', () => {
     const panel = await waitFor(() => document.querySelector<HTMLElement>('.warps-panel'));
     expect(document.querySelector('[aria-selected="true"]')?.textContent).toBe('Warps');
     expect(panel.textContent).toContain('Hand turn'); expect(panel.querySelectorAll('.warp-pair')).toHaveLength(2);
+    expect(state.selectedPartIds).toEqual(['triangle_group']);
     state.selectedPartIds = []; state.selectedPartId = null; notify();
     expect(document.querySelector('.warps-panel')?.textContent).toContain('Hand turn');
   });

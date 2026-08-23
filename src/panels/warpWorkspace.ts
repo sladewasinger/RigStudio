@@ -5,6 +5,11 @@ import { dialog } from '../ui/dialogs';
 
 const openDock = () => document.dispatchEvent(new CustomEvent('rig-open-dock-tab', { detail: 'warps' }));
 const nameOf = (id: string) => state.doc?.parts.find((part) => part.id === id)?.label ?? 'Missing';
+const selectCarrier = (warp: WarpDefinition) => {
+  state.selectedPartId = warp.sourcePartId;
+  state.selectedPartIds = [warp.sourcePartId];
+  state.selectedPathId = null;
+};
 const button = (label: string, fn: () => void | Promise<void>, style = '') => {
   const result = document.createElement('button'); result.textContent = label; result.className = style;
   result.onclick = () => void fn(); return result;
@@ -20,6 +25,7 @@ export async function createWarpFromSelection(): Promise<void> {
   const definition = createWarpDefinition(state.doc, selection[0].id, selection[1].id, name).definition;
   checkpoint(); (state.doc.warps ??= []).push(definition);
   state.warpSetupId = definition.id; state.warpPreviewAmount = 0;
+  selectCarrier(definition);
   openDock(); notify(); renderPose();
 }
 
@@ -32,7 +38,7 @@ export function warpForSelection(): WarpDefinition | null {
 
 export function openSelectedWarp(): boolean {
   const warp = warpForSelection(); if (!warp) return false;
-  state.warpSetupId = warp.id; openDock(); notify(); renderPose(); return true;
+  state.warpSetupId = warp.id; selectCarrier(warp); openDock(); notify(); renderPose(); return true;
 }
 
 function amount(warp: WarpDefinition): number {
@@ -47,6 +53,7 @@ function rebuild(warp: WarpDefinition): void {
 function selectWarp(warp: WarpDefinition): void {
   state.warpSetupId = warp.id; state.warpPreviewAmount = amount(warp);
   state.warpPreviewActive = false;
+  selectCarrier(warp);
   document.querySelector(`[data-warp-lane="${warp.id}"]`)?.scrollIntoView({ block: 'nearest' });
   notify(); renderPose();
 }
