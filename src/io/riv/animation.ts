@@ -41,7 +41,7 @@ import {
   P_DURATION, P_FPS, P_FRAME, P_INTERP_TYPE, P_INTERPOLATOR_ID, P_KEYFRAME_COLOR_VALUE,
   P_LOOP, P_NODE_X, P_NODE_Y, P_OBJECT_ID, P_PROPERTY_KEY, P_ROOT_BONE_X, P_ROOT_BONE_Y,
   P_ROTATION, P_SCALE_X, P_SCALE_Y, P_VALUE, P_VERT_X, P_VERT_Y, P_IN_ROTATION,
-  P_IN_DISTANCE, P_OUT_ROTATION, P_OUT_DISTANCE, P_X1, P_X2, P_Y1, P_Y2, T_CUBIC_INTERP,
+  P_IN_DISTANCE, P_OUT_ROTATION, P_OUT_DISTANCE, P_THICKNESS, P_X1, P_X2, P_Y1, P_Y2, T_CUBIC_INTERP,
   T_KEYED_OBJECT, T_KEYED_PROPERTY, T_KEYFRAME_COLOR, T_KEYFRAME_DOUBLE, T_LINEAR_ANIM,
 } from './keys';
 
@@ -62,6 +62,8 @@ export interface WarpPathTarget {
   subpaths: { geometry: RivSubpath; vertexIndices: number[] }[];
   pair: CompiledRivWarpPair;
   geometryAt: (amount: number) => RivSubpath[];
+  paints: { colorIndex: number; sourceHex: string; targetHex: string; sourceOpacity: number; targetOpacity: number }[];
+  stroke?: { objectId: number; sourceWidth: number; targetWidth: number };
 }
 
 export function warpPathTargetKey(partId: string, pathId: string): string {
@@ -116,6 +118,12 @@ export function emitAnimations(
     name: string; duration: number; loop: boolean;
     props: PlanProp[]; zPlans: ZPlan[]; opacityPlans: OpacityPlan[];
   }
+
+  const mixHex = (left: string, right: string, amount: number): string => {
+    const channel = (offset: number) => Math.round(parseInt(left.slice(offset, offset + 2), 16) +
+      (parseInt(right.slice(offset, offset + 2), 16) - parseInt(left.slice(offset, offset + 2), 16)) * amount);
+    return `#${[1, 3, 5].map((offset) => channel(offset).toString(16).padStart(2, '0')).join('')}`;
+  };
 
   // Canonical, deterministic per-target channel plan: [target, channel, propertyKey,
   // base offset, isAngle]. root first, then parts in doc order; fixed channel order.
@@ -185,6 +193,7 @@ export function emitAnimations(
 
   const plans: PlanClip[] = doc.clips.map((clip) => {
     const props: PlanProp[] = [];
+    const opacityPlans: OpacityPlan[] = [];
     const trackOf = (target: string, channel: Channel): Track | undefined =>
       clip.tracks.find((t) => t.target === target && t.channel === channel);
 
@@ -218,6 +227,9 @@ export function emitAnimations(
       );
       const sorted = keysOf(track);
       if (sorted.length === 0) continue;
+      if (clip.tracks.some((candidate) => candidate.target === target.partId && candidate.channel === 'opacity')) {
+        throw new Error(`Warped part "${target.partId}" also animates opacity in clip "${clip.name}". Split the fade onto an unmatched detail before Rive export.`);
+      }
       const sampled = sorted.map((key) => target.geometryAt(key.value));
       if (!sameWarpTopology(target, sampled)) {
         throw new Error(`Warp correspondence "${target.pair.pairId}" no longer matches its emitted source geometry.`);
@@ -251,13 +263,33 @@ export function emitAnimations(
           }
         }
       }
+      for (const paint of target.paints) {
+        const keys = sorted.map((key, i) => {
+          const amount = Math.min(1, Math.max(0, key.value));
+          let interpType = INTERP_LINEAR, interpId = -1;
+          const next = sorted[i + 1];
+          if (next) { const bez = cubicFor(next); if (bez) { interpType = INTERP_CUBIC; interpId = emitInterpolator(bez); } }
+          const opacity = paint.sourceOpacity + (paint.targetOpacity - paint.sourceOpacity) * amount;
+          return { frame: toFrame(key.time, fps), value: argb(mixHex(paint.sourceHex, paint.targetHex, amount), opacity), interpType, interpId };
+        });
+        opacityPlans.push({ colorIndex: paint.colorIndex, keys });
+      }
+      if (target.stroke) {
+        const keys = sorted.map((key, i) => {
+          let interpType = INTERP_LINEAR, interpId = -1;
+          const next = sorted[i + 1];
+          if (next) { const bez = cubicFor(next); if (bez) { interpType = INTERP_CUBIC; interpId = emitInterpolator(bez); } }
+          return { frame: toFrame(key.time, fps), value: target.stroke!.sourceWidth +
+            (target.stroke!.targetWidth - target.stroke!.sourceWidth) * Math.min(1, Math.max(0, key.value)), interpType, interpId };
+        });
+        props.push({ objectId: target.stroke.objectId, propertyKey: P_THICKNESS, keys });
+      }
     }
 
     // Keyed draw order (z): a full per-drawable rank plan at the union of every z event.
     const zPlans: ZPlan[] = planZDrawTargets(scene, doc, clip, drawRules, hiddenIds, fps);
 
     // Keyed opacity: one plan per SolidColor owned by any part this clip keys opacity on.
-    const opacityPlans: OpacityPlan[] = [];
     for (const partId of opacityTargets.keys()) opacityPlans.push(...buildOpacityPlans(clip, partId));
 
     return {

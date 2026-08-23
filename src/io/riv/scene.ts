@@ -352,13 +352,17 @@ function emitShape(
     });
     warpSubpaths.push({ geometry: sub, vertexIndices });
   }
+  const activeWarpTargets: WarpPathTarget[] = [];
   for (const pair of warpPairs) {
-    warpPathTargets.set(`${pair.warpId}\u0000${warpPathTargetKey(part.id, path.id)}`, {
+    const target: WarpPathTarget = {
       partId: part.id, pathId: path.id, subpaths: warpSubpaths, pair,
       geometryAt: (amount) => pathToLocalSubpaths(
         rivWarpPathData(pair, amount), m, part.pivot.x, part.pivot.y,
       ),
-    });
+      paints: [],
+    };
+    warpPathTargets.set(`${pair.warpId}\u0000${warpPathTargetKey(part.id, path.id)}`, target);
+    activeWarpTargets.push(target);
   }
 
   // Part-level `opacity` (RestPose.opacity / the keyable 'opacity' channel) folds
@@ -376,6 +380,11 @@ function emitShape(
     scene.propColor(P_COLOR, argb(path.fill, path.fillOpacity * restOpacity));
     scene.end();
     pushOpacityTarget(opacityTargets, part.id, { colorIndex, hex: path.fill, baseOpacity: path.fillOpacity });
+    for (const target of activeWarpTargets) if (target.pair.targetStyle.fill) target.paints.push({
+      colorIndex, sourceHex: path.fill, targetHex: target.pair.targetStyle.fill,
+      sourceOpacity: path.fillOpacity * target.pair.sourcePartOpacity,
+      targetOpacity: target.pair.targetStyle.fillOpacity * target.pair.targetPartOpacity,
+    });
   }
   if (path.stroke) {
     // Uniform-scale approximation of the baked matrix for the stroke width (as Lottie).
@@ -389,6 +398,13 @@ function emitShape(
     scene.propColor(P_COLOR, argb(path.stroke, path.strokeOpacity * restOpacity));
     scene.end();
     pushOpacityTarget(opacityTargets, part.id, { colorIndex, hex: path.stroke, baseOpacity: path.strokeOpacity });
+    for (const target of activeWarpTargets) if (target.pair.targetStyle.stroke) {
+      target.paints.push({ colorIndex, sourceHex: path.stroke, targetHex: target.pair.targetStyle.stroke,
+        sourceOpacity: path.strokeOpacity * target.pair.sourcePartOpacity,
+        targetOpacity: target.pair.targetStyle.strokeOpacity * target.pair.targetPartOpacity });
+      target.stroke = { objectId: strokeIndex, sourceWidth: path.strokeWidth * widthScale,
+        targetWidth: target.pair.targetStyle.strokeWidth * widthScale };
+    }
   }
   return shapeIndex;
 }
