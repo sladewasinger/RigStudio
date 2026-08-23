@@ -112,45 +112,54 @@ input[type='number'],
      style, which wins over this fallback regardless of cascade order — same discipline
      as the timeline height splitter (timeline/tlState.ts). The 6px column is the
      draggable splitter #layersResize.ts inserts as #layers' next DOM sibling. */
-  grid-template-columns: var(--layers-width, 200px) 6px 1fr 260px;
+  grid-template-columns: var(--layers-width, 200px) 6px minmax(0, 1fr) 6px var(--right-dock-width, 340px);
   min-height: 0;
 }
 
-#layers, #inspector {
+#layers, #inspector, #right-dock {
   background: var(--panel);
   padding: var(--sp-3);
   overflow-y: auto;
 }
 #layers { border-right: 1px solid var(--divider); }
-#inspector { border-left: 1px solid var(--divider); }
+#right-dock { padding: 0; border-left: 1px solid var(--divider); display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+#inspector { padding: var(--sp-3); border: 0; min-height: 0; }
+.right-dock-tabs { display: flex; align-items: stretch; flex: 0 0 auto; min-height: 38px; border-bottom: 1px solid var(--divider); background: var(--surface-raised); overflow-x: auto; }
+.right-dock-tabs [role='tab'] { border: 0; border-radius: 0; background: transparent; padding: 0 10px; white-space: nowrap; font-size: 11px; color: var(--text-muted); border-bottom: 2px solid transparent; }
+.right-dock-tabs [role='tab'].active { color: var(--text); border-bottom-color: var(--accent-2); background: var(--panel); }
+.right-dock-tabs [role='tab']:focus-visible { outline: 2px solid var(--accent-2); outline-offset: -2px; }
+.right-dock-pin { margin-left: auto; border: 0; border-left: 1px solid var(--divider); border-radius: 0; }
+.right-dock-content { flex: 1 1 auto; overflow: auto; background: var(--panel); scrollbar-gutter: stable; }
+#right-dock-splitter { position: relative; cursor: col-resize; background: var(--divider); touch-action: none; }
+#right-dock-splitter:hover, #right-dock-splitter.dragging, #right-dock-splitter:focus-visible { background: var(--accent-2); }
+#right-dock-splitter::before { content: ''; position: absolute; left: 2px; top: 50%; width: 2px; height: 34px; transform: translateY(-50%); background: rgba(255,255,255,.35); border-radius: 2px; }
 
-#warp-workspace {
-  position: fixed; z-index: 30; top: 54px; right: 16px; width: min(420px, calc(100vw - 32px));
-  max-height: calc(100vh - 190px); display: none; flex-direction: column;
-  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
-  box-shadow: 0 14px 40px rgba(0,0,0,.45); overflow: hidden;
-}
-#warp-workspace.open { display: flex; }
-#warp-workspace > header, #warp-workspace > footer { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--surface-raised); }
-#warp-workspace > header div { display: flex; flex-direction: column; gap: 2px; }
-#warp-workspace > header span, .warp-section-title span { color: var(--text-muted); font-size: 11px; }
-.warp-roles, .warp-section-title, .warp-preview { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--divider); }
-.warp-roles button, .warp-section-title button { margin-left: auto; }
-.warp-preview input { flex: 1; min-width: 80px; }
-.warp-preview output { width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
-.warp-section-title { background: rgba(255,255,255,.025); }
-.warp-pairs { overflow: auto; padding: 8px; display: grid; gap: 7px; }
+.warps-panel { padding: 0 !important; background: var(--panel) !important; isolation: isolate; }
+.warps-panel > header { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-bottom: 1px solid var(--divider); background: var(--surface-raised); }
+.warps-panel > header span, .warp-list-row span, .warp-list-row small { color: var(--text-muted); font-size: 11px; }
+.warp-empty { margin: 12px; padding: 18px; border: 1px dashed var(--border-strong); border-radius: 6px; text-align: center; color: var(--text-muted); }
+.warps-list { display: grid; max-height: 220px; overflow: auto; border-bottom: 1px solid var(--divider); }
+.warp-list-row { display: grid; gap: 2px; padding: 9px 12px; border: 0; border-radius: 0; border-bottom: 1px solid var(--divider); background: var(--panel); text-align: left; }
+.warp-list-row.active { background: rgba(122,162,247,.14); box-shadow: inset 3px 0 var(--accent-2); }
+.warp-active { padding: 12px; display: grid; gap: 10px; }
+.warp-active > input { width: 100%; font-weight: 700; }
+.warp-roles { color: var(--text-muted); font-size: 11px; }
+.warp-value { display: grid; grid-template-columns: minmax(80px,1fr) 68px auto; gap: 6px; align-items: center; }
+.warp-value .primary { grid-column: 1 / -1; }
+.warp-inline-actions { display: flex; gap: 5px; flex-wrap: wrap; }
+.warp-correspondence { border-top: 1px solid var(--divider); padding-top: 8px; }
+.warp-correspondence summary { cursor: pointer; font-weight: 650; margin-bottom: 8px; }
+.warp-pairs { padding-top: 8px; display: grid; gap: 7px; }
 .warp-pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; padding: 8px; border: 1px solid var(--divider); border-radius: 5px; }
 .warp-pair small, .warp-pair > div, .warp-pair > select { grid-column: 1 / -1; }
 .warp-pair > div { display: flex; gap: 5px; }
 .warp-pair.warning { border-color: var(--warning, #d99b45); }
-#warp-workspace footer { justify-content: flex-end; gap: 8px; border-top: 1px solid var(--divider); }
-#warp-workspace button.primary { background: var(--accent-2); color: #17171c; }
-.warp-reference { opacity: .18 !important; pointer-events: none; }
+.warps-panel button.primary { background: var(--accent-2); color: #17171c; }
 .warp-reference-runtime { pointer-events: none; }
 .warp-pair-highlight { filter: drop-shadow(0 0 4px #ffd866) drop-shadow(0 0 1px #111); }
 @media (max-width: 700px) {
-  #warp-workspace { top: auto; left: 6px; right: 6px; bottom: 6px; width: auto; max-height: 55vh; }
+  #layout { grid-template-columns: var(--layers-width, 180px) 6px minmax(180px, 1fr) 6px minmax(260px, 42vw); }
+  .right-dock-tabs [role='tab'] { padding-inline: 7px; }
 }
 .inspector-sticky-tools {
   position: sticky;

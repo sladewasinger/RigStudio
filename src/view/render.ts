@@ -66,7 +66,8 @@ function renderPartRigidPaths(part: RigPart): void {
 }
 
 function warpAmount(warpId: string, time: number | null): number {
-  if (time === null) return state.warpSetupId === warpId ? state.warpPreviewAmount : 0;
+  if (time === null) return 0;
+  if (state.warpSetupId === warpId && state.warpPreviewActive && !state.playing) return state.warpPreviewAmount;
   const track = activeClip()?.tracks.find((candidate) => candidate.target === warpId && candidate.channel === 'warp');
   return Math.min(1, Math.max(0, sampleKeyList(track?.keyframes ?? [], time, 0)));
 }
@@ -129,15 +130,22 @@ function referenceWarpForPart(doc: RigDoc, part: RigPart) {
 
 function applyWarpCrossfades(doc: RigDoc, part: RigPart, time: number | null): void {
   if (!ctx.rootGroup) return;
+  // Edit mode owns ordinary artwork visibility. Warp reference suppression is an
+  // Animate/export semantic only; endpoint eye states remain independent in Edit.
+  if (state.editorMode === 'setup') {
+    for (const path of part.paths) {
+      const element = ctx.rootGroup.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
+      element?.removeAttribute('visibility'); element?.removeAttribute('opacity');
+    }
+    return;
+  }
   const referenceWarp = referenceWarpForPart(doc, part);
   for (const path of part.paths) {
     const element = ctx.rootGroup.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
     if (!element) continue;
     if (referenceWarp) {
       const paired = referenceWarp.pairs.some((pair) => pair.targetPathId === path.id);
-      if (state.editorMode === 'setup' && state.warpSetupId === referenceWarp.id) {
-        element.removeAttribute('visibility'); element.removeAttribute('opacity');
-      } else if (paired) element.setAttribute('visibility', 'hidden');
+      if (paired) element.setAttribute('visibility', 'hidden');
       else {
         element.removeAttribute('visibility');
         element.setAttribute('opacity', String(warpAmount(referenceWarp.id, time)));
@@ -293,8 +301,8 @@ export function renderPose(): void {
       g.setAttribute('transform', transform);
       applyOpacity(part, g, t);
       g.classList.toggle('part-hidden', hidden);
-      g.classList.toggle('warp-reference', reference && state.editorMode === 'setup' && state.warpSetupId !== null && !hidden);
-      g.classList.toggle('warp-reference-runtime', reference && !hidden);
+      g.classList.toggle('warp-reference', false);
+      g.classList.toggle('warp-reference-runtime', reference && state.editorMode === 'animate' && !hidden);
     }
   }
   applyDrawOrder(doc, t);

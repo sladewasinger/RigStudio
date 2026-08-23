@@ -209,13 +209,6 @@ export function buildCanvasTools(el: HTMLElement): void {
       state.selectedPartIds.length > 0);
     add(iconButton('ungroup', '', 'Dissolve the selected group/bone (Ctrl+Shift+G)', ungroupAction),
       !!part && part.paths.length === 0);
-    const warpButton = document.createElement('button');
-    const existingWarp = warpForSelection();
-    warpButton.textContent = existingWarp ? 'Edit Warp' : 'Warp';
-    warpButton.title = existingWarp ? 'Open this object\'s Warp Setup' : 'Create Warp from exactly two selected objects: source first, reference second';
-    warpButton.onclick = () => { if (!openSelectedWarp()) void createWarpFromSelection(); };
-    add(warpButton, !!existingWarp || state.selectedPartIds.length === 2);
-    sep();
     const boneBtn = add(iconButton('bone', 'bone',
       'Draw a bone chain: click to set the first joint, click again for each bone tip — the ' +
       'chain grows joint-to-joint. Enter / Escape / double-click finishes and auto-binds the limb.',
@@ -227,6 +220,16 @@ export function buildCanvasTools(el: HTMLElement): void {
       }), true);
     boneBtn.classList.toggle('armed', boneActive);
     boneBtn.setAttribute('aria-pressed', String(boneActive));
+  } else {
+    sep();
+    const existingWarp = warpForSelection();
+    const warpButton = document.createElement('button');
+    warpButton.className = 'animate-warp-action';
+    warpButton.textContent = existingWarp ? 'Edit Warp' : 'Create Warp';
+    warpButton.title = existingWarp ? 'Open this transition in the Warps dock' : 'Select source, then Shift-select target';
+    warpButton.disabled = !existingWarp && state.selectedPartIds.length !== 2;
+    warpButton.onclick = () => { if (!openSelectedWarp()) void createWarpFromSelection(); };
+    controls.appendChild(warpButton);
   }
   el.appendChild(controls);
 

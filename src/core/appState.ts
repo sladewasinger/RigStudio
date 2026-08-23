@@ -95,6 +95,8 @@ export interface AppState {
   /** Open focused Warp Setup workspace. Session-only. */
   warpSetupId: string | null;
   warpPreviewAmount: number;
+  /** Temporary Warps-dock scrub override; never serialized. */
+  warpPreviewActive: boolean;
 }
 
 /** localStorage key for the snapping preference (a UI setting, not project data). */
@@ -141,6 +143,7 @@ export const state: AppState = {
   projectFileHandle: null,
   warpSetupId: null,
   warpPreviewAmount: 0,
+  warpPreviewActive: false,
 };
 
 /** Toggle freeze (origin-editing) mode. App state only — never serialized or persisted. */

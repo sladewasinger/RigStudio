@@ -86,6 +86,17 @@ function buildLane(track: Track, duration: number, index: number): HTMLElement {
   const warp = doc.warps?.find((candidate) => candidate.id === track.target);
   const partLabel = track.target === 'root' ? 'root' : (doc.parts.find((p) => p.id === track.target)?.label ?? '?');
   label.textContent = warp ? `Warp · ${warp.name}` : `${partLabel}.${track.channel}`;
+  if (warp) {
+    lane.dataset.warpLane = warp.id;
+    label.title = `Open ${warp.name} in Warps`;
+    label.addEventListener('click', (event) => {
+      event.stopPropagation();
+      state.warpSetupId = warp.id;
+      state.warpPreviewActive = false;
+      document.dispatchEvent(new CustomEvent('rig-open-dock-tab', { detail: 'warps' }));
+      notify(); renderPose();
+    });
+  }
   lane.appendChild(label);
 
   // Gap between the label gutter and the strip: generous padding so a marquee can

@@ -17,4 +17,5 @@
 export { buildCanvasTools, flipAction, groupAction, ungroupAction } from './canvasTools';
 export { buildLayersPanel } from './layers';
 export { buildInspector } from './inspector';
+export { buildRightDock, openRightDockTab, currentRightDockTab } from './rightDock';
 export { buildWarpWorkspace, createWarpFromSelection, ensureWarpWorkspace, openSelectedWarp } from './warpWorkspace';

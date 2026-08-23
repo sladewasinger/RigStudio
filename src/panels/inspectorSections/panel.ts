@@ -13,7 +13,6 @@ import { buildSkinSection } from './skinSection';
 import { buildAlignSection } from './alignSection';
 import { buildNodeOpsSection } from './nodeOpsSection';
 import { buildPathSection, buildArtboardSection } from './objectSection';
-import { buildAiPanel } from '../ai';
 import { buildEmptyState } from '../../ui/emptyState';
 import { buildInfluenceBandsSection } from './influenceBandsSection';
 import { cancelInfluenceEditing } from '../../view';
@@ -103,5 +102,4 @@ export function buildInspector(el: HTMLElement): void {
 
   buildRootSection(el, doc, setup);
 
-  buildAiPanel(el);
 }

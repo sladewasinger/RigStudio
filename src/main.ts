@@ -8,7 +8,7 @@ import {
   enterGroupsFor, clearGroupEntry, resetInteractionState, resetSkinRenderWarnings,
   artworkUnderPointer,
 } from './view';
-import { buildLayersPanel, buildInspector, buildCanvasTools, buildWarpWorkspace } from './panels';
+import { buildLayersPanel, buildCanvasTools, buildRightDock } from './panels';
 import { createWarpTriangleSquareSample } from './samples/warpTriangleSquare';
 import { buildTimeline, render as renderTimeline, clearKeySelection } from './timeline/timeline';
 import { exportLottie } from './io/exportLottie';
@@ -53,6 +53,7 @@ const timelineEl = document.getElementById('timeline')!;
 // (ensureLayersSplitter runs before its `if (!doc) return`) — inserts the splitter
 // and fixes the grid before ANY buildCanvas() call can ever measure it degenerate.
 buildLayersPanel(layersEl);
+buildRightDock(inspectorEl);
 
 const AUTOSAVE_KEY = 'rig-studio-autosave';
 
@@ -76,6 +77,7 @@ function afterDocReplaced(): void {
   state.playing = false;
   state.projectFileHandle = null; // D1: a fresh/replaced doc has no on-disk file yet —
   state.warpSetupId = null;
+  state.warpPreviewActive = false;
   state.warpPreviewAmount = 0;
   // openFlow.ts re-establishes it right after for a project (.json) open.
   clearKeySelection();
@@ -361,8 +363,7 @@ subscribe(() => {
   syncExportImageButtons();
   buildLayersPanel(layersEl);
   buildCanvasTools(canvasToolsEl);
-  buildInspector(inspectorEl);
-  buildWarpWorkspace();
+  buildRightDock(inspectorEl);
   renderTimeline();
   scheduleAutosave();
   // buildCanvas() (which populates #canvas for a real doc, clearing it first) only runs
