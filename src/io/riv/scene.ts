@@ -244,7 +244,7 @@ export function exportRiv(doc: RigDoc): Uint8Array {
       // A dangling path slot (stale childOrder inside the documented self-healing
       // window — core/childOrder.ts's KNOWN GAP note) skips exactly like the U2
       // renderers do; reconcileChildOrder repairs it at the next structural op/load.
-      if (!rigPath) continue;
+      if (!rigPath || rigPath.hidden) continue;
       const shapeIndex = emitShape(scene, part, rigPath, partIndex.get(part.id)!, opacityTargets, skinPlan);
       if (shapeIndex !== null) {
         emittedDrawableShapes.push({ partId: part.id, pathId: rigPath.id, shapeIndex });

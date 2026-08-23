@@ -27,11 +27,12 @@ export function buildCanvas(container: HTMLElement): void {
   // empty wrapper has no geometry-bearing DOM run of its own, so the live-DOM pass below
   // can only measure its transformed local origin. That stranded top-level/nested groups
   // at (or near) 0,0 even though all of their descendant artwork was elsewhere. Preserve
-  // the established DOM measurement for art-bearing parts (including browser SVG bbox
-  // precision); only wrappers need the subtree-aware pure-doc path.
+  // the established DOM measurement for ordinary art-bearing parts (including browser
+  // SVG bbox precision). Art with imported hidden paths also uses the pure-doc path:
+  // SVG getBBox includes visibility:hidden geometry, which must not skew the pivot.
   for (const part of doc.parts) {
     const hint = part.pivotHint;
-    if (!hint || part.paths.length > 0) continue;
+    if (!hint || part.paths.length > 0 && !part.paths.some((path) => path.hidden)) continue;
     const center = memberGeometryPivot([part], doc.parts);
     part.pivot = hint.kind === 'centerOffset'
       ? { x: center.x + hint.dx, y: center.y + hint.dy }

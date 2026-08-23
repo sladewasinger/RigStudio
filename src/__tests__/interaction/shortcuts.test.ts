@@ -29,7 +29,8 @@ import {
   isCanonicalPartOrder,
 } from '../../core/model';
 import { checkpoint, canUndo, canRedo } from '../../core/history';
-import { zoomBy, startBonePlacement, hasSelectedNode, selectAllNodes } from '../../view';
+import { zoomBy, startBonePlacement, hasSelectedNode } from '../../view';
+import { ctx, nodeKey } from '../../view/context';
 import { hasKeySelection } from '../../timeline/timeline';
 import { setLogicVisible } from '../../panels/smPanel';
 import { animateWithClaude, AnimateResult } from '../../ai/claude';
@@ -361,7 +362,8 @@ describe('Delete cascade', () => {
     const path = part.paths[0];
     enterNodeMode('left_leg', path.id);
     expect(hasSelectedNode()).toBe(false);
-    selectAllNodes();
+    ctx.selectedNodes.add(nodeKey(path.id, 1));
+    ctx.selectedNode = { pathId: path.id, cmdIndex: 1 };
     expect(hasSelectedNode()).toBe(true);
     const before = state.doc!.parts.find((p) => p.id === part.id)!.paths.find((p) => p.id === path.id)!.d;
 

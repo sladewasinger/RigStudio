@@ -40,6 +40,11 @@
  *   stays lazily synthesized by normalizeDoc); only fresh imports record document order.
  * - <ellipse>/<circle>/<rect> are converted to <path> data so everything downstream
  *   deals with one shape kind.
+ * - Authored visibility is preserved without deleting hierarchy objects. SVG `display`
+ *   and inherited `visibility` resolve through presentation attributes, inline styles,
+ *   matching stylesheet selectors and hidden Inkscape layers before layer unwrapping.
+ *   Fully hidden groups map to the existing part eye; individually hidden shapes map to
+ *   path eyes. A descendant `visibility:visible` override remains visible.
  * - Pivots are seeded from the artwork wherever possible, in order of preference:
  *   1. a FULL composed transform chain that resolves to a pure rotation (rotate(a,cx,cy)
  *      or the matrix(...) Inkscape rewrites it into) — its fixed point is the joint;
@@ -61,6 +66,7 @@ import {
   slotAddPath,
 } from '../core/model';
 import { rotationPivotOf } from '../geometry/transforms';
+import { SvgVisibilityResolver } from './svgVisibility';
 
 const INKSCAPE_NS = 'http://www.inkscape.org/namespaces/inkscape';
 const SODIPODI_NS = 'http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd';
@@ -71,6 +77,7 @@ export function importSvg(svgText: string, name: string): RigDoc {
   if (svg.nodeName !== 'svg') throw new Error('Not an SVG document');
 
   const viewBox = parseViewBox(svg);
+  const visibility = new SvgVisibilityResolver(svg);
 
   // Unwrap Inkscape layers: their children are the real top-level elements.
   let roots: Element[] = Array.from(svg.children).filter(isDrawable);
@@ -85,7 +92,7 @@ export function importSvg(svgText: string, name: string): RigDoc {
   roots = unwrapped;
 
   const parts: RigPart[] = [];
-  for (const el of roots) walkTopLevel(el, parts);
+  for (const el of roots) walkTopLevel(el, parts, visibility);
   if (parts.length === 0) throw new Error('No drawable groups or shapes found');
 
   return {
@@ -115,7 +122,7 @@ function labelOf(el: Element): string {
 /** A fresh RigPart shell, registered into `parts` immediately so draw order matches
  *  document discovery order (depth-first pre-order = paint order). */
 function registerPart(
-  el: Element, transform: string, parentId: string | null, parts: RigPart[],
+  el: Element, transform: string, parentId: string | null, parts: RigPart[], hidden = false,
 ): RigPart {
   // Pivot is recovered from the FULL composed chain (`transform` here is already that
   // chain, not just the element's own local transform — see the doc-space invariant).
@@ -136,19 +143,20 @@ function registerPart(
     paths: [],
     rest: { rotate: 0, tx: 0, ty: 0, sx: 1, sy: 1, kx: 0, ky: 0, opacity: 1 },
     parentId,
+    hidden: hidden ? true : undefined,
   };
   parts.push(part);
   return part;
 }
 
 /** Top-level element (post layer-unwrap): always becomes a part. */
-function walkTopLevel(el: Element, parts: RigPart[]): void {
+function walkTopLevel(el: Element, parts: RigPart[], visibility: SvgVisibilityResolver): void {
   if (el.tagName === 'g') {
-    walkGroup(el, '', null, parts);
+    walkGroup(el, '', null, parts, visibility, false);
   } else {
     const p = shapeToPath(el, el.getAttribute('transform') ?? '');
     if (!p) return;
-    const part = registerPart(el, '', null, parts);
+    const part = registerPart(el, '', null, parts, visibility.isHidden(el));
     beginExplicitChildOrder(part); // one-path part — trivially its whole document order
     part.paths.push(p);
     slotAddPath(part, p.id);
@@ -165,20 +173,24 @@ function walkTopLevel(el: Element, parts: RigPart[]): void {
  */
 function walkGroup(
   el: Element, docAccum: string, parentId: string | null, parts: RigPart[],
+  visibility: SvgVisibilityResolver, parentPartHidden: boolean,
 ): RigPart {
   const own = el.getAttribute('transform') ?? '';
   const fullTransform = joinTransforms(docAccum, own);
-  const part = registerPart(el, fullTransform, parentId, parts);
+  const hidden = !parentPartHidden && visibility.isHidden(el) && !visibility.hasVisibleDrawable(el);
+  const part = registerPart(el, fullTransform, parentId, parts, hidden);
+  const partHidden = parentPartHidden || hidden;
   // U4: record the group's TRUE child interleaving — one slot appended per child, in
   // this walk's document order (see the "Sibling paint order" rule in the file header).
   beginExplicitChildOrder(part);
   for (const child of Array.from(el.children)) {
     if (child.tagName === 'g') {
-      const childPart = walkGroup(child, fullTransform, part.id, parts);
+      const childPart = walkGroup(child, fullTransform, part.id, parts, visibility, partHidden);
       slotAddChild(part, childPart.id);
     } else if (isDrawable(child)) {
       const p = shapeToPath(child, child.getAttribute('transform') ?? '');
       if (p) {
+        p.hidden = !partHidden && visibility.isHidden(child) ? true : undefined;
         part.paths.push(p);
         slotAddPath(part, p.id);
       }

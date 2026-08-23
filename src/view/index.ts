@@ -21,7 +21,8 @@
 export { buildCanvas } from './canvas';
 export { partRootBoxes } from './pose';
 export {
-  clearGroupEntry, enterGroupsFor, stepOutFocus, resetInteractionState, artworkUnderPointer,
+  clearGroupEntry, enterGroupsFor, selectPartContainer, stepOutFocus,
+  resetInteractionState, artworkUnderPointer,
 } from './focus';
 export { renderPose, setPoseSampler, resetSkinRenderWarnings } from './render';
 export { invalidateSkinCache } from './skinRender';
@@ -31,14 +32,15 @@ export {
 } from './partDom';
 export {
   hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, selectedNodesType,
-  applyNodeOp, deleteSelectedNodes, nudgeSelectedNodes, canDeleteSegment, canJoinNodes,
+  applyNodeOp, deleteSelectedNodes, canDeleteSelectedNodes, nudgeSelectedNodes, canDeleteSegment, canJoinNodes,
   deleteSelectedSegment, joinSelectedNodes,
 } from './nodeEditing';
 export type { NodeOp } from './nodeEditing';
 export {
   flipSelected, nudgeSelectedParts, applyRootDeltas, bindSelectedToBones,
   bindPartsToBones, autoBindPlacedBone, unbindSelectedSkin,
-  startBonePlacement, cancelBonePlacement, endBoneChain, rebindFrozenChain,
+  startBonePlacement, cancelBonePlacement, endBoneChain, bonePlacementActive,
+  toggleBonePlacement, selectCanvasTool, rebindFrozenChain,
   primaryNodeBinding, setNodeBinding, setNodePin, clearNodeBinding, resetNodeBindings,
   recomputeAutoWeights, bindSelectedNodesToBone, quickNodeBindTarget,
   movePathToPart, pathMoveRefusal, reattachRootBone,

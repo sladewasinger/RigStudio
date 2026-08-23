@@ -1202,7 +1202,8 @@ skin-weight math — and the curve editor's `graph.test.ts`).
   `bindSeg`; per-frame LBS rewrites d attributes (`renderSkinnedPart`, runtime weight
   cache keyed by geometry signature). Verified: bind → bone rotation deforms the
   rendered path while `path.d` rest data stays untouched; Setup shows rest; unbind
-  restores rigidity. Exports render skinned parts RIGIDLY (documented limitation).
+  restores rigidity. Rive exports preserve the Skin/Tendon deformation; Lottie and
+  headless frame exports currently render skinned parts rigidly.
 - **Curve editor** (`src/timeline/graph.ts` + timeline "curves" toggle): verified a preset
   handle grab converts the segment to a custom bezier (x-clamped, y overshoots
   allowed), sampling honors it (rendered pose differs vs preset and restores

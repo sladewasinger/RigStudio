@@ -919,6 +919,21 @@ describe('exportRiv hidden-part exclusion (Layers eye, FULL — completes the sh
     expect(shapes[0].props[PROP.NAME]).toBe('body_path');
   });
 
+  it('emits no Shape for a hidden path but preserves its visible sibling', () => {
+    const body = part('p_body', {
+      paths: [path('hidden_path', { hidden: true }), path('visible_path')],
+    });
+    const doc: RigDoc = {
+      name: 'hidden-path', viewBox: { x: 0, y: 0, w: 100, h: 100 },
+      parts: [body], rootPivot: { x: 50, y: 50 },
+      clips: [{ name: 'idle', duration: 1000, tracks: [] }],
+    };
+    const shapes = decodeRiv(exportRiv(doc)).objects
+      .filter((object) => object.typeKey === TYPE.SHAPE)
+      .map((object) => object.props[PROP.NAME]);
+    expect(shapes).toEqual(['visible_path']);
+  });
+
   it('drops every keyed track targeting an excluded part — only body.tx survives', () => {
     const validIds = new Set(d.objects.filter((o) => o.index >= 0).map((o) => o.index));
     const allProps = d.animations.flatMap((a) => a.objects.flatMap((ko) => {

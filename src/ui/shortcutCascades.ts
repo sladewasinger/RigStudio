@@ -15,7 +15,6 @@
  */
 
 import { state, notify, setFreezeMode } from '../core/model';
-import { checkpoint } from '../core/history';
 import { hasSelectedNode, deleteSelectedNodes, endBoneChain, stepOutFocus, renderPose } from '../view';
 import { deleteSelectedParts } from './actions';
 import { hasKeySelection, deleteSelectedKeys } from '../timeline/timeline';
@@ -71,7 +70,6 @@ export const DELETE_HANDLERS: CascadeTier[] = [
     run(ev) {
       if (!(state.editorMode === 'setup' && state.mode === 'nodes' && hasSelectedNode())) return false;
       ev.preventDefault();
-      checkpoint();
       deleteSelectedNodes();
       return true;
     },

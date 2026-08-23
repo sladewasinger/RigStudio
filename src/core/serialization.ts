@@ -178,6 +178,7 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
       trackId(p.id);
       p.label = p.label ?? `path_${i + 1}`;
       if (p.nodeTypes != null && typeof p.nodeTypes !== 'string') p.nodeTypes = null;
+      p.hidden = p.hidden === true ? true : undefined;
     });
   }
   // Drop dangling parent references (e.g. hand-edited files).

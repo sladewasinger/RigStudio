@@ -152,9 +152,18 @@ export function autoBindPlacedBone(boneId: string): void {
  * armed until the chain ends; `boneChain` is seeded on the first click (interactions.ts).
  */
 export function startBonePlacement(): void {
+  if (bonePlacementActive()) return;
+  state.mode = 'rig';
+  ctx.drag = null;
+  ctx.snapMarker = null;
   ctx.placingBone = true;
   ctx.boneChain = null;
   if (ctx.svg) ctx.svg.style.cursor = 'crosshair';
+}
+
+/** The single read-side authority for the bone button's visual/ARIA pressed state. */
+export function bonePlacementActive(): boolean {
+  return ctx.placingBone || !!ctx.boneChain;
 }
 
 /**
@@ -186,6 +195,8 @@ export function endBoneChain(): boolean {
   if (!ctx.placingBone && !ch) return false; // nothing armed — let the key fall through
   ctx.placingBone = false;
   ctx.boneChain = null;
+  ctx.drag = null;
+  ctx.snapMarker = null;
   if (ctx.svg) ctx.svg.style.cursor = '';
   if (ch && ch.committed.length > 0) {
     const lastId = ch.committed[ch.committed.length - 1];
@@ -194,4 +205,20 @@ export function endBoneChain(): boolean {
   }
   renderPose();
   return true;
+}
+
+/**
+ * Toggle the bone pen as one state transition. A second activation finishes it using
+ * the same semantics as Enter/Escape: a bare origin disappears history-free, while
+ * already committed segments stay and auto-bind once.
+ */
+export function toggleBonePlacement(): void {
+  if (bonePlacementActive()) endBoneChain();
+  else startBonePlacement();
+}
+
+/** Select a mutually-exclusive canvas tool, first finishing any armed bone chain. */
+export function selectCanvasTool(tool: typeof state.tool): void {
+  endBoneChain();
+  state.tool = tool;
 }

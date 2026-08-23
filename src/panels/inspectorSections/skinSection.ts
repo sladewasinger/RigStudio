@@ -22,7 +22,7 @@ export function buildSkinSection(el: HTMLElement, part: RigPart): void {
   list.textContent = `Deformed by: ${names}. Rotate/translate move the whole limb ` +
     '(the bones ride along); bend at the joints with the IK tool or by posing the ' +
     'bones. Scale/skew and the SHAPE come from the bones, so those handles stay off. ' +
-    'Exports render bound parts rigidly.';
+    'Rive exports preserve bone deformation; Lottie currently exports the bind pose.';
   el.appendChild(list);
 
   const actions = document.createElement('div');

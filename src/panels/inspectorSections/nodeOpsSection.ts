@@ -2,7 +2,8 @@
 import { state, notify, selectedPart, RigPart, chainBonesOfPart } from '../../core/model';
 import {
   hasSelectedNode, applyNodeOp, NodeOp, selectedNodeCount, primaryNodeType,
-  selectedNodesType, canJoinNodes, canDeleteSegment, joinSelectedNodes, deleteSelectedSegment,
+  selectedNodesType, canDeleteSelectedNodes, deleteSelectedNodes,
+  canJoinNodes, canDeleteSegment, joinSelectedNodes, deleteSelectedSegment,
   bindSelectedNodesToBone,
 } from '../../view';
 import { checkpoint } from '../../core/history';
@@ -84,6 +85,7 @@ export function buildNodeOpsSection(el: HTMLElement): void {
   grid2.className = 'align-grid';
   const joinOk = canJoinNodes();
   const delOk = canDeleteSegment();
+  const deleteNodesOk = canDeleteSelectedNodes();
   const structBtn = (text: string, title: string, ok: boolean, run: () => void) => {
     const b = document.createElement('button');
     b.textContent = text;
@@ -92,6 +94,11 @@ export function buildNodeOpsSection(el: HTMLElement): void {
     b.onclick = run;
     grid2.appendChild(b);
   };
+  structBtn(
+    'delete nodes',
+    deleteNodesOk ? 'Delete the selected nodes' : 'The selection is required to keep the path valid',
+    deleteNodesOk, () => deleteSelectedNodes(),
+  );
   structBtn(
     'join',
     joinOk ? 'Weld the two selected end nodes into one' : 'Select 2 end nodes',

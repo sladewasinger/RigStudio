@@ -26,6 +26,7 @@ import { ctx, DragState, linearOnly } from '../../context';
 import { pointerInRoot } from '../../coords';
 import { poseTime, chainMatOf, effectivePivot } from '../../pose';
 import { renderPose } from '../../render';
+import { selectPartContainer } from '../../focus';
 import { startIkDrag, startIkDragOnSkinnedArt, updateIkDrag } from '../../ikDrag';
 import { capturePointer, moveTranslate, moveRotate } from '../lifecycle';
 import { GesturePipeline } from '../priority';
@@ -52,7 +53,11 @@ export const ARTWORK_PIPELINE: GesturePipeline = {
       // that is read live in pointermove and pressing an already-selected part is a
       // selection no-op). Clicking an already-selected part keeps the group selected
       // so multi-part drags work.
-      if (ev.shiftKey || ev.ctrlKey || state.selectedPartIds.includes(part.id)) {
+      const hasEnteredChildSelection =
+        state.selectedPathId !== null || ctx.selectedNodes.size > 0 || ctx.selectedNode !== null;
+      if (!ev.shiftKey && !ev.ctrlKey && hasEnteredChildSelection) {
+        selectPartContainer(part.id);
+      } else if (ev.shiftKey || ev.ctrlKey || state.selectedPartIds.includes(part.id)) {
         selectPart(part.id, true);
       } else {
         selectPart(part.id);

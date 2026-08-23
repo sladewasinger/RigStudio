@@ -33,6 +33,8 @@ export interface RigPath {
   stroke: string | null;
   strokeWidth: number;
   strokeOpacity: number;
+  /** Layers-object visibility. Imported from SVG display/visibility and editable via its eye. */
+  hidden?: boolean;
   /** Verbatim SVG transform accumulated from ancestors between the part group and this path. */
   transform: string;
 }

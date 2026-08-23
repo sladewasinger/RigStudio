@@ -99,24 +99,20 @@ export function spliceNodeTypesForBake(path: RigPath, cmds: PathCmd[]): void {
 /**
  * Ctrl+click a node: delete it (Alt+click-to-insert-after-a-node retired — CLAUDE.md
  * item 1, see `view/interactions/pipelines/node.ts`; exact-point insert on a SEGMENT
- * now lives in `insertNodeOnSegment` below, driven by `nodesBendMarquee.ts`). Refuses
- * an M (a path's start can't be spliced out this way) and a seam pair's own indexes
- * (CLAUDE.md item 3 — the coincident pair "splits ONLY via the explicit delete-segment/
- * open-path ops", never an implicit single-node delete).
+ * now lives in `insertNodeOnSegment` below, driven by `nodesBendMarquee.ts`). Uses the
+ * same validated deletion path as Delete/Backspace and the Inspector button.
  */
 export function deleteNode(d: Extract<DragState, { kind: 'node' }>): void {
-  const path = d.part.paths.find((p) => p.id === d.pathId);
-  if (!path) return;
-  const cmds = parsePath(path.d);
-  if (
-    cmds.length <= 3 || cmds[d.cmdIndex].cmd === 'M' || seamPartnerIndex(cmds, d.cmdIndex) != null
-  ) return;
-  let nodeTypes = path.nodeTypes ? ensureNodeTypes(path) : null;
-  const ni = nodeIndexOf(cmds, d.cmdIndex);
-  cmds.splice(d.cmdIndex, 1);
-  if (nodeTypes) nodeTypes = nodeTypes.slice(0, ni) + nodeTypes.slice(ni + 1);
-  applyStructuralEdit(d.part, path, { cmds, nodeTypes });
-  renderOverlay();
+  const previous = new Set(ctx.selectedNodes);
+  const previousPrimary = ctx.selectedNode;
+  ctx.selectedNodes.clear();
+  ctx.selectedNodes.add(`${d.pathId}|${d.cmdIndex}`);
+  ctx.selectedNode = { pathId: d.pathId, cmdIndex: d.cmdIndex };
+  if (!deleteSelectedNodes()) {
+    ctx.selectedNodes = previous;
+    ctx.selectedNode = previousPrimary;
+    renderOverlay();
+  }
 }
 
 /** De Casteljau split of a single cubic at parameter `t` (0..1). */
@@ -172,43 +168,87 @@ export function insertNodeOnSegment(
   return true;
 }
 
-/** Delete every selected node (kept above each path's minimum). Main wires Delete. */
-export function deleteSelectedNodes(): boolean {
-  const part = selectedPart();
-  if (!part || ctx.selectedNodes.size === 0) return false;
+interface NodeDeletionPlan { path: RigPath; piece: PathPiece; }
+
+function deletionPiece(path: RigPath, indexes: Iterable<number>): PathPiece | null {
+  const cmds = parsePath(path.d);
+  const selected = new Set(indexes);
+  if (selected.size === 0) return null;
+  for (const idx of [...selected]) {
+    const partner = seamPartnerIndex(cmds, idx);
+    if (partner != null) selected.add(partner);
+  }
+  const sourceTypes = path.nodeTypes ? ensureNodeTypes(path) : null;
+  let types = '';
+  const out: PathCmd[] = [];
   let changed = false;
+  let start = 0;
+  while (start < cmds.length) {
+    if (cmds[start].cmd !== 'M') return null;
+    let end = start + 1;
+    while (end < cmds.length && cmds[end].cmd !== 'M') end++;
+    const closed = cmds[end - 1]?.cmd === 'Z';
+    const nodeIndexes: number[] = [];
+    for (let i = start; i < end; i++) if (cmds[i].cmd !== 'Z') nodeIndexes.push(i);
+    const requested = nodeIndexes.filter((i) => selected.has(i));
+    if (requested.length === 0) {
+      out.push(...cmds.slice(start, end).map((c) => ({ ...c })));
+      if (sourceTypes) types += nodeIndexes.map((i) => sourceTypes[nodeIndexOf(cmds, i)]).join('');
+      start = end;
+      continue;
+    }
+    const kept = nodeIndexes.filter((i) => !selected.has(i));
+    const minimum = closed ? 3 : 2;
+    if (kept.length < minimum) {
+      out.push(...cmds.slice(start, end).map((c) => ({ ...c })));
+      if (sourceTypes) types += nodeIndexes.map((i) => sourceTypes[nodeIndexOf(cmds, i)]).join('');
+      start = end;
+      continue;
+    }
+    changed = true;
+    const first = cmds[kept[0]] as Exclude<PathCmd, { cmd: 'Z' }>;
+    out.push({ cmd: 'M', x: first.x, y: first.y });
+    for (const i of kept.slice(1)) out.push({ ...cmds[i] });
+    if (closed) out.push({ cmd: 'Z' });
+    if (sourceTypes) types += kept.map((i) => sourceTypes[nodeIndexOf(cmds, i)]).join('');
+    start = end;
+  }
+  return changed ? { cmds: out, nodeTypes: sourceTypes ? types : null } : null;
+}
+
+function selectedDeletionPlans(part: RigPart): NodeDeletionPlan[] {
   const byPath = new Map<string, number[]>();
   for (const key of ctx.selectedNodes) {
     const { pathId, cmdIndex } = parseNodeKey(key);
     if (!byPath.has(pathId)) byPath.set(pathId, []);
     byPath.get(pathId)!.push(cmdIndex);
   }
+  const plans: NodeDeletionPlan[] = [];
   for (const [pathId, indexes] of byPath) {
     const path = part.paths.find((p) => p.id === pathId);
     if (!path) continue;
-    const cmds = parsePath(path.d);
-    let list = path.nodeTypes ? ensureNodeTypes(path) : null;
-    let touched = false;
-    // Highest index first so earlier indexes stay valid while splicing. A seam pair
-    // (CLAUDE.md item 3) is skipped here too — same rule as the single-node delete
-    // above: it splits ONLY via the explicit delete-segment/open-path ops.
-    for (const idx of [...indexes].sort((a, b) => b - a)) {
-      if (
-        cmds.length <= 3 || !cmds[idx] || cmds[idx].cmd === 'M'
-        || seamPartnerIndex(cmds, idx) != null
-      ) continue;
-      const ni = nodeIndexOf(cmds, idx);
-      cmds.splice(idx, 1);
-      if (list) list = list.slice(0, ni) + list.slice(ni + 1);
-      touched = true;
-    }
-    if (touched) {
-      applyStructuralEdit(part, path, { cmds, nodeTypes: list });
-      changed = true;
-    }
+    const piece = deletionPiece(path, indexes);
+    if (piece) plans.push({ path, piece });
   }
-  if (changed) renderOverlay();
-  return changed;
+  return plans;
+}
+
+export function canDeleteSelectedNodes(): boolean {
+  const part = selectedPart();
+  return !!part && selectedDeletionPlans(part).length > 0;
+}
+
+/** Delete selected nodes without allowing an open/closed subpath to become invalid. */
+export function deleteSelectedNodes(): boolean {
+  const part = selectedPart();
+  if (!part || ctx.selectedNodes.size === 0) return false;
+  const plans = selectedDeletionPlans(part);
+  if (plans.length === 0) return false;
+  checkpoint();
+  for (const { path, piece } of plans) applyStructuralEdit(part, path, piece);
+  renderPose();
+  notify();
+  return true;
 }
 
 // ---- Structural node ops: break a segment, weld/bridge two ends (inspector buttons) ----

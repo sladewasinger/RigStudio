@@ -36,4 +36,5 @@ export type { NodeBindingInfo } from './rigOpsNodeBinding';
 
 export {
   autoBindPlacedBone, startBonePlacement, cancelBonePlacement, endBoneChain,
+  bonePlacementActive, toggleBonePlacement, selectCanvasTool,
 } from './rigOpsPlacement';

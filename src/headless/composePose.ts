@@ -67,7 +67,7 @@ function paintRunTag(part: RigPart, run: PaintRun, t: number): string {
   const opacity = Math.min(1, Math.max(0, effectiveOpacity(part, t)));
   if (opacity < 1) attrs.push(`opacity="${opacity}"`);
   const pathById = new Map(part.paths.map((p) => [p.id, p]));
-  const paths = run.pathIds.map((pid) => pathById.get(pid)).filter((p): p is RigPath => !!p).map(pathTag).join('');
+  const paths = run.pathIds.map((pid) => pathById.get(pid)).filter((p): p is RigPath => !!p && !p.hidden).map(pathTag).join('');
   return `<g ${attrs.join(' ')}>${paths}</g>`;
 }
 

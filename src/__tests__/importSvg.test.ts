@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { importSvg } from '../io/importSvg';
+import { deserializeDoc, serializeDoc } from '../core/model';
 import { applyMat, matrixOfTransform, multiply } from '../geometry/transforms';
 // eslint-disable-next-line import/no-unresolved
 import GIRL_SVG from '../../public/girl_example.svg?raw';
@@ -163,6 +164,92 @@ describe('importSvg', () => {
       expect(part.parentId).toBeNull();
     }
     expect(doc.clips).toEqual([{ name: 'idle', duration: 2000, tracks: [] }]);
+  });
+});
+
+describe('importSvg visibility cascade', () => {
+  const byLabel = (source: string, label: string) =>
+    importSvg(svg(source), 'visibility.svg').parts.find((part) => part.label === label)!;
+
+  it('imports direct presentation attributes and inline Inkscape display styles', () => {
+    const source =
+      `<g inkscape:label="attribute" display="none">${LEAF}</g>` +
+      `<g inkscape:label="inline" style="fill:#fff; display: none">${LEAF}</g>` +
+      `<g inkscape:label="collapsed" visibility="collapse">${LEAF}</g>` +
+      `<g inkscape:label="later">${LEAF}</g>`;
+    expect(byLabel(source, 'attribute').hidden).toBe(true);
+    expect(byLabel(source, 'inline').hidden).toBe(true);
+    expect(byLabel(source, 'collapsed').hidden).toBe(true);
+    expect(byLabel(source, 'later').hidden).toBeUndefined();
+  });
+
+  it('carries a hidden unwrapped Inkscape layer onto its imported root parts', () => {
+    const doc = importSvg(svg(
+      `<g inkscape:groupmode="layer" style="display:none">` +
+        `<g inkscape:label="arm">${LEAF}</g><g inkscape:label="leg">${LEAF}</g>` +
+      `</g><g inkscape:label="body">${LEAF}</g>`), 'layer.svg');
+    expect(doc.parts.map((part) => [part.label, part.hidden])).toEqual([
+      ['arm', true], ['leg', true], ['body', undefined],
+    ]);
+  });
+
+  it('inherits visibility:hidden but honors a descendant visibility:visible override', () => {
+    const doc = importSvg(svg(
+      `<g inkscape:label="holder" visibility="hidden">` +
+        `<path id="hidden-own" d="M0,0 L10,0"/>` +
+        `<g inkscape:label="inherited">${LEAF}</g>` +
+        `<g inkscape:label="override" visibility="visible">${LEAF}</g>` +
+      `</g>`), 'inherit.svg');
+    const holder = doc.parts.find((part) => part.label === 'holder')!;
+    const inherited = doc.parts.find((part) => part.label === 'inherited')!;
+    const override = doc.parts.find((part) => part.label === 'override')!;
+    expect(holder.hidden).toBeUndefined();
+    expect(holder.paths[0].hidden).toBe(true);
+    expect(inherited.hidden).toBe(true);
+    expect(override.hidden).toBeUndefined();
+    expect(override.paths[0].hidden).toBeUndefined();
+  });
+
+  it('resolves class/id styles, inline precedence and !important without leaking to siblings', () => {
+    const doc = importSvg(svg(
+      `<style>.hidden { display:none } #forced { visibility:hidden !important } ` +
+        `.shown { visibility:visible }</style>` +
+      `<g inkscape:label="class-hidden" class="hidden">${LEAF}</g>` +
+      `<g inkscape:label="inline-wins" class="hidden" style="display:inline">${LEAF}</g>` +
+      `<g inkscape:label="important" id="forced" style="visibility:visible">${LEAF}</g>` +
+      `<g inkscape:label="sibling" class="shown">${LEAF}</g>`), 'css.svg');
+    const state = Object.fromEntries(doc.parts.map((part) => [part.label, part.hidden]));
+    expect(state).toEqual({
+      'class-hidden': true, 'inline-wins': undefined, important: true, sibling: undefined,
+    });
+  });
+
+  it('keeps a directly hidden path editable without hiding its visible sibling', () => {
+    const holder = byLabel(
+      `<g inkscape:label="holder"><path id="off" display="none" d="M0,0 L1,1"/>` +
+      `<path id="on" d="M10,10 L20,20"/></g>`, 'holder');
+    expect(holder.hidden).toBeUndefined();
+    expect(holder.paths.map((path) => [path.label, path.hidden])).toEqual([
+      ['off', true], ['on', undefined],
+    ]);
+    const restored = deserializeDoc(serializeDoc(importSvg(svg(
+      `<g inkscape:label="holder"><path id="off" display="none" d="M0,0 L1,1"/>` +
+      `<path id="on" d="M10,10 L20,20"/></g>`), 'save.svg')));
+    expect(restored.parts[0].paths.map((path) => path.hidden)).toEqual([true, undefined]);
+  });
+
+  it('matches the supplied Pip SVG pattern: alternate arms hidden, sideways arms visible', () => {
+    const doc = importSvg(svg(
+      `<g inkscape:label="body">` +
+        `<g inkscape:label="right_arm_sideways" style="display:inline">${LEAF}</g>` +
+        `<g inkscape:label="leftt_arm_sideways" style="display:inline">${LEAF}</g>` +
+        `<g inkscape:label="left_arm" style="display:none">${LEAF}</g>` +
+        `<g inkscape:label="right_arm" style="display:none">${LEAF}</g>` +
+      `</g>`), 'PIP_MASTER.svg');
+    const hidden = Object.fromEntries(doc.parts.map((part) => [part.label, !!part.hidden]));
+    expect(hidden).toMatchObject({
+      right_arm_sideways: false, leftt_arm_sideways: false, left_arm: true, right_arm: true,
+    });
   });
 });
 

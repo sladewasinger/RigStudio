@@ -17,6 +17,14 @@ export function clearGroupEntry(): void {
   ctx.enteredGroups.clear();
 }
 
+/** Replace an entered child/path with its containing part as the editing target. */
+export function selectPartContainer(partId: string): void {
+  selectPart(partId);
+  state.selectedPathId = null;
+  ctx.selectedNodes.clear();
+  ctx.selectedNode = null;
+}
+
 /**
  * Doc-replace hook (main.ts's afterDocReplaced, the SINGLE doc-swap path incl.
  * loadProjectText/New/Open/Load-sample): every piece of session-only editing state

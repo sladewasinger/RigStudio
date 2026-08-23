@@ -73,6 +73,10 @@ export type DragState =
       /** Effector point in the grabbed bone's own frame (its tip): the FABRIK end-effector
        *  and the overlay target-line / effector-marker anchor. */
       grabLocal: { x: number; y: number };
+      /** Direct child bone axes captured for an INTERNAL-joint drag. After the upstream
+       *  chain solves, each child is counter-rotated to keep this root-space direction,
+       *  so the whole downstream subtree rides the joint without an end-effector snap. */
+      downstreamCarry?: { bone: RigPart; direction: { x: number; y: number } }[];
       /** Live pointer position (root coords) — the FABRIK target, and the drag-time target
        *  line from the effector to the pointer showing how far short a clamped reach falls. */
       current: { x: number; y: number } | null;

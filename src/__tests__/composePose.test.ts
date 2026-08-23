@@ -92,6 +92,16 @@ describe('composePose', () => {
     expect(svg).not.toContain('data-part-id="child"');
   });
 
+  it('excludes a hidden path while keeping its visible sibling in the same part', () => {
+    const hiddenPath = makePath('hidden-path', { hidden: true, d: 'M 1,1 L 2,2' });
+    const visiblePath = makePath('visible-path', { d: 'M 8,8 L 9,9' });
+    const part = makePart('part', { paths: [hiddenPath, visiblePath] });
+    const clip = makeClip({ name: 'c' });
+    const output = composePose(makeDoc([part], [clip]), clip, 0);
+    expect(output).not.toContain(hiddenPath.d);
+    expect(output).toContain(visiblePath.d);
+  });
+
   it('samples keyed opacity onto the group, clamped, and omits the attribute at full opacity', () => {
     const a = makePart('a', { paths: [makePath('a-path')] });
     const clip = makeClip({

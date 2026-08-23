@@ -32,7 +32,7 @@ export {
   applyMirrorConstraint, moveNode, nudgeSelectedNodes, seamPartnerIndex,
 } from './dragMath';
 export {
-  applyStructuralEdit, deleteNode, insertNodeOnSegment, deleteSelectedNodes,
+  applyStructuralEdit, deleteNode, insertNodeOnSegment, deleteSelectedNodes, canDeleteSelectedNodes,
   canDeleteSegment, canJoinNodes, deleteSelectedSegment, joinSelectedNodes,
 } from './structural';
 export {

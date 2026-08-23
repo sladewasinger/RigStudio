@@ -53,6 +53,8 @@ export function applyPathAttrs(el: SVGPathElement, p: RigPath): void {
   // a transform, e.g. an Inkscape rotate/matrix, drifted; transform-less parts didn't).
   if (p.transform) el.setAttribute('transform', p.transform);
   else el.removeAttribute('transform');
+  if (p.hidden) el.setAttribute('visibility', 'hidden');
+  else el.removeAttribute('visibility');
 }
 
 /** Refresh a rendered path's style/geometry after inspector edits. */

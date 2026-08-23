@@ -15,7 +15,11 @@
  * `solveChainIK` derives every segment length from the input points, so no bone-length
  * field is ever consulted for that segment; the tip then follows RIGIDLY beyond the
  * grabbed point exactly as it always has (it's downstream of the same bone rotation, and
- * only rest.rotate is ever written — never pivot/boneTip — so lengths stay byte-exact).
+ * only rotations are written — never pivot/boneTip — so lengths stay byte-exact).
+ * A shared/internal joint adds one direct-manipulation rule: its upstream chain still
+ * solves to the pointer, while direct child axes are counter-rotated to preserve their
+ * root-space pose. The downstream subtree therefore translates with the grabbed joint
+ * instead of inheriting the upstream solve and visually snapping its terminal tip.
  */
 
 import {
@@ -25,7 +29,7 @@ import { applyMat, invertMat, matrixOfTransform } from '../geometry/transforms';
 import { solveChainIK, chainStepDelta, Pt } from '../geometry/ik';
 import { ctx, notifyTimelineOnly, round1 } from './context';
 import { pointerInRoot } from './coords';
-import { poseTime, effectivePivot, fullPoseTransform } from './pose';
+import { poseTime, effectivePivot, effectiveTip, fullPoseTransform } from './pose';
 import { renderPose } from './render';
 
 /**
@@ -73,6 +77,52 @@ export function startIkDrag(effector: RigPart, rootPoint: Pt, ev: PointerEvent):
     active: false,
   };
   try { ctx.svg!.setPointerCapture(ev.pointerId); } catch { /* synthetic */ }
+}
+
+/**
+ * Start a direct drag of a joint that has bones on both sides. FABRIK is intentionally
+ * limited to the upstream chain ending at `parent`'s tip. The direct child axes are
+ * frozen in root space so, after that joint moves, each downstream subtree translates
+ * with it instead of inheriting the solver's accumulated rotation and whipping its tip.
+ */
+function startInternalJointIkDrag(
+  parent: RigPart, rootPoint: Pt, ev: PointerEvent,
+): void {
+  startIkDrag(parent, rootPoint, ev);
+  const d = ctx.drag;
+  if (!d || d.kind !== 'ik') return;
+  const t = poseTime();
+  d.downstreamCarry = (state.doc?.parts ?? [])
+    .filter((part) => part.kind === 'bone' && part.parentId === parent.id && !part.attachedRoot)
+    .flatMap((bone) => {
+      const origin = effectivePivot(bone, t);
+      const tip = effectiveTip(bone, t);
+      return tip ? [{ bone, direction: { x: tip.x - origin.x, y: tip.y - origin.y } }] : [];
+    });
+}
+
+/**
+ * Canonical shared-joint entry point. The same logical joint can be presented as a
+ * parent's tip or its child's origin; resolve either representation to the owning
+ * upstream bone before constructing one identical IK drag state.
+ */
+export function startSharedJointIkDrag(
+  presentedBone: RigPart, endpoint: 'tip' | 'origin', rootPoint: Pt, ev: PointerEvent,
+): boolean {
+  const parts = state.doc?.parts ?? [];
+  const parent = endpoint === 'tip'
+    ? presentedBone
+    : presentedBone.parentId && !presentedBone.attachedRoot
+      ? parts.find((candidate) => candidate.id === presentedBone.parentId && candidate.kind === 'bone')
+      : null;
+  if (!parent) return false;
+  const hasChild = parts.some(
+    (candidate) => candidate.kind === 'bone' && candidate.parentId === parent.id
+      && !candidate.attachedRoot,
+  );
+  if (!hasChild) return false;
+  startInternalJointIkDrag(parent, rootPoint, ev);
+  return true;
 }
 
 /**
@@ -125,6 +175,24 @@ export function updateIkDrag(ev: PointerEvent): void {
       if (setup) bone.rest.rotate = round1(bone.rest.rotate + deltaDeg);
       else {
         setKeyframe(bone.id, 'rotate', round1(channelValue(bone, 'rotate', state.currentTime) + deltaDeg));
+      }
+    }
+    for (const carried of d.downstreamCarry ?? []) {
+      const origin = effectivePivot(carried.bone, t);
+      const tip = effectiveTip(carried.bone, t);
+      if (!tip) continue;
+      const target = {
+        x: origin.x + carried.direction.x,
+        y: origin.y + carried.direction.y,
+      };
+      const deltaDeg = chainStepDelta(origin, tip, origin, target);
+      if (Math.abs(deltaDeg) < 1e-4) continue;
+      if (setup) carried.bone.rest.rotate = round1(carried.bone.rest.rotate + deltaDeg);
+      else {
+        setKeyframe(
+          carried.bone.id, 'rotate',
+          round1(channelValue(carried.bone, 'rotate', state.currentTime) + deltaDeg),
+        );
       }
     }
   }

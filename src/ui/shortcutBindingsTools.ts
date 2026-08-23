@@ -7,7 +7,9 @@
  */
 
 import { state, notify, setSnapEnabled, setFreezeMode, setCleanPreview } from '../core/model';
-import { renderPose, resetView, endBoneChain, zoomBy, startBonePlacement } from '../view';
+import {
+  renderPose, resetView, endBoneChain, zoomBy, toggleBonePlacement, selectCanvasTool,
+} from '../view';
 import { flipAction } from '../panels';
 import { togglePlay } from '../timeline/timeline';
 import { toggleHelp } from './help';
@@ -20,25 +22,25 @@ export const TOOLS_VIEW_BINDINGS: ShortcutBinding[] = [
   {
     id: 'toolSelect',
     patterns: [{ key: 'v', ctrl: false, shift: false, alt: false }],
-    run() { state.tool = 'select'; notify(); renderPose(); },
+    run() { selectCanvasTool('select'); notify(); renderPose(); },
     help: { keys: 'V', description: 'Select tool', context: 'Tools' },
   },
   {
     id: 'toolTranslate',
     patterns: [{ key: 't', ctrl: false, shift: false, alt: false }],
-    run() { state.tool = 'translate'; notify(); renderPose(); },
+    run() { selectCanvasTool('translate'); notify(); renderPose(); },
     help: { keys: 'T', description: 'Translate tool', context: 'Tools' },
   },
   {
     id: 'toolRotate',
     patterns: [{ key: 'r', ctrl: false, shift: false, alt: false }],
-    run() { state.tool = 'rotate'; notify(); renderPose(); },
+    run() { selectCanvasTool('rotate'); notify(); renderPose(); },
     help: { keys: 'R', description: 'Rotate tool', context: 'Tools' },
   },
   {
     id: 'toolIk',
     patterns: [{ key: 'i', ctrl: false, shift: false, alt: false }],
-    run() { state.tool = 'ik'; notify(); renderPose(); },
+    run() { selectCanvasTool('ik'); notify(); renderPose(); },
     help: { keys: 'I', description: 'IK tool — drag a limb end, its parent joints solve to follow', context: 'Tools' },
   },
   {
@@ -51,7 +53,7 @@ export const TOOLS_VIEW_BINDINGS: ShortcutBinding[] = [
     id: 'toolBone',
     patterns: [{ key: 'b', ctrl: false, shift: false, alt: false }],
     mode: 'setup',
-    run() { startBonePlacement(); notify(); },
+    run() { toggleBonePlacement(); notify(); renderPose(); },
     help: {
       keys: 'B',
       description: 'Bone tool — arm a pen-tool bone chain (Setup only; click to place joints, ' +
@@ -68,7 +70,13 @@ export const TOOLS_VIEW_BINDINGS: ShortcutBinding[] = [
   {
     id: 'freezeToggle',
     patterns: [{ key: 'y', ctrl: false, alt: false }],
-    run(ev) { ev.preventDefault(); setFreezeMode(!state.freezeMode); notify(); renderPose(); },
+    run(ev) {
+      ev.preventDefault();
+      endBoneChain();
+      setFreezeMode(!state.freezeMode);
+      notify();
+      renderPose();
+    },
     help: {
       keys: 'Y',
       description: 'Toggle freeze (origin-editing) mode — unlocks pivot / origin / joint dragging ' +

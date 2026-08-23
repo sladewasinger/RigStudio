@@ -34,7 +34,7 @@ import {
 import { checkpoint, undo, redo } from '../core/history';
 import {
   renderPose, refreshSelectedStackingDom, hasSelectedNode, nudgeSelectedNodes,
-  nudgeSelectedParts, selectAllNodes,
+  nudgeSelectedParts, selectAllNodes, endBoneChain,
 } from '../view';
 import { groupAction, ungroupAction } from '../panels';
 import {
@@ -123,13 +123,17 @@ export const FILE_EDIT_BINDINGS: ShortcutBinding[] = [
   {
     id: 'undoRedo',
     patterns: [{ key: 'z', ctrl: true }],
-    run(ev) { ev.preventDefault(); if (ev.shiftKey) redo(); else undo(); },
+    run(ev) {
+      ev.preventDefault();
+      endBoneChain();
+      if (ev.shiftKey) redo(); else undo();
+    },
     help: { keys: 'Ctrl+Z', description: 'Undo (Shift+Ctrl+Z = redo)', context: 'Edit' },
   },
   {
     id: 'redo',
     patterns: [{ key: 'y', ctrl: true }],
-    run(ev) { ev.preventDefault(); redo(); },
+    run(ev) { ev.preventDefault(); endBoneChain(); redo(); },
     help: { keys: 'Ctrl+Shift+Z / Ctrl+Y', description: 'Redo', context: 'Edit' },
   },
   {

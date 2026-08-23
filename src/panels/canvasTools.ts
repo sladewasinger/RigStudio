@@ -17,8 +17,8 @@ import {
   ungroupPart, setSnapEnabled, setFreezeMode, setCleanPreview,
 } from '../core/model';
 import {
-  renderPose, partRootBoxes, registerPart, unregisterPart, startBonePlacement,
-  flipSelected, reorderCanvas,
+  renderPose, partRootBoxes, registerPart, unregisterPart, bonePlacementActive,
+  toggleBonePlacement, selectCanvasTool, endBoneChain, flipSelected, reorderCanvas,
 } from '../view';
 import { checkpoint } from '../core/history';
 import { icon, iconButton, ICON_PATHS } from './icons';
@@ -110,6 +110,7 @@ export function buildCanvasTools(el: HTMLElement): void {
   // Tool switcher (both modes): select / translate / rotate / IK, keys V T R I.
   const tools = document.createElement('div');
   tools.className = 'tool-switch';
+  const boneActive = bonePlacementActive();
   const toolDefs: [typeof state.tool, keyof typeof ICON_PATHS, string][] = [
     ['select', 'select', 'Select (V) — Edit drags move, Animate drags rotate'],
     ['translate', 'translate', 'Translate (T) — drag the X/Y arrows or the part'],
@@ -120,9 +121,11 @@ export function buildCanvasTools(el: HTMLElement): void {
     const b = document.createElement('button');
     b.appendChild(icon(ic));
     b.title = title;
-    if (state.tool === tool) b.classList.add('active');
+    const active = !boneActive && state.tool === tool;
+    if (active) b.classList.add('active');
+    b.setAttribute('aria-pressed', String(active));
     b.onclick = () => {
-      state.tool = tool;
+      selectCanvasTool(tool);
       notify();
       renderPose();
     };
@@ -151,6 +154,7 @@ export function buildCanvasTools(el: HTMLElement): void {
     'Off by default so origins never drag by accident.';
   if (state.freezeMode) freezeBtn.classList.add('active');
   freezeBtn.onclick = () => {
+    endBoneChain();
     setFreezeMode(!state.freezeMode);
     notify();
     renderPose();
@@ -206,9 +210,12 @@ export function buildCanvasTools(el: HTMLElement): void {
       'Draw a bone chain: click to set the first joint, click again for each bone tip — the ' +
       'chain grows joint-to-joint. Enter / Escape / double-click finishes and auto-binds the limb.',
       () => {
-        startBonePlacement();
-        boneBtn.classList.add('armed');
+        toggleBonePlacement();
+        notify();
+        renderPose();
       }), true);
+    boneBtn.classList.toggle('armed', boneActive);
+    boneBtn.setAttribute('aria-pressed', String(boneActive));
   }
   el.appendChild(controls);
 

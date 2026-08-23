@@ -4,7 +4,7 @@ import {
 } from './core/model';
 import { importSvg } from './io/importSvg';
 import {
-  buildCanvas, renderPose, resetView, cancelBonePlacement,
+  buildCanvas, renderPose, resetView, cancelBonePlacement, endBoneChain,
   enterGroupsFor, clearGroupEntry, resetInteractionState, resetSkinRenderWarnings,
   artworkUnderPointer,
 } from './view';
@@ -318,12 +318,21 @@ canvasEl.addEventListener('contextmenu', (ev) => {
 
 // ---- History wiring ----
 
-setRestoreHandler(() => buildCanvas(canvasEl));
+setRestoreHandler(() => {
+  resetInteractionState();
+  buildCanvas(canvasEl);
+});
 
 const undoBtn = document.getElementById('btn-undo') as HTMLButtonElement;
 const redoBtn = document.getElementById('btn-redo') as HTMLButtonElement;
-undoBtn.onclick = undo;
-redoBtn.onclick = redo;
+undoBtn.onclick = () => {
+  endBoneChain();
+  undo();
+};
+redoBtn.onclick = () => {
+  endBoneChain();
+  redo();
+};
 document.addEventListener('rig-history-changed', () => {
   undoBtn.disabled = !canUndo();
   redoBtn.disabled = !canRedo();

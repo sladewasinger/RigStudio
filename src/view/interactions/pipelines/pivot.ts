@@ -16,6 +16,7 @@ import { snapPoint } from '../../../geometry/snap';
 import { renderPose } from '../../render';
 import { pivotSnapCandidates } from '../../snapping';
 import { aimBoneAtTip, refreshBindForChain } from '../../rigOps';
+import { startSharedJointIkDrag, updateIkDrag } from '../../ikDrag';
 import { capturePointer } from '../lifecycle';
 import { GesturePipeline } from '../priority';
 
@@ -49,6 +50,10 @@ export const PIVOT_PIPELINE: GesturePipeline = {
       selectPart(part.id);
       notify();
     }
+    if (state.tool === 'ik' && parentBone) {
+      startSharedJointIkDrag(part, 'origin', pointerInRoot(ev), ev);
+      return 'handled';
+    }
     const d: DragState = {
       kind: 'pivot',
       part,
@@ -61,6 +66,10 @@ export const PIVOT_PIPELINE: GesturePipeline = {
     return d;
   },
   move(ev, drag) {
+    if (drag.kind === 'ik') {
+      updateIkDrag(ev);
+      return;
+    }
     if (drag.kind !== 'pivot') return;
     const d = drag;
     const p = pointerInRoot(ev);

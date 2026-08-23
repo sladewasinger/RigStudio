@@ -123,6 +123,16 @@ input[type='number'],
 }
 #layers { border-right: 1px solid var(--divider); }
 #inspector { border-left: 1px solid var(--divider); }
+.inspector-sticky-tools {
+  position: sticky;
+  top: calc(-1 * var(--sp-3));
+  z-index: 6;
+  margin: calc(-1 * var(--sp-3)) calc(-1 * var(--sp-3)) var(--sp-2);
+  padding: var(--sp-3) var(--sp-3) 1px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--divider);
+}
+.inspector-sticky-tools .inspector-mode-row { margin-bottom: var(--sp-2); }
 
 /* ---- Layers panel width splitter (sibling of #layers, between it and #canvas-col;
    element created at runtime by panels/layersResize.ts) — mirrors #timeline-splitter's

@@ -5,7 +5,7 @@
  * (fill/stroke) sections, and mounts the Claude assistant panel at the bottom.
  */
 import { state, notify, selectedPart } from '../../core/model';
-import { renderPose } from '../../view';
+import { endBoneChain, renderPose } from '../../view';
 import { buildBoneRestSection } from './boneSection';
 import { buildPartTransformFields, buildRootSection } from './transformSection';
 import { buildStackingRow } from './stackingSection';
@@ -19,9 +19,12 @@ import { buildEmptyState } from '../../ui/emptyState';
 // ---- Inspector ----
 
 export function buildInspector(el: HTMLElement): void {
-  el.innerHTML = '<h2>Inspector</h2>';
+  el.innerHTML = '';
+  const heading = document.createElement('h2');
+  heading.textContent = 'Inspector';
   const doc = state.doc;
   if (!doc) {
+    el.appendChild(heading);
     buildEmptyState(el, 'Nothing to inspect yet — open an SVG or a saved project first.');
     return;
   }
@@ -29,20 +32,27 @@ export function buildInspector(el: HTMLElement): void {
 
   // Canvas tool switch (node editing is a Setup activity).
   if (setup) {
+    const stickyTools = document.createElement('div');
+    stickyTools.className = 'inspector-sticky-tools';
+    stickyTools.appendChild(heading);
     const modeRow = document.createElement('div');
-    modeRow.className = 'row';
+    modeRow.className = 'row inspector-mode-row';
     for (const mode of ['rig', 'nodes'] as const) {
       const b = document.createElement('button');
       b.textContent = mode === 'rig' ? 'Pose tool' : 'Node editing';
       if (state.mode === mode) b.classList.add('active');
       b.onclick = () => {
+        endBoneChain();
         state.mode = mode;
         notify();
         renderPose();
       };
       modeRow.appendChild(b);
     }
-    el.appendChild(modeRow);
+    stickyTools.appendChild(modeRow);
+    el.appendChild(stickyTools);
+  } else {
+    el.appendChild(heading);
   }
 
   const part = selectedPart();

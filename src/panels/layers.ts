@@ -15,7 +15,7 @@ import {
   state, notify, selectedPart, selectPart, ancestorChain, effectiveChildOrder, RigPart,
   RigPath,
 } from '../core/model';
-import { renderPose, enterGroupsFor } from '../view';
+import { renderPose, enterGroupsFor, selectPartContainer, updatePathAttrs } from '../view';
 import { checkpoint } from '../core/history';
 import { showContextMenu } from '../ui/contextMenu';
 import { buildPartContextMenu } from '../ui/actions';
@@ -214,7 +214,8 @@ function partNode(part: RigPart, visible: Set<string> | null): HTMLElement {
         state.selectedPartId = state.selectedPartIds[state.selectedPartIds.length - 1] ?? null;
       }
     } else {
-      selectPart(part.id, ev.shiftKey || ev.ctrlKey);
+      if (ev.shiftKey || ev.ctrlKey) selectPart(part.id, true);
+      else selectPartContainer(part.id);
       // Picking a part in the tree opens its groups so canvas drags hit IT, not them.
       enterGroupsFor(part.id);
     }
@@ -272,12 +273,26 @@ function pathNode(part: RigPart, path: RigPath): HTMLElement {
   pathRow.className = 'layer-row path';
   pathRow.dataset.pathId = path.id; // unambiguous lookup, mirrors row.dataset.partId above
   if (state.selectedPathId === path.id) pathRow.classList.add('selected');
+  if (path.hidden) pathRow.classList.add('hidden-part');
   pathRow.title = path.label; // full label on hover, same rationale as the part row
   pathRow.innerHTML = `<span class="path-icon">◇</span>`;
   const pathName = document.createElement('span');
   pathName.className = 'layer-name';
   pathName.textContent = path.label;
   pathRow.appendChild(pathName);
+  const eye = document.createElement('button');
+  eye.type = 'button';
+  eye.className = 'layer-eye';
+  eye.appendChild(icon(path.hidden ? 'eyeClosed' : 'eyeOpen'));
+  eye.title = path.hidden ? 'Show this object' : 'Hide this object';
+  eye.onclick = (event) => {
+    event.stopPropagation();
+    checkpoint();
+    path.hidden = path.hidden ? undefined : true;
+    updatePathAttrs(path);
+    notify();
+  };
+  pathRow.appendChild(eye);
   pathRow.onclick = () => {
     // Enter the part and select this object — the inspector shows its style and
     // node editing scopes to it.

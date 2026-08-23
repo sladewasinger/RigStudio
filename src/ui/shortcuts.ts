@@ -37,6 +37,12 @@ function matchesBinding(b: ShortcutBinding, ev: KeyboardEvent): boolean {
   return b.patterns.some((p) => matchesPattern(p, ev));
 }
 
+export function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return true;
+  return target.isContentEditable || target.closest('[contenteditable]') !== null;
+}
+
 /** Wires the single global keydown listener. Idempotent guard is unnecessary — main.ts
  *  calls this exactly once at bootstrap, same as the pre-redesign code's one listener. */
 export function installShortcuts(): void {
@@ -59,7 +65,7 @@ export function installShortcuts(): void {
     //    app underneath (e.g. Ctrl+S while the save-filename dialog itself is showing).
     if (isMenuOpen() || isDialogOpen()) return;
     // 3. Typing in a form field blocks every shortcut below.
-    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+    if (isEditableShortcutTarget(target)) return;
     // 4. Help overlay owns Escape while it's open — this must win over every registry
     //    entry below (incl. the Escape cascade) so closing it never also fires a tier.
     if (isHelpOpen() && ev.key === 'Escape') {

@@ -11,7 +11,7 @@ import { pointerInRoot } from '../../coords';
 import { poseTime } from '../../pose';
 import { renderPose } from '../../render';
 import { aimBoneAtTip, refreshBindForChain } from '../../rigOps';
-import { startIkDrag, updateIkDrag } from '../../ikDrag';
+import { startIkDrag, startSharedJointIkDrag, updateIkDrag } from '../../ikDrag';
 import { capturePointer } from '../lifecycle';
 import { GesturePipeline } from '../priority';
 
@@ -21,11 +21,12 @@ export const BONE_TIP_PIPELINE: GesturePipeline = {
     if (!hit.isBoneTip) return null;
     const part = selectedPart();
     if (!part) return 'handled';
-    // IK tool: even a direct tip-handle press solves the WHOLE chain (Fix 2) instead of
-    // the single-bone aim+stretch below — grabbing the tip is just the on-axis case of a
-    // grab-point-relative IK drag (startIkDrag reads the actual press position).
+    // IK tool: a terminal tip solves the whole chain (Fix 2). A shared/internal tip
+    // solves only its upstream side and carries the downstream pose, since treating that
+    // middle joint as the terminal effector makes the remaining chain whip around it.
     if (state.tool === 'ik') {
-      startIkDrag(part, pointerInRoot(ev), ev);
+      const point = pointerInRoot(ev);
+      if (!startSharedJointIkDrag(part, 'tip', point, ev)) startIkDrag(part, point, ev);
       notify();
       return 'handled';
     }

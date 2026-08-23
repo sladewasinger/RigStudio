@@ -107,7 +107,7 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
     // Lottie draws the first shape item on top, SVG paints the last one on top. A
     // Layers-eye-hidden part (or one riding a hidden ancestor) emits NO shapes — see the
     // module doc comment for why the layer itself stays (parenting/transform intact).
-    const shapes = isEffectivelyHidden(part) ? [] : [...part.paths].reverse().flatMap((p) => {
+    const shapes = isEffectivelyHidden(part) ? [] : part.paths.filter((p) => !p.hidden).reverse().flatMap((p) => {
       const group = shapeGroup(part, p, ox, oy);
       return group ? [group] : [];
     });

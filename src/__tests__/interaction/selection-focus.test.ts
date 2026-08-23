@@ -2,9 +2,11 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { parsePath } from '../../geometry/paths';
 import { selectedNodeCount } from '../../view';
 import { groupAction } from '../../panels';
+import { canUndo } from '../../core/history';
 import {
   bootRig, resetRig, state, partByLabel, clientPointOnPart, gestureDrag, click,
   fullDblClick, pressKey, enterNodeMode, partGroupEl, count, overlayCount,
+  overlayEl, clientCenterOf, notify, renderPose,
 } from './harness';
 
 beforeAll(bootRig);
@@ -187,5 +189,59 @@ describe('scenario 11 — Layers panel range + toggle selection (P3)', () => {
     const mid = rows2.find((r) => idOf(r) === id1)!;
     clickRow(mid, { ctrlKey: true });
     expect(new Set(state.selectedPartIds)).toEqual(new Set([id0, id2]));
+  });
+});
+
+describe('container selection replaces entered child selection', () => {
+  function selectLegNode(): string {
+    const pathId = legId();
+    enterNodeMode('left_leg', pathId);
+    const node = overlayEl().querySelector<SVGElement>(
+      `[data-role="node"][data-path-id="${pathId}"][data-field="x"]`,
+    )!;
+    const point = clientCenterOf(node);
+    click(point.x, point.y);
+    expect(selectedNodeCount()).toBeGreaterThan(0);
+    return pathId;
+  }
+
+  it('a plain Layers parent-row click clears its path and node descendants without history', () => {
+    const part = partByLabel('left_leg');
+    const pathId = selectLegNode();
+    const pathLabel = part.paths.find((path) => path.id === pathId)!.label;
+    expect(canUndo()).toBe(false);
+
+    document.querySelector<HTMLElement>(
+      `#layers .layer-row.part[data-part-id="${part.id}"]`,
+    )!.click();
+
+    expect(state.selectedPartId).toBe(part.id);
+    expect(state.selectedPartIds).toEqual([part.id]);
+    expect(state.selectedPathId).toBeNull();
+    expect(selectedNodeCount()).toBe(0);
+    expect([...document.querySelectorAll('#inspector h3')].map((el) => el.textContent))
+      .not.toContain(`object: ${pathLabel}`);
+    expect(canUndo()).toBe(false);
+  });
+
+  it('a plain canvas parent click matches Layers, while Shift keeps additive child scope', () => {
+    const part = partByLabel('left_leg');
+    const pathId = selectLegNode();
+    state.mode = 'rig';
+    notify();
+    renderPose();
+    let point = clientPointOnPart('left_leg');
+
+    click(point.x, point.y, { shiftKey: true });
+    expect(state.selectedPathId).toBe(pathId);
+    expect(selectedNodeCount()).toBeGreaterThan(0);
+
+    point = clientPointOnPart('left_leg');
+    click(point.x, point.y);
+    expect(state.selectedPartId).toBe(part.id);
+    expect(state.selectedPartIds).toEqual([part.id]);
+    expect(state.selectedPathId).toBeNull();
+    expect(selectedNodeCount()).toBe(0);
+    expect(canUndo()).toBe(false);
   });
 });

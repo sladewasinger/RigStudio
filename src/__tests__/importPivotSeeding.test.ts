@@ -102,6 +102,14 @@ describe('seedImportedPivots resolves hints to geometry centers', () => {
     expect(doc.parts[0].pivot).toEqual({ x: 50 + 5, y: 70 - 7 });
   });
 
+  it('excludes hidden imported paths from the default geometry center', () => {
+    const doc = importSvg(svg(
+      `<g inkscape:label="a"><rect id="visible" x="40" y="60" width="20" height="20"/>` +
+      `<rect id="hidden" x="200" y="200" width="40" height="40" style="display:none"/></g>`), 't');
+    seedImportedPivots(doc);
+    expect(doc.parts[0].pivot).toEqual({ x: 50, y: 70 });
+  });
+
   it('leaves a rotation-recovered part (no hint) untouched, and is idempotent', () => {
     const doc: RigDoc = {
       name: 't', viewBox: { x: 0, y: 0, w: 300, h: 300 }, rootPivot: { x: 0, y: 0 }, clips: [],

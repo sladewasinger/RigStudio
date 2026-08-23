@@ -13,7 +13,6 @@
  */
 
 import { selectedPart } from '../../../core/model';
-import { checkpoint } from '../../../core/history';
 import { parsePath } from '../../../geometry/paths';
 import { ctx, DragState, nodeKey } from '../../context';
 import { renderOverlay } from '../../overlay';
@@ -63,7 +62,6 @@ export const NODE_PIPELINE: GesturePipeline = {
       active: false,
     };
     if (ev.ctrlKey) {
-      checkpoint();
       deleteNode(nodeDrag);
       return 'handled';
     }

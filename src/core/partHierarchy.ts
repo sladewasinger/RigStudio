@@ -240,6 +240,7 @@ export function memberGeometryPivot(members: RigPart[], parts: RigPart[]): Vec2 
       if (!ids.has(part.id) || part.paths.length === 0 || isEffectivelyHidden(part)) continue;
       const partMatrix = part.skin ? IDENTITY : restRenderMatrixOf(parts, part);
       for (const path of part.paths) {
+        if (path.hidden) continue;
         const m = path.transform ? multiply(partMatrix, matrixOfTransform(path.transform)) : partMatrix;
         bounds = unionBounds(bounds, pathBoundsThroughMatrix(path.d, m));
       }
