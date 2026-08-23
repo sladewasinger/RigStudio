@@ -39,8 +39,8 @@
  *     bone falls back to the old rigid emission (skin.ts's buildSkinPlan).
  *
  * Export-completions wave (2026-07-13): keyed `z` (draw order) via DrawRules/DrawTarget
- * (drawRules.ts — its header has the full mechanism + citations + the faithful-subset
- * documented limits), keyed `opacity` via per-frame Fill/Stroke SolidColor alpha (NOT
+ * (drawRules.ts now materializes the editor's exact paint rank at every z event), keyed
+ * `opacity` via per-frame Fill/Stroke SolidColor alpha (NOT
  * Node.opacity — see animation.ts's header for why), and hidden parts (`RigPart.hidden`)
  * now FULLY excluded (no Node either, not just no Shape) matching the live renderer and
  * headless/composePose.ts exactly.
@@ -51,7 +51,7 @@ import { assemble, Scene } from './writer';
 import { emitAnimations, OpacityColorTarget } from './animation';
 import { emitStateMachines } from './stateMachine';
 import { drawableEmissionOrder } from './drawableOrder';
-import { setupDrawRules } from './drawRules';
+import { DrawableShape, setupDrawRules } from './drawRules';
 import { bakedMatrix, pathToLocalSubpaths } from './geometry';
 import {
   attachPinAnchor, buildSkinPlan, emitSkin, emitVertexWeight, SkinPlan, subpathWeights,
@@ -214,11 +214,9 @@ export function exportRiv(doc: RigDoc): Uint8Array {
   // only through its own runs, but kept as a direct guard since the emission order
   // visits ALL parts independently of the Node pass above).
   //
-  // partShapeIndex records, per part, the component index of the FIRST Shape emitted
-  // for it (its topmost run's topmost path) — used as the anchor drawable for OTHER
-  // parts' keyed z draw order. Pre-U3 a part's shapes were always one contiguous
-  // file-order block; a MULTI-RUN part's no longer are, which narrows what that single
-  // anchor can express — see the U3 divergence note in drawRules.ts's header.
+  // drawableShapes records every emitted Shape with its owning path. The emission walk
+  // is file order (topmost first), so it is reversed below into the editor's bottom→top
+  // paint order before drawRules.ts builds its exact per-drawable rank machinery.
   // opacityTargets records every Fill/Stroke SolidColor this part owns (with its base
   // path opacity) so a KEYED `opacity` channel can animate them (animation.ts).
   //
@@ -228,7 +226,7 @@ export function exportRiv(doc: RigDoc): Uint8Array {
   // once and before any of the part's paths — running it per run would mint one anchor
   // per run. For single-run parts (every synthesized doc) this is byte-for-byte the
   // pre-U3 per-part resolution.
-  const partShapeIndex = new Map<string, number>();
+  const emittedDrawableShapes: DrawableShape[] = [];
   const opacityTargets = new Map<string, OpacityColorTarget[]>();
   const skinPlans = new Map<string, SkinPlan | null>();
   for (const run of drawableEmissionOrder(doc)) {
@@ -248,7 +246,9 @@ export function exportRiv(doc: RigDoc): Uint8Array {
       // renderers do; reconcileChildOrder repairs it at the next structural op/load.
       if (!rigPath) continue;
       const shapeIndex = emitShape(scene, part, rigPath, partIndex.get(part.id)!, opacityTargets, skinPlan);
-      if (shapeIndex !== null && !partShapeIndex.has(part.id)) partShapeIndex.set(part.id, shapeIndex);
+      if (shapeIndex !== null) {
+        emittedDrawableShapes.push({ partId: part.id, pathId: rigPath.id, shapeIndex });
+      }
     }
   }
 
@@ -256,14 +256,15 @@ export function exportRiv(doc: RigDoc): Uint8Array {
   // Static DrawRules objects only (consumes component indices) — must run after every
   // Node+Shape exists (DrawTarget anchors reference already-emitted Shapes) and before any
   // animation object. Zero overhead for docs that never key `z`: see drawRules.ts.
-  const drawRules = setupDrawRules(scene, doc, partIndex, partShapeIndex);
+  const drawableShapes = emittedDrawableShapes.reverse();
+  const drawRules = setupDrawRules(scene, doc, drawableShapes, rootIndex);
 
   // ---- Animations ----
   // channelSpecs/plan building writes any needed CubicEaseInterpolators (which consume
   // component indices) BEFORE any animation object is emitted; see animation.ts.
   emitAnimations(
     scene, doc, partIndex, rootIndex, rootBaseX, rootBaseY,
-    partShapeIndex, opacityTargets, drawRules, hiddenIds,
+    opacityTargets, drawRules, hiddenIds,
   );
 
   // ---- State machines ----
@@ -280,7 +281,7 @@ export function exportRiv(doc: RigDoc): Uint8Array {
 
 /**
  * One RigPath -> Shape (child of the part node) with PointsPath(s), Fill, Stroke. Returns
- * the Shape's component index (for partShapeIndex/draw-order anchoring), or null when the
+ * the Shape's component index (for exact draw-order planning), or null when the
  * path produced no geometry (degenerate — no Shape was emitted at all).
  *
  * With a `skinPlan`, each PointsPath additionally gets its Skin + Tendons (emitted right
@@ -366,4 +367,3 @@ function pushOpacityTarget(
 // bakedMatrix/pathToLocalSubpaths/toPolar live in ./geometry (moved verbatim in the
 // skinned-part export wave, extended with the per-vertex weight-source records
 // io/riv/skin.ts consumes — see geometry.ts's header).
-

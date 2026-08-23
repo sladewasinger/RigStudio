@@ -23,11 +23,9 @@ be drawn from.
   scale along with descendants, pivot-anchored. If "own paths + descendants
   both scale" feels wrong in testing, it's a one-predicate-site change —
   flag it.
-- **.riv keyed-z + opacity VISUALS** (7155013) — decoder+runtime verified,
-  but on-screen stacking/fade blending needs a real player look (rive.rip).
-  (The "pixel readback is impossible headless" premise is now FALSE — the
-  skinned-export wave found the drawNow flush workaround in riv-check.html —
-  so these could alternatively get automated pixel checks there.)
+- **.riv keyed-opacity VISUALS** (7155013) — decoder+runtime verified; fade
+  blending still deserves a real player look. Keyed-z stacking is now pixel-
+  verified in `riv-check.html` at rest and after the discrete switch.
 - **Skinned-part .riv export on a real rig** (this wave) — the two-bone-bar
   articulation is pixel-verified in @rive-app/canvas headlessly, but a real
   character (bind a limb in the app, export, rive.rip or the Android
@@ -47,16 +45,6 @@ be drawn from.
 
 *Decisions that are Austin's to make — nothing below gets built without his call.*
 
-- **Keyed-z DrawRules vs childOrder slots** (U3, 3e4a71f): the .riv keyed-z
-  planner keeps pre-U3 GLOBAL-order semantics; an INTERLEAVED doc that
-  also keys z can diverge editor-vs-runtime in three narrow ways (scope,
-  anchor granularity, mover granularity — full note in
-  `io/riv/drawRules.ts`'s header). Byte-identical for every synthesized doc;
-  NOW USER-REACHABLE (U4 landed 2026-07-14: fresh imports record true
-  document order and the Layers panel interleaves freely — note PIP itself
-  interleaves at body/face, so keying z on those parts touches the
-  divergence). Decide: redesign the planner slot-aware (per-run targets +
-  sibling-scoped neighbor ranking), or accept the documented divergence.
 - **Bone-deletion cascade vs attachments** (7d4f662): deleting a bone
   cascades its same-chain subtree; `attachedRoot` children DETACH
   world-preserving instead of dying. Say if attachments should cascade too.
@@ -78,8 +66,7 @@ EVERYTHING, the importer preserves SVG document order exactly, exporters
 express it. The two-bucket model (own paths always below children) and its
 import restacking fidelity bug are dead. Remaining non-goals: Lottie stays
 paths-first (frozen exporter, documented) and renderOnion ghosts stay flat
-per-part (editing aid); the keyed-z DrawRules divergence is a live deferred
-decision (see the ledger above).*
+per-part (editing aid).*
 
 - [x] **U1 — model + plumbing (zero behavior change)** (done 2026-07-13,
   03f7489): `RigPart.childOrder`
@@ -349,11 +336,10 @@ the pre-change fixture SHA captured and pinned, both golden pins unmoved, and
 the reversal-dropped mutation fails the main golden pin itself. Interleaved
 docs get correct stacking — pixel-verified in `@rive-app/canvas`
 (riv-check.html's `interleavedStackCheck` sandwich; all six harness checks
-green). KeyedObject.objectId wiring confirmed order-independent. Keyed-z
-DrawRules deliberately keeps global-order semantics — the three narrow
-interleaved+keyed-z divergences (scope, anchor granularity, mover
-granularity) are documented in drawRules.ts's header and deferred (see the
-Deferred decisions ledger). Lottie: documented paths-first limitation only
+green). KeyedObject.objectId wiring confirmed order-independent. Keyed-z was
+later completed with union-event, sibling-scoped `flattenPaintOrder` planning
+and per-drawable fixed-rank anchors, covering nested and interleaved parts
+without DrawTarget dependency cycles. Lottie: documented paths-first limitation only
 (frozen). The inspector stacking UI stays on global drawOrder (U4-adjacent,
 not in this wave). Gates: build clean, 797 unit / 306 interaction.*
 
@@ -1410,8 +1396,7 @@ Follow-ups from live bones testing (queued behind the freeze-semantics wave):
   features.
 - [x] **Export wave** (7155013): .riv keyed z draw order via DrawTarget/DrawRules;
   .riv opacity keys (Lottie frozen per the user's ruling); FULL hidden-subtree
-  exclusion in .riv; verified against the official @rive-app/canvas runtime
-  (on-screen visuals remain on Austin's review list).
+  exclusion in .riv; verified against the official @rive-app/canvas runtime.
 
 *Contradiction resolved by the orchestrator 2026-07-13: these three were shipped
 and verified during the autonomous run but their checkboxes were never ticked —

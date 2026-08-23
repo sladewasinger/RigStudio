@@ -9,7 +9,8 @@
  * slot flatten of core/paintOrder.ts reversed into Rive's first-in-file = topmost
  * convention), `animation.ts` (keyframe channel planning + LinearAnimation/KeyedObject/
  * KeyedProperty/KeyFrame emission, incl. keyed opacity via SolidColor KeyFrameColor),
- * `drawRules.ts` (keyed `z` draw order via DrawRules/DrawTarget + KeyFrameId), and
+ * `drawRules.ts` (exact keyed `z` ordering via per-Shape DrawRules, fixed-rank DrawTarget
+ * anchors, and KeyFrameId), and
  * `stateMachine.ts` (the state-machine object tree). Implementation modules never import
  * this facade back.
  */

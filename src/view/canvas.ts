@@ -9,7 +9,7 @@
  * SVG's authored rotation center).
  */
 
-import { state, flattenPaintOrder } from '../core/model';
+import { state, flattenPaintOrder, memberGeometryPivot } from '../core/model';
 import { ctx, SVG_NS } from './context';
 import { svgPoint } from './coords';
 import { renderPose } from './render';
@@ -21,6 +21,23 @@ export function buildCanvas(container: HTMLElement): void {
   container.innerHTML = '';
   const doc = state.doc;
   if (!doc) return;
+
+  // Fresh SVG imports carry explicit pivot hints until their artwork can be measured.
+  // Resolve PARTLESS containers from document geometry before building paint runs: an
+  // empty wrapper has no geometry-bearing DOM run of its own, so the live-DOM pass below
+  // can only measure its transformed local origin. That stranded top-level/nested groups
+  // at (or near) 0,0 even though all of their descendant artwork was elsewhere. Preserve
+  // the established DOM measurement for art-bearing parts (including browser SVG bbox
+  // precision); only wrappers need the subtree-aware pure-doc path.
+  for (const part of doc.parts) {
+    const hint = part.pivotHint;
+    if (!hint || part.paths.length > 0) continue;
+    const center = memberGeometryPivot([part], doc.parts);
+    part.pivot = hint.kind === 'centerOffset'
+      ? { x: center.x + hint.dx, y: center.y + hint.dy }
+      : center;
+    part.pivotHint = null;
+  }
 
   ctx.svg = document.createElementNS(SVG_NS, 'svg');
   if (!ctx.viewRect) ctx.viewRect = { ...doc.viewBox };

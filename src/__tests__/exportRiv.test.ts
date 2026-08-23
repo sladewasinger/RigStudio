@@ -1036,43 +1036,42 @@ describe('exportRiv keyed draw order (z via DrawRules/DrawTarget)', () => {
   }
 
   const d = decodeRiv(exportRiv(zDoc()));
-  const nodeByName = (n: string) => d.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === n)!;
   const shapeByName = (n: string) => d.objects.find((o) => o.typeKey === TYPE.SHAPE && o.props[PROP.NAME] === n)!;
 
-  it("emits exactly one DrawRules, parented to the z-keyed part's own Node", () => {
+  it('emits one DrawRules per real Shape plus one invisible rank anchor per Shape', () => {
     const rules = d.objects.filter((o) => o.typeKey === TYPE.DRAW_RULES);
-    expect(rules.length).toBe(1);
-    expect(rules[0].props[PROP.PARENT_ID]).toBe(nodeByName('B').index);
+    const realShapes = ['a_p', 'b_p', 'c_p'].map(shapeByName);
+    expect(rules.length).toBe(3);
+    expect(rules.map((r) => r.props[PROP.PARENT_ID]).sort()).toEqual(
+      realShapes.map((s) => s.index).sort(),
+    );
+    const anchors = d.objects.filter(
+      (o) => o.typeKey === TYPE.SHAPE && String(o.props[PROP.NAME]).startsWith('Rig Studio draw rank '),
+    );
+    expect(anchors.length).toBe(3);
   });
 
-  it('emits two DrawTargets (one per resolved instant), both anchored on C, opposite placements', () => {
-    const rulesIdx = d.objects.find((o) => o.typeKey === TYPE.DRAW_RULES)!.index;
+  it('targets only invisible fixed-rank anchors, avoiding dependency cycles', () => {
     const targets = d.objects.filter((o) => o.typeKey === TYPE.DRAW_TARGET);
-    expect(targets.length).toBe(2);
+    const anchorIndexes = new Set(d.objects.filter(
+      (o) => o.typeKey === TYPE.SHAPE && String(o.props[PROP.NAME]).startsWith('Rig Studio draw rank '),
+    ).map((o) => o.index));
+    expect(targets.length).toBe(5);
     for (const t of targets) {
-      expect(t.props[PROP.PARENT_ID]).toBe(rulesIdx);
-      expect(t.props[PROP.DRAWABLE_ID]).toBe(shapeByName('c_p').index);
+      expect(anchorIndexes.has(Number(t.props[PROP.DRAWABLE_ID]))).toBe(true);
+      expect(t.props[PROP.PLACEMENT_VALUE]).toBe(0);
     }
-    expect(targets.map((t) => t.props[PROP.PLACEMENT_VALUE]).sort()).toEqual([0, 1]);
   });
 
-  it('keys drawTargetId with a KeyFrameId per instant, switching to the right anchor placement', () => {
-    const rulesIdx = d.objects.find((o) => o.typeKey === TYPE.DRAW_RULES)!.index;
+  it('keys every affected drawable at the z event while unchanged ranks hold', () => {
+    const rulesIdx = d.objects.find(
+      (o) => o.typeKey === TYPE.DRAW_RULES && o.props[PROP.PARENT_ID] === shapeByName('b_p').index,
+    )!.index;
     const anim = d.animations.find((a) => a.name === 'reorder')!;
     const keyed = anim.objects.find((o) => o.objectId === rulesIdx)!;
     const prop = keyed.props.find((p) => p.propertyKey === PROP.DRAW_TARGET_ID)!;
     expect(prop.keyframes.map((k) => k.frame)).toEqual([0, 30]);
-
-    const targets = d.objects.filter((o) => o.typeKey === TYPE.DRAW_TARGET);
-    const afterTarget = targets.find((t) => t.props[PROP.PLACEMENT_VALUE] === 1)!; // behind C
-    const beforeTarget = targets.find((t) => t.props[PROP.PLACEMENT_VALUE] === 0)!; // in front of C
-
-    // t=0: z=0 ties the unkeyed default (order stays [A,B,C]) -> B's front neighbor C is
-    // static -> anchors AFTER C, i.e. exactly its original spot (byte-stable-looking rest).
-    expect(prop.keyframes[0].value).toBe(afterTarget.index);
-    // t=500ms(frame30): B jumps to z=100 (topmost) -> back neighbor C is static -> anchors
-    // BEFORE C (B now renders in front of C).
-    expect(prop.keyframes[1].value).toBe(beforeTarget.index);
+    expect(prop.keyframes[0].value).not.toBe(prop.keyframes[1].value);
   });
 
   it('emits none of the draw-order machinery for a doc with no z keyframes (zero overhead)', () => {
@@ -1081,16 +1080,18 @@ describe('exportRiv keyed draw order (z via DrawRules/DrawTarget)', () => {
     expect(clean.objects.some((o) => drawTypes.has(o.typeKey))).toBe(false);
   });
 
-  it('skips machinery for a z-keyed part with an unguarded shape-owning descendant (documented limit)', () => {
+  it('gives a z-keyed parent and its drawable descendant independent exact rules', () => {
     const doc = zDoc();
     // A non-z-keyed child with its own Shape would otherwise leak into B's reordering
     // (Rive's ancestor walk has nothing closer to stop at) — the exporter skips instead.
     doc.parts.push(part('p_b_child', { label: 'B_child', parentId: 'p_b', paths: [path('bc_p')] }));
     const dd = decodeRiv(exportRiv(doc));
-    expect(dd.objects.some((o) => o.typeKey === TYPE.DRAW_RULES)).toBe(false);
-    // The doc still exports cleanly; the child renders normally, parented under B.
+    const rules = dd.objects.filter((o) => o.typeKey === TYPE.DRAW_RULES);
+    expect(rules.length).toBe(4);
     const child = dd.objects.find((o) => o.typeKey === TYPE.NODE && o.props[PROP.NAME] === 'B_child');
     expect(child).toBeTruthy();
+    const childShape = dd.objects.find((o) => o.typeKey === TYPE.SHAPE && o.props[PROP.NAME] === 'bc_p')!;
+    expect(rules.some((r) => r.props[PROP.PARENT_ID] === childShape.index)).toBe(true);
   });
 
   it('is deterministic', () => {

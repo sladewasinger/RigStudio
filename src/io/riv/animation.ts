@@ -33,7 +33,7 @@
 
 import { Channel, Clip, Keyframe, RigDoc, Track } from '../../core/model';
 import { Scene } from './writer';
-import { DrawRulesEntry, DrawRulesSetup, emitZKeyedProperty, planZDrawTargets, ZPlanKey } from './drawRules';
+import { DrawRulesSetup, emitZKeyedProperty, planZDrawTargets, ZPlan } from './drawRules';
 import {
   argb, DEG2RAD, EASING_CUBIC, FPS, INTERP_CUBIC, INTERP_LINEAR, P_ANIM_NAME, P_COLOR,
   P_DURATION, P_FPS, P_FRAME, P_INTERP_TYPE, P_INTERPOLATOR_ID, P_KEYFRAME_COLOR_VALUE,
@@ -65,7 +65,6 @@ export function emitAnimations(
   rootIndex: number,
   rootBaseX: number,
   rootBaseY: number,
-  partShapeIndex: Map<string, number>,
   opacityTargets: Map<string, OpacityColorTarget[]>,
   drawRules: DrawRulesSetup,
   hiddenIds: Set<string>,
@@ -94,7 +93,6 @@ export function emitAnimations(
 
   interface PlanKey { frame: number; value: number; interpType: number; interpId: number }
   interface PlanProp { objectId: number; propertyKey: number; keys: PlanKey[] }
-  interface ZPlan { entry: DrawRulesEntry; keys: ZPlanKey[] }
   interface OpacityPlan { colorIndex: number; keys: PlanKey[] }
   interface PlanClip {
     name: string; duration: number; loop: boolean;
@@ -196,15 +194,8 @@ export function emitAnimations(
       props.push({ objectId: objectIdOf(spec.target), propertyKey, keys });
     }
 
-    // Keyed draw order (z): one plan per part this doc gave DrawRules to (drawRules.ts
-    // filters/creates its own DrawTarget objects on demand — see its header).
-    const zPlans: ZPlan[] = [];
-    for (const [partId, entry] of drawRules) {
-      const part = byId.get(partId);
-      if (!part) continue;
-      const keys = planZDrawTargets(scene, doc, clip, part, entry, partShapeIndex, hiddenIds, fps);
-      if (keys.length > 0) zPlans.push({ entry, keys });
-    }
+    // Keyed draw order (z): a full per-drawable rank plan at the union of every z event.
+    const zPlans: ZPlan[] = planZDrawTargets(scene, doc, clip, drawRules, hiddenIds, fps);
 
     // Keyed opacity: one plan per SolidColor owned by any part this clip keys opacity on.
     const opacityPlans: OpacityPlan[] = [];

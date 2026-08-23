@@ -356,18 +356,32 @@
 
       async function drawOrderOpacityHiddenCheck() {
         const bytes = exportRiv(drawOrderOpacityHiddenDoc());
-        const inst = await loadRive(bytes, document.getElementById('c'));
-        const ab = inst.artboard;
+        const canvas = document.getElementById('c2');
+        const inst = await loadRive(bytes, canvas);
+        const ab = inst.artboard, renderer = inst.renderer;
         const present = ['stack_bottom', 'stack_top', 'mover', 'fader'].map((n) => !!ab.node(n));
         const hiddenAbsent = !ab.node('hidden_part');
+        const drawNow = () => {
+          renderer.clear(); renderer.save(); inst.alignRenderer(); ab.draw(renderer);
+          renderer.restore(); renderer.flush();
+          if (typeof inst.runtime.resolveAnimationFrame === 'function') inst.runtime.resolveAnimationFrame();
+        };
+        const pixel = () => Array.from(canvas.getContext('2d').getImageData(15, 15, 1, 1).data);
+        const isOrange = (p) => p[3] > 200 && p[0] > 220 && p[1] > 120 && p[2] < 80;
+        const isRed = (p) => p[3] > 200 && p[0] > 150 && p[1] < 120 && p[2] < 160;
         const li = new inst.runtime.LinearAnimationInstance(ab.animationByName('demo'), ab);
-        li.advance(0); li.apply(1.0); // just prove advance/apply doesn't throw either
+        li.advance(0); li.apply(1.0); ab.advance(0); drawNow();
+        const restPixel = pixel();
+        li.advance(0.5); li.apply(1.0); ab.advance(0); drawNow();
+        const movedPixel = pixel();
         const checks = {
           loadedWithoutError: true,
           visiblePartsPresent: present.every(Boolean),
           hiddenPartAbsent: hiddenAbsent,
+          authoredTopAtRest: isOrange(restPixel),
+          zMoverOnTopAfterKey: isRed(movedPixel),
         };
-        return { checks, pass: Object.values(checks).every(Boolean) };
+        return { restPixel, movedPixel, checks, pass: Object.values(checks).every(Boolean) };
       }
 
       /**

@@ -37,7 +37,12 @@ import { normalizeDoc, RigDoc, RigPart, Clip } from '../core/model';
  *  the fix exists for, verified visually. right_arm (keyed rotate, pivot rotation-
  *  recovered so UNCHANGED) and left_arm (keyed translate, pivot-independent) render
  *  byte-identically. The skinned golden below did NOT move (hand-authored doc, no import). */
-const GOLDEN_SHA256 = '5f20e55014dbf29abb80a1afefc90c6ecc8fb748ca7b293307f8b770d38595c0';
+/** RE-PINNED for exact animated z-order export (2026-08-22): the golden doc contains a
+ * z track, so its former one-neighbor DrawRules subset was replaced by per-drawable
+ * fixed-rank anchors. Verified in the official @rive-app/canvas runtime: authored-rest
+ * overlap #ffaa00 at frame zero and the keyed mover #cc3366 after the switch, with all
+ * existing state-machine, skin, pin, and interleaved-stack pixel checks still passing. */
+const GOLDEN_SHA256 = 'd00957de74fd099bdfed72244ec7b2df12f7e12e58413c851106a5b2727bb83d';
 
 /** Second pin: the SKELETAL-DEFORMATION surface (skinned-part export wave, 2026-07-13).
  *  The main golden doc has no bones/skin (its hash deliberately did NOT move when the

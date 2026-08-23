@@ -7,7 +7,7 @@
  *
  * REST ORDER ONLY: the flatten runs with a constant zOf (0 for every part). The .riv
  * file's static drawable order IS the rest paint order; animate-time keyed `z` remains
- * drawRules.ts's DrawRules/DrawTarget job (see the U3 divergence note in its header).
+ * drawRules.ts's exact per-drawable DrawRules/DrawTarget job.
  *
  * THE REVERSAL (how runs map to Rive order): Rive draws the FIRST drawable in file
  * order TOPMOST (scene.ts's DRAW ORDER comment pinning rive-runtime/src/artboard.cpp),
