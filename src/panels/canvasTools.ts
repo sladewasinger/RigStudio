@@ -24,7 +24,7 @@ import {
 import { checkpoint } from '../core/history';
 import { icon, iconButton, ICON_PATHS } from './icons';
 import { dialog } from '../ui/dialogs';
-import { createWarpFromSelection } from './warpWorkspace';
+import { createWarpFromSelection, openSelectedWarp, warpForSelection } from './warpWorkspace';
 
 // ---- Canvas tools bar + shared editing actions ----
 
@@ -210,10 +210,11 @@ export function buildCanvasTools(el: HTMLElement): void {
     add(iconButton('ungroup', '', 'Dissolve the selected group/bone (Ctrl+Shift+G)', ungroupAction),
       !!part && part.paths.length === 0);
     const warpButton = document.createElement('button');
-    warpButton.textContent = 'Warp';
-    warpButton.title = 'Create Warp from exactly two selected objects: source first, reference second';
-    warpButton.onclick = () => { void createWarpFromSelection(); };
-    add(warpButton, state.selectedPartIds.length === 2);
+    const existingWarp = warpForSelection();
+    warpButton.textContent = existingWarp ? 'Edit Warp' : 'Warp';
+    warpButton.title = existingWarp ? 'Open this object\'s Warp Setup' : 'Create Warp from exactly two selected objects: source first, reference second';
+    warpButton.onclick = () => { if (!openSelectedWarp()) void createWarpFromSelection(); };
+    add(warpButton, !!existingWarp || state.selectedPartIds.length === 2);
     sep();
     const boneBtn = add(iconButton('bone', 'bone',
       'Draw a bone chain: click to set the first joint, click again for each bone tip — the ' +

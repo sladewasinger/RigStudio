@@ -148,6 +148,7 @@ input[type='number'],
 #warp-workspace button.primary { background: var(--accent-2); color: #17171c; }
 .warp-reference { opacity: .18 !important; pointer-events: none; }
 .warp-reference-runtime { pointer-events: none; }
+.warp-pair-highlight { filter: drop-shadow(0 0 4px #ffd866) drop-shadow(0 0 1px #111); }
 @media (max-width: 700px) {
   #warp-workspace { top: auto; left: 6px; right: 6px; bottom: 6px; width: auto; max-height: 55vh; }
 }

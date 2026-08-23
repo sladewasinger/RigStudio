@@ -39,5 +39,12 @@ describe('Warp Setup workflow', () => {
     expect(document.querySelector('.tl-lane-label')?.textContent).toBe('Warp · Hand turn');
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(document.querySelector('#warp-workspace.open')).toBeNull();
+    state.editorMode = 'setup';
+    selectPart('triangle_shape');
+    notify();
+    const editWarp = Array.from(document.querySelectorAll<HTMLButtonElement>('#canvas-tools button'))
+      .find((button) => button.textContent === 'Edit Warp')!;
+    editWarp.click();
+    expect(document.querySelector('#warp-workspace.open')).not.toBeNull();
   });
 });

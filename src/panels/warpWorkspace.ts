@@ -41,6 +41,32 @@ export async function createWarpFromSelection(): Promise<void> {
   renderPose();
 }
 
+export function warpForSelection(): WarpDefinition | null {
+  const doc = state.doc;
+  const selected = selectedParts()[0];
+  if (!doc || !selected) return null;
+  const ancestors = new Set<string>();
+  let current = selected;
+  while (current) {
+    ancestors.add(current.id);
+    const parent = current.parentId ? doc.parts.find((part) => part.id === current.parentId) : null;
+    if (!parent) break;
+    current = parent;
+  }
+  return doc.warps?.find((warp) => ancestors.has(warp.sourcePartId) || ancestors.has(warp.targetPartId)) ?? null;
+}
+
+export function openSelectedWarp(): boolean {
+  const warp = warpForSelection();
+  if (!warp) return false;
+  state.warpSetupId = warp.id;
+  state.warpPreviewAmount = 0;
+  buildWarpWorkspace();
+  notify();
+  renderPose();
+  return true;
+}
+
 function pathLabel(pair: WarpPathPair, side: 'source' | 'target'): string {
   const partId = side === 'source' ? pair.sourcePartId : pair.targetPartId;
   const pathId = side === 'source' ? pair.sourcePathId : pair.targetPathId;
@@ -129,6 +155,13 @@ export function buildWarpWorkspace(): void {
   for (const pair of warp.pairs) {
     const row = document.createElement('div'); row.className = 'warp-pair'; row.tabIndex = 0;
     row.innerHTML = `<span>${pathLabel(pair, 'source')}</span><b>→</b><span>${pathLabel(pair, 'target')}</span><small>Exact name · confirmed</small>`;
+    const highlight = (on: boolean) => {
+      for (const id of [pair.sourcePathId, pair.targetPathId]) {
+        document.querySelector<SVGPathElement>(`[data-path-id="${id}"]`)?.classList.toggle('warp-pair-highlight', on);
+      }
+    };
+    row.onmouseenter = () => highlight(true); row.onmouseleave = () => highlight(false);
+    row.onfocus = () => highlight(true); row.onblur = () => highlight(false);
     const actions = document.createElement('div');
     const reverse = document.createElement('button'); reverse.textContent = pair.reverse ? 'Direction reversed' : 'Reverse path';
     reverse.onclick = () => { checkpoint(); pair.reverse = !pair.reverse; notify(); renderPose(); };
