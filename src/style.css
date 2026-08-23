@@ -123,6 +123,33 @@ input[type='number'],
 }
 #layers { border-right: 1px solid var(--divider); }
 #inspector { border-left: 1px solid var(--divider); }
+
+#warp-workspace {
+  position: fixed; z-index: 30; top: 54px; right: 16px; width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 190px); display: none; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px;
+  box-shadow: 0 14px 40px rgba(0,0,0,.45); overflow: hidden;
+}
+#warp-workspace.open { display: flex; }
+#warp-workspace > header, #warp-workspace > footer { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; background: var(--surface-raised); }
+#warp-workspace > header div { display: flex; flex-direction: column; gap: 2px; }
+#warp-workspace > header span, .warp-section-title span { color: var(--text-muted); font-size: 11px; }
+.warp-roles, .warp-section-title, .warp-preview { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--divider); }
+.warp-roles button, .warp-section-title button { margin-left: auto; }
+.warp-preview input { flex: 1; min-width: 80px; }
+.warp-preview output { width: 38px; text-align: right; font-variant-numeric: tabular-nums; }
+.warp-section-title { background: rgba(255,255,255,.025); }
+.warp-pairs { overflow: auto; padding: 8px; display: grid; gap: 7px; }
+.warp-pair { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: center; padding: 8px; border: 1px solid var(--divider); border-radius: 5px; }
+.warp-pair small, .warp-pair > div, .warp-pair > select { grid-column: 1 / -1; }
+.warp-pair > div { display: flex; gap: 5px; }
+.warp-pair.warning { border-color: var(--warning, #d99b45); }
+#warp-workspace footer { justify-content: flex-end; gap: 8px; border-top: 1px solid var(--divider); }
+#warp-workspace button.primary { background: var(--accent-2); color: #17171c; }
+.warp-reference { opacity: .18 !important; pointer-events: none; }
+@media (max-width: 700px) {
+  #warp-workspace { top: auto; left: 6px; right: 6px; bottom: 6px; width: auto; max-height: 55vh; }
+}
 .inspector-sticky-tools {
   position: sticky;
   top: calc(-1 * var(--sp-3));

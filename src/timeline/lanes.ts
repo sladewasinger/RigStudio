@@ -83,9 +83,9 @@ function buildLane(track: Track, duration: number, index: number): HTMLElement {
   // gate in wireBoxSelect fell through and the browser started native text selection
   // instead of the marquee. Marking it a boxTarget feeds it the same as the gap/strip.
   label.dataset.boxTarget = '1';
-  const partLabel =
-    track.target === 'root' ? 'root' : (doc.parts.find((p) => p.id === track.target)?.label ?? '?');
-  label.textContent = `${partLabel}.${track.channel}`;
+  const warp = doc.warps?.find((candidate) => candidate.id === track.target);
+  const partLabel = track.target === 'root' ? 'root' : (doc.parts.find((p) => p.id === track.target)?.label ?? '?');
+  label.textContent = warp ? `Warp · ${warp.name}` : `${partLabel}.${track.channel}`;
   lane.appendChild(label);
 
   // Gap between the label gutter and the strip: generous padding so a marquee can
