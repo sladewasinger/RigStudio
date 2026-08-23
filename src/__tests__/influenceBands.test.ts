@@ -5,6 +5,7 @@ import {
   normalizeInfluenceProfile,
 } from '../geometry/skin';
 import { makeDoc, makePart, makePath } from './helpers';
+import { layoutInfluenceAnnotations } from '../view/overlayInfluenceBands';
 
 const identity = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
 const bones: SkinBone[] = [
@@ -13,6 +14,18 @@ const bones: SkinBone[] = [
 ];
 
 describe('group influence bands', () => {
+  it('lays out compact annotations densely and clamps the active callout to viewport edges', () => {
+    const layout = layoutInfluenceAnnotations(
+      [{ x: 4, y: 4 }, { x: 9, y: 7 }, { x: 14, y: 10 }], 1,
+      { left: 0, top: 0, right: 120, bottom: 70 }, { x: 0, y: 1 },
+    );
+    expect(layout.map((entry) => entry.showNumber)).toEqual([false, true, false]);
+    expect(layout[1].callout!.x).toBeGreaterThanOrEqual(31);
+    expect(layout[1].callout!.x).toBeLessThanOrEqual(89);
+    expect(layout[1].callout!.y).toBeGreaterThanOrEqual(10);
+    expect(layout[1].callout!.y).toBeLessThanOrEqual(60);
+  });
+
   it('creates a deterministic joint profile and normalized adjacent-bone rows', () => {
     const profile = autoInfluenceProfile(bones);
     expect(profile.bands).toEqual([{

@@ -561,7 +561,22 @@ input[type='number'] { width: 90px; }
 .influence-band-center { fill: #ffd166; }
 .influence-band-width { fill: var(--accent-2); }
 .influence-band.selected .influence-band-edge { stroke: #ffd166; }
-.influence-band-label { fill: #ffd166; font: 600 11px system-ui, sans-serif; paint-order: stroke; stroke: #202027; stroke-width: 3px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.influence-band-badge, .influence-band-callout text {
+  fill: #17171d;
+  font-family: system-ui, sans-serif;
+  font-weight: 800;
+  text-anchor: middle;
+  dominant-baseline: central;
+  pointer-events: none;
+  user-select: none;
+}
+.influence-band-callout { pointer-events: none; }
+.influence-band-callout rect {
+  fill: rgba(255, 209, 102, 0.96);
+  stroke: rgba(22, 22, 28, 0.92);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
 .influence-actions { margin-top: var(--sp-2); }
 
 .select-box.secondary { stroke: rgba(122, 162, 247, 0.45); }

@@ -40,6 +40,11 @@ export function buildInfluenceBandsSection(el: HTMLElement, part: RigPart): void
   const band = session.bands[selectedIndex] ?? session.bands[0];
 
   if (band) {
+    const selectedHint = document.createElement('p');
+    selectedHint.className = 'hint influence-joint-readout';
+    selectedHint.textContent = `Editing Joint ${selectedIndex + 1}: ${band.parentBoneId} → ${band.childBoneId}`;
+    selectedHint.setAttribute('aria-live', 'polite');
+    el.appendChild(selectedHint);
     const addSlider = (
       label: string, value: number, min: number, max: number, step: number,
       apply: (value: number) => void,

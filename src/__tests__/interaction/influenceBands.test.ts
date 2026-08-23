@@ -4,7 +4,7 @@ import { notify, selectPart } from '../../core/model';
 import { activeInfluenceTarget, cancelInfluenceEditing, renderPose } from '../../view';
 import {
   bootRig, clientCenterOf, gestureDrag, medialPoints, overlayEl, partByLabel,
-  pathElById, placeBoneChain, resetRig, state,
+  pathElById, placeBoneChain, resetRig, state, assertScreenConstant, svgEl,
 } from './harness';
 
 beforeAll(bootRig);
@@ -42,6 +42,11 @@ describe('group influence-band authoring', () => {
     expect(overlayEl().querySelectorAll('.influence-band')).toHaveLength(2);
     expect(overlayEl().querySelectorAll('[data-band-handle="center"]')).toHaveLength(2);
     expect(overlayEl().querySelector('[data-role="bone-tip"]')).toBeNull();
+    expect(overlayEl().querySelectorAll('.influence-band-callout')).toHaveLength(1);
+    expect(overlayEl().querySelectorAll('.influence-band-badge').length).toBeGreaterThan(0);
+    const callout = overlayEl().querySelector('.influence-band-callout') as SVGElement;
+    expect(callout.getBoundingClientRect().width).toBeLessThan(75);
+    expect(callout.getBoundingClientRect().height).toBeLessThan(28);
     const before = painted.map((path) => pathElById(path.id).getAttribute('d'));
 
     const width = overlayEl().querySelector('[data-band-handle="widthEnd"]') as SVGElement;
@@ -60,6 +65,14 @@ describe('group influence-band authoring', () => {
     const after = painted.map((path) => pathElById(path.id).getAttribute('d'));
     for (let i = 0; i < painted.length; i++) expect(after[i], painted[i].label).not.toBe(before[i]);
     expect(bones.map((bone) => ({ pivot: bone.pivot, tip: bone.boneTip, rest: bone.rest }))).toEqual(skeleton);
+    assertScreenConstant('.influence-band-callout', 10);
+    const calloutRect = (overlayEl().querySelector('.influence-band-callout') as SVGElement)
+      .getBoundingClientRect();
+    const viewport = svgEl().getBoundingClientRect();
+    expect(calloutRect.left).toBeGreaterThanOrEqual(viewport.left - 1);
+    expect(calloutRect.right).toBeLessThanOrEqual(viewport.right + 1);
+    expect(calloutRect.top).toBeGreaterThanOrEqual(viewport.top - 1);
+    expect(calloutRect.bottom).toBeLessThanOrEqual(viewport.bottom + 1);
   });
 
   it('Cancel restores entry state; Apply is one undoable edit and redo restores it', () => {

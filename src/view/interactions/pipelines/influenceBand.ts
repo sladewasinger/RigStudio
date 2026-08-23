@@ -1,4 +1,4 @@
-import { state } from '../../../core/model';
+import { notify, state } from '../../../core/model';
 import { influenceBandFrame } from '../../../geometry/skin';
 import { ctx, DragState } from '../../context';
 import { pointerInRoot } from '../../coords';
@@ -21,6 +21,7 @@ export const INFLUENCE_BAND_PIPELINE: GesturePipeline = {
       startClient: { x: ev.clientX, y: ev.clientY }, active: false,
     };
     capturePointer(ev);
+    notify();
     renderPose();
     return drag;
   },
