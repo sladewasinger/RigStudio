@@ -86,7 +86,12 @@ export function openRightDockTab(tab: RightDockTab): void {
 export function buildRightDock(inspector: HTMLElement): void {
   inspectorElement = inspector;
   const dock = ensureShell(inspector);
-  if (state.editorMode === 'setup' && activeTab === 'claude') activeTab = 'inspector';
+  if (state.editorMode === 'setup') {
+    // Claude's panel owns preview lifecycle reconciliation. Run its lightweight
+    // unmount pass even though the tab is Animate-only.
+    buildAiPanel(document.createElement('div'));
+    if (activeTab === 'claude') activeTab = 'inspector';
+  }
   dock.innerHTML = '';
   const tabs = document.createElement('div');
   tabs.className = 'right-dock-tabs';

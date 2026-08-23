@@ -14,7 +14,10 @@ import { getProjectStorage, addRecent } from '../io/storage';
 
 /** Tab's action, and the Setup/Animate toolbar buttons'. */
 export function setEditorMode(mode: EditorMode): void {
-  if (state.editorMode === mode) return;
+  if (state.editorMode === mode) {
+    if (mode === 'animate') document.dispatchEvent(new CustomEvent('rig-open-dock-tab', { detail: 'claude' }));
+    return;
+  }
   cancelInfluenceEditing();
   endBoneChain();
   state.editorMode = mode;
