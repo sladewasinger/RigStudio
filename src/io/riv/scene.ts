@@ -48,11 +48,16 @@
 
 import { artboardFrame, RigDoc, RigPart, RigPath } from '../../core/model';
 import { assemble, Scene } from './writer';
-import { emitAnimations, OpacityColorTarget } from './animation';
+import {
+  emitAnimations, OpacityColorTarget, WarpPathTarget, warpPathTargetKey,
+} from './animation';
 import { emitStateMachines } from './stateMachine';
 import { drawableEmissionOrder } from './drawableOrder';
 import { DrawableShape, setupDrawRules } from './drawRules';
 import { bakedMatrix, pathToLocalSubpaths } from './geometry';
+import {
+  assertSharedSourceTopology, compileRivWarpPairs, CompiledRivWarpPair, rivWarpPathData,
+} from './warp';
 import {
   attachPinAnchor, buildSkinPlan, emitSkin, emitVertexWeight, SkinPlan, subpathWeights,
 } from './skin';
@@ -78,12 +83,16 @@ import {
  */
 function effectivelyHiddenIds(doc: RigDoc): Set<string> {
   const byId = new Map(doc.parts.map((p) => [p.id, p]));
+  const warpReferenceRoots = new Set((doc.warps ?? []).map((warp) => warp.targetPartId));
   const hidden = new Set<string>();
   for (const part of doc.parts) {
     let cur: RigPart | undefined = part;
     const seen = new Set<string>();
     while (cur && !seen.has(cur.id)) {
-      if (cur.hidden) { hidden.add(part.id); break; }
+      // Warp targets are authoring references, not a second drawable pose. The live
+      // canvas shows them only while Warp Setup is open; a runtime export never has
+      // that editor-only mode, so exclude the target root and its descendants.
+      if (cur.hidden || warpReferenceRoots.has(cur.id)) { hidden.add(part.id); break; }
       seen.add(cur.id);
       cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
@@ -228,6 +237,16 @@ export function exportRiv(doc: RigDoc): Uint8Array {
   // pre-U3 per-part resolution.
   const emittedDrawableShapes: DrawableShape[] = [];
   const opacityTargets = new Map<string, OpacityColorTarget[]>();
+  const warpPathTargets = new Map<string, WarpPathTarget>();
+  const compiledWarpPairs = compileRivWarpPairs(doc);
+  const warpPairsByPath = new Map<string, CompiledRivWarpPair[]>();
+  for (const pair of compiledWarpPairs) {
+    const key = warpPathTargetKey(pair.sourcePartId, pair.sourcePathId);
+    const existing = warpPairsByPath.get(key) ?? [];
+    existing.push(pair);
+    warpPairsByPath.set(key, existing);
+  }
+  for (const pairs of warpPairsByPath.values()) assertSharedSourceTopology(pairs);
   const skinPlans = new Map<string, SkinPlan | null>();
   for (const run of drawableEmissionOrder(doc)) {
     const part = byId.get(run.partId)!;
@@ -245,7 +264,10 @@ export function exportRiv(doc: RigDoc): Uint8Array {
       // window — core/childOrder.ts's KNOWN GAP note) skips exactly like the U2
       // renderers do; reconcileChildOrder repairs it at the next structural op/load.
       if (!rigPath || rigPath.hidden) continue;
-      const shapeIndex = emitShape(scene, part, rigPath, partIndex.get(part.id)!, opacityTargets, skinPlan);
+      const shapeIndex = emitShape(
+        scene, part, rigPath, partIndex.get(part.id)!, opacityTargets, warpPathTargets,
+        warpPairsByPath.get(warpPathTargetKey(part.id, rigPath.id)) ?? [], skinPlan,
+      );
       if (shapeIndex !== null) {
         emittedDrawableShapes.push({ partId: part.id, pathId: rigPath.id, shapeIndex });
       }
@@ -264,7 +286,7 @@ export function exportRiv(doc: RigDoc): Uint8Array {
   // component indices) BEFORE any animation object is emitted; see animation.ts.
   emitAnimations(
     scene, doc, partIndex, rootIndex, rootBaseX, rootBaseY,
-    opacityTargets, drawRules, hiddenIds,
+    opacityTargets, warpPathTargets, drawRules, hiddenIds,
   );
 
   // ---- State machines ----
@@ -292,10 +314,13 @@ export function exportRiv(doc: RigDoc): Uint8Array {
  */
 function emitShape(
   scene: Scene, part: RigPart, path: RigPath, partNodeIndex: number,
-  opacityTargets: Map<string, OpacityColorTarget[]>, skinPlan: SkinPlan | null,
+  opacityTargets: Map<string, OpacityColorTarget[]>,
+  warpPathTargets: Map<string, WarpPathTarget>, warpPairs: CompiledRivWarpPair[],
+  skinPlan: SkinPlan | null,
 ): number | null {
   const m = bakedMatrix(part, path);
-  const subs = pathToLocalSubpaths(path.d, m, part.pivot.x, part.pivot.y);
+  const sourceData = warpPairs.length > 0 ? rivWarpPathData(warpPairs[0], 0) : path.d;
+  const subs = pathToLocalSubpaths(sourceData, m, part.pivot.x, part.pivot.y);
   if (subs.length === 0) return null;
 
   const shapeIndex = scene.begin(T_SHAPE);
@@ -303,6 +328,7 @@ function emitShape(
   scene.propString(P_NAME, path.label);
   scene.end();
 
+  const warpSubpaths: WarpPathTarget['subpaths'] = [];
   for (const sub of subs) {
     const pathIndex = scene.begin(T_POINTS_PATH);
     scene.propUint(P_PARENT_ID, shapeIndex);
@@ -310,8 +336,10 @@ function emitShape(
     scene.end();
     if (skinPlan) emitSkin(scene, skinPlan, pathIndex);
     const weights = skinPlan ? subpathWeights(skinPlan, path.id, sub) : null;
+    const vertexIndices: number[] = [];
     sub.verts.forEach((v, vi) => {
       const vertexIndex = scene.begin(T_CUBIC_VERTEX);
+      vertexIndices.push(vertexIndex);
       scene.propUint(P_PARENT_ID, pathIndex);
       scene.propDouble(P_VERT_X, v.x);
       scene.propDouble(P_VERT_Y, v.y);
@@ -321,6 +349,15 @@ function emitShape(
       scene.propDouble(P_OUT_DISTANCE, v.outDist);
       scene.end();
       if (weights) emitVertexWeight(scene, vertexIndex, weights[vi]);
+    });
+    warpSubpaths.push({ geometry: sub, vertexIndices });
+  }
+  for (const pair of warpPairs) {
+    warpPathTargets.set(`${pair.warpId}\u0000${warpPathTargetKey(part.id, path.id)}`, {
+      partId: part.id, pathId: path.id, subpaths: warpSubpaths, pair,
+      geometryAt: (amount) => pathToLocalSubpaths(
+        rivWarpPathData(pair, amount), m, part.pivot.x, part.pivot.y,
+      ),
     });
   }
 

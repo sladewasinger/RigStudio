@@ -168,6 +168,10 @@ export function deleteParts(ids: string[]): string[] {
   }
 
   doc.parts = doc.parts.filter((p) => !dead.has(p.id));
+  const deadWarps = new Set((doc.warps ?? [])
+    .filter((warp) => dead.has(warp.sourcePartId) || dead.has(warp.targetPartId))
+    .map((warp) => warp.id));
+  doc.warps = (doc.warps ?? []).filter((warp) => !deadWarps.has(warp.id));
   // childOrder: a batch delete can drop several dead children off ONE surviving parent's
   // list and/or land several promoted orphans on another, all at once — rather than
   // duplicating the reparent loop's ancestor-walk to compute each individual slot
@@ -178,7 +182,7 @@ export function deleteParts(ids: string[]): string[] {
   // absent (LAZY rule) it's a no-op.
   for (const part of doc.parts) reconcileChildOrder(part, doc.parts);
   for (const clip of doc.clips) {
-    clip.tracks = clip.tracks.filter((t) => !dead.has(t.target));
+    clip.tracks = clip.tracks.filter((t) => !dead.has(t.target) && !deadWarps.has(t.target));
   }
   for (const part of doc.parts) {
     if (!part.skin) continue;

@@ -10,12 +10,17 @@
 
 import {
   state, activeClip, Channel, RigDoc, RigPart, isEffectivelyHidden, flattenPaintOrder,
+  sampleKeyList,
 } from '../core/model';
+import {
+  compileWarpPathPair, interpolateWarpCommands, evaluateWarpPath,
+  isWarpReferencePart, warpForSourcePath,
+} from '../geometry/warp';
 import { canUndo, canRedo } from '../core/history';
 import { ctx, SVG_NS } from './context';
 import { poseTime, rootPoseTransform, groupTransformOf, effectiveZ, effectiveOpacity } from './pose';
 import { focusContext, nodeEditSkinSuspendId } from './focus';
-import { renderSkinnedPart } from './skinRender';
+import { renderSkinnedPart, SkinPathWarp } from './skinRender';
 import { renderOverlay } from './overlay';
 
 /**
@@ -58,6 +63,58 @@ function renderPartRigidPaths(part: RigPart): void {
   for (const p of part.paths) {
     ctx.rootGroup.querySelector(`[data-path-id="${p.id}"]`)?.setAttribute('d', p.d);
   }
+}
+
+function warpAmount(warpId: string, time: number | null): number {
+  if (time === null) return state.warpSetupId === warpId ? state.warpPreviewAmount : 0;
+  const track = activeClip()?.tracks.find((candidate) => candidate.target === warpId && candidate.channel === 'warp');
+  return Math.min(1, Math.max(0, sampleKeyList(track?.keyframes ?? [], time, 0)));
+}
+
+function renderWarpedPaths(doc: RigDoc, part: RigPart, time: number | null): void {
+  if (!ctx.rootGroup) return;
+  for (const path of part.paths) {
+    const found = warpForSourcePath(doc, path.id);
+    const element = ctx.rootGroup.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
+    if (!element) continue;
+    if (!found) { element.setAttribute('d', path.d); continue; }
+    const amount = warpAmount(found.warp.id, time);
+    try {
+      element.setAttribute('d', evaluateWarpPath(doc, found.pair, amount));
+      const targetPart = doc.parts.find((candidate) => candidate.id === found.pair.targetPartId);
+      const target = targetPart?.paths.find((candidate) => candidate.id === found.pair.targetPathId);
+      if (target) {
+        element.setAttribute('fill-opacity', String(path.fillOpacity + (target.fillOpacity - path.fillOpacity) * amount));
+        element.setAttribute('stroke-opacity', String(path.strokeOpacity + (target.strokeOpacity - path.strokeOpacity) * amount));
+        element.setAttribute('stroke-width', String(path.strokeWidth + (target.strokeWidth - path.strokeWidth) * amount));
+        const mixColor = (left: string | null, right: string | null) => {
+          if (!left || !right || !/^#[0-9a-f]{6}$/i.test(left) || !/^#[0-9a-f]{6}$/i.test(right)) return left;
+          const channel = (offset: number) => Math.round(parseInt(left.slice(offset, offset + 2), 16) +
+            (parseInt(right.slice(offset, offset + 2), 16) - parseInt(left.slice(offset, offset + 2), 16)) * amount);
+          return `#${[1, 3, 5].map((offset) => channel(offset).toString(16).padStart(2, '0')).join('')}`;
+        };
+        element.setAttribute('fill', mixColor(path.fill, target.fill) ?? 'none');
+        if (path.stroke && target.stroke) element.setAttribute('stroke', mixColor(path.stroke, target.stroke)!);
+      }
+    } catch (error) {
+      element.setAttribute('d', path.d);
+      console.warn(`[rig-studio] ${error instanceof Error ? error.message : error}`);
+    }
+  }
+}
+
+function skinWarpsForPart(doc: RigDoc, part: RigPart, time: number | null): Map<string, SkinPathWarp> {
+  const result = new Map<string, SkinPathWarp>();
+  for (const path of part.paths) {
+    const found = warpForSourcePath(doc, path.id);
+    if (!found) continue;
+    const compiled = compileWarpPathPair(doc, found.pair);
+    result.set(path.id, {
+      source: compiled.source,
+      current: interpolateWarpCommands(compiled.source, compiled.target, warpAmount(found.warp.id, time)),
+    });
+  }
+  return result;
 }
 
 /**
@@ -138,6 +195,7 @@ export function renderPose(): void {
     if (!groups || groups.length === 0) continue;
 
     let transform: string;
+    const hasWarp = part.paths.some((path) => warpForSourcePath(doc, path.id));
     if (part.skin && part.id !== suspendSkinId) {
       // Skinned parts deform by their bones, not by a group transform. RENDER
       // RESILIENCE: one part's poisoned/malformed skin data (dangling bone, NaN bind
@@ -151,7 +209,7 @@ export function renderPose(): void {
       let ok = false;
       let err: unknown;
       try {
-        ok = renderSkinnedPart(part, root, t);
+        ok = renderSkinnedPart(part, root, t, hasWarp ? skinWarpsForPart(doc, part, t) : undefined);
       } catch (e) {
         err = e;
       }
@@ -173,6 +231,7 @@ export function renderPose(): void {
       renderPartRigidPaths(part);
     } else {
       transform = groupTransformOf(part, t);
+      if (hasWarp) renderWarpedPaths(doc, part, t);
     }
 
     // Drill-down focus: parts outside the editing context fade and stop catching
@@ -185,12 +244,14 @@ export function renderPose(): void {
     // instead of throwing; it's equally dead to elementFromPoint/hit-testing. Computed
     // per part (not inherited) because the canvas is a FLAT list of run groups, not a
     // nested DOM tree, so a hidden ancestor's state can't cascade through CSS alone.
-    const hidden = isEffectivelyHidden(part);
+    const reference = isWarpReferencePart(doc, part.id);
+    const hidden = isEffectivelyHidden(part) || (reference && (state.warpSetupId === null || state.editorMode !== 'setup'));
     for (const g of groups) {
       g.classList.toggle('dimmed', dimmed);
       g.setAttribute('transform', transform);
       applyOpacity(part, g, t);
       g.classList.toggle('part-hidden', hidden);
+      g.classList.toggle('warp-reference', reference && !hidden);
     }
   }
   applyDrawOrder(doc, t);

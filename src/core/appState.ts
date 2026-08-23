@@ -92,6 +92,9 @@ export interface AppState {
    * recent-files reopen flow instead).
    */
   projectFileHandle: FileSystemFileHandle | null;
+  /** Open focused Warp Setup workspace. Session-only. */
+  warpSetupId: string | null;
+  warpPreviewAmount: number;
 }
 
 /** localStorage key for the snapping preference (a UI setting, not project data). */
@@ -136,6 +139,8 @@ export const state: AppState = {
   cleanPreview: false,
   dirty: false,
   projectFileHandle: null,
+  warpSetupId: null,
+  warpPreviewAmount: 0,
 };
 
 /** Toggle freeze (origin-editing) mode. App state only — never serialized or persisted. */

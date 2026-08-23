@@ -63,6 +63,7 @@ const toFrames = (ms: number, fr: number): number => rnd((ms * fr) / 1000);
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 
 export function exportLottie(doc: RigDoc, clipIndex: number): string {
+  if (doc.warps?.length) throw new Error('Lottie export does not support Warp transitions yet. Export Rive to preserve vector morphs.');
   const clip = doc.clips[clipIndex];
   if (!clip) {
     throw new Error(
@@ -73,8 +74,7 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
   // Reference frame for the whole export: the artboard rect when the doc has one
   // enabled, else the viewBox (today's behavior, byte-identical when disabled/absent).
   const frame = artboardFrame(doc);
-  const ox = frame.x;
-  const oy = frame.y;
+  const ox = frame.x, oy = frame.y;
   const fr = doc.fps && doc.fps > 0 ? doc.fps : 60; // byte-identical fallback (see FPS's doc comment in io/riv/keys.ts)
   const op = Math.max(1, Math.round((clip.duration / 1000) * fr));
   const trackOf = (target: string, channel: Channel): Track | undefined =>

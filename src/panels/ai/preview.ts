@@ -108,6 +108,7 @@ function restFallbackFor(doc: RigDoc, target: string, channel: Channel): number 
     case 'sy': return part.rest.sy;
     case 'z': return CHANNEL_DEFAULTS.z; // stacking offset has no RestPose field
     case 'opacity': return part.rest.opacity;
+    case 'warp': return CHANNEL_DEFAULTS.warp;
   }
 }
 

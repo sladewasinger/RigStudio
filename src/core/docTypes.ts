@@ -130,6 +130,27 @@ export interface SkinOverride {
   pin?: number;
 }
 
+export interface WarpPathPair {
+  id: string;
+  sourcePartId: string;
+  sourcePathId: string;
+  targetPartId: string;
+  targetPathId: string;
+  reverse?: boolean;
+  seam?: number;
+  sourceFingerprint: string;
+  targetFingerprint: string;
+}
+
+export interface WarpDefinition {
+  version: 1;
+  id: string;
+  name: string;
+  sourcePartId: string;
+  targetPartId: string;
+  pairs: WarpPathPair[];
+}
+
 /**
  * One group-authoring crossover between two adjacent bones. `center` is a signed
  * document-space offset from their shared bind joint along the parent-origin to
@@ -262,7 +283,7 @@ export interface RigPart {
  * eye toggle (`RigPart.hidden`) is editor-only and never becomes a track, but fading a
  * part in/out over time is a real Rive/Lottie runtime feature, so it gets a real channel.
  */
-export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy' | 'z' | 'opacity';
+export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy' | 'z' | 'opacity' | 'warp';
 
 export type Easing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
 
@@ -324,6 +345,8 @@ export interface RigDoc {
   /** Pivot for root-level scale (e.g. squash-and-stretch around the ground). */
   rootPivot: Vec2;
   clips: Clip[];
+  /** Reversible group/path morph relationships. Targets are reference variants. */
+  warps?: WarpDefinition[];
   /** Rive-style interactive graphs over the clips. Optional (absent on older docs). */
   stateMachines?: StateMachine[];
   /** Optional page frame; absent on older docs and on freshly-imported SVGs. */
@@ -345,4 +368,5 @@ export const CHANNEL_DEFAULTS: Record<Channel, number> = {
   sy: 1,
   z: 0, // stacking OFFSET rest value; 0 = authored (doc.parts) draw order
   opacity: 1, // fully opaque; used for the synthetic 'root' target (no RestPose there)
+  warp: 0,
 };

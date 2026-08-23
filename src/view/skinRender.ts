@@ -38,7 +38,9 @@ export function invalidateSkinCache(partId: string): void {
   skinCache.delete(partId);
 }
 
-function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get>> {
+export type SkinPathWarp = { source: PathCmd[]; current: PathCmd[] };
+
+function skinDataFor(part: RigPart, warps?: Map<string, SkinPathWarp>): NonNullable<ReturnType<typeof skinCache.get>> {
   const overrides = part.skin?.overrides ?? {};
   const doc = state.doc;
   const profileOwner = doc ? influenceProfileOwner(doc.parts, part) : null;
@@ -53,14 +55,15 @@ function skinDataFor(part: RigPart): NonNullable<ReturnType<typeof skinCache.get
     part.paths.map((p) => `${p.id}:${p.d.length}`).join('|') +
     '#' + (part.skin?.bones.map((b) => b.id).join(',') ?? '') +
     '#' + JSON.stringify(overrides) +
-    '#' + JSON.stringify(profile);
+    '#' + JSON.stringify(profile) +
+    '#' + [...(warps?.entries() ?? [])].map(([id, warp]) => `${id}:${serializePath(warp.source)}`).join('|');
   const hit = skinCache.get(part.id);
   if (hit && hit.sig === sig) return hit;
 
   const boneIds = (part.skin?.bones ?? []).map((b) => b.id);
   const segs: Seg[] = (part.skin?.bones ?? []).map((b) => b.bindSeg);
   const paths = part.paths.map((p) => {
-    const cmds = pathToCubics(parsePath(p.d));
+    const cmds = warps?.get(p.id)?.source ?? pathToCubics(parsePath(p.d));
     // Every coordinate pair in order — endpoints and control points alike.
     const pts: { x: number; y: number }[][] = cmds.map((c) => {
       if (c.cmd === 'C') {
@@ -140,14 +143,16 @@ const STRETCH_MAX = 5;
  * (e.g. malformed path `d`, inside skinDataFor) — render.ts wraps the call in a
  * try/catch for that class so ONE broken part can never abort the whole renderPose.
  */
-export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | null): boolean {
+export function renderSkinnedPart(
+  part: RigPart, g: SVGGElement, t: number | null, warps?: Map<string, SkinPathWarp>,
+): boolean {
   const skin = part.skin;
   if (!skin) return true;
   if (!Array.isArray(skin.bones) || skin.bones.length === 0) return false; // nothing to
   // deform against — every point would collapse to the origin rather than throw, which
   // reads as "invisible", not "broken"; treat it as a failure so the caller falls back
   // to the (correct, visible) rigid rest render instead.
-  const data = skinDataFor(part);
+  const data = skinDataFor(part, warps);
 
   // Each bone's rigid delta from its bind pose (identity at rest → rest geometry) plus a
   // length-stretch factor: dragging a bone tip rotates AND stretches the limb.
@@ -199,7 +204,8 @@ export function renderSkinnedPart(part: RigPart, g: SVGGElement, t: number | nul
   let allFinite = true;
   for (const pd of data.paths) {
     let k = 0;
-    const out: PathCmd[] = pd.cmds.map((c, i) => {
+    const currentCommands = warps?.get(pd.id)?.current ?? pd.cmds;
+    const out: PathCmd[] = currentCommands.map((c, i) => {
       const mapped = pd.pts[i].map((pt) => {
         const idx = k++;
         const w = pd.weights[idx];

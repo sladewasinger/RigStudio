@@ -32,13 +32,16 @@
  */
 
 import { Channel, Clip, Keyframe, RigDoc, Track } from '../../core/model';
+import { RivSubpath } from './geometry';
+import { CompiledRivWarpPair } from './warp';
 import { Scene } from './writer';
 import { DrawRulesSetup, emitZKeyedProperty, planZDrawTargets, ZPlan } from './drawRules';
 import {
   argb, DEG2RAD, EASING_CUBIC, FPS, INTERP_CUBIC, INTERP_LINEAR, P_ANIM_NAME, P_COLOR,
   P_DURATION, P_FPS, P_FRAME, P_INTERP_TYPE, P_INTERPOLATOR_ID, P_KEYFRAME_COLOR_VALUE,
   P_LOOP, P_NODE_X, P_NODE_Y, P_OBJECT_ID, P_PROPERTY_KEY, P_ROOT_BONE_X, P_ROOT_BONE_Y,
-  P_ROTATION, P_SCALE_X, P_SCALE_Y, P_VALUE, P_X1, P_X2, P_Y1, P_Y2, T_CUBIC_INTERP,
+  P_ROTATION, P_SCALE_X, P_SCALE_Y, P_VALUE, P_VERT_X, P_VERT_Y, P_IN_ROTATION,
+  P_IN_DISTANCE, P_OUT_ROTATION, P_OUT_DISTANCE, P_X1, P_X2, P_Y1, P_Y2, T_CUBIC_INTERP,
   T_KEYED_OBJECT, T_KEYED_PROPERTY, T_KEYFRAME_COLOR, T_KEYFRAME_DOUBLE, T_LINEAR_ANIM,
 } from './keys';
 
@@ -49,6 +52,20 @@ export interface OpacityColorTarget {
   /** The path's own fill-opacity/stroke-opacity — the multiplier the keyed part opacity
    *  applies on top of, exactly mirroring the static rest-opacity fold in scene.ts. */
   baseOpacity: number;
+}
+
+/** The native Rive vertex components emitted for one source RigPath. Geometry warp
+ * tracks key these components directly; the static values remain the warp's 0% pose. */
+export interface WarpPathTarget {
+  partId: string;
+  pathId: string;
+  subpaths: { geometry: RivSubpath; vertexIndices: number[] }[];
+  pair: CompiledRivWarpPair;
+  geometryAt: (amount: number) => RivSubpath[];
+}
+
+export function warpPathTargetKey(partId: string, pathId: string): string {
+  return `${partId}\u0000${pathId}`;
 }
 
 /**
@@ -66,6 +83,7 @@ export function emitAnimations(
   rootBaseX: number,
   rootBaseY: number,
   opacityTargets: Map<string, OpacityColorTarget[]>,
+  warpPathTargets: Map<string, WarpPathTarget>,
   drawRules: DrawRulesSetup,
   hiddenIds: Set<string>,
 ): void {
@@ -194,6 +212,47 @@ export function emitAnimations(
       props.push({ objectId: objectIdOf(spec.target), propertyKey, keys });
     }
 
+    for (const target of warpPathTargets.values()) {
+      const track = clip.tracks.find(
+        (candidate) => candidate.target === target.pair.warpId && candidate.channel === 'warp',
+      );
+      const sorted = keysOf(track);
+      if (sorted.length === 0) continue;
+      const sampled = sorted.map((key) => target.geometryAt(key.value));
+      if (!sameWarpTopology(target, sampled)) {
+        throw new Error(`Warp correspondence "${target.pair.pairId}" no longer matches its emitted source geometry.`);
+      }
+      for (let si = 0; si < target.subpaths.length; si++) {
+        const emitted = target.subpaths[si];
+        for (let vi = 0; vi < emitted.vertexIndices.length; vi++) {
+          const objectId = emitted.vertexIndices[vi];
+          const properties: [number, (vertex: RivSubpath['verts'][number]) => number][] = [
+            [P_VERT_X, (vertex) => vertex.x],
+            [P_VERT_Y, (vertex) => vertex.y],
+            [P_IN_ROTATION, (vertex) => vertex.inRot],
+            [P_IN_DISTANCE, (vertex) => vertex.inDist],
+            [P_OUT_ROTATION, (vertex) => vertex.outRot],
+            [P_OUT_DISTANCE, (vertex) => vertex.outDist],
+          ];
+          for (const [propertyKey, valueOf] of properties) {
+            const values = sampled.map((subpaths) => valueOf(subpaths[si].verts[vi]));
+            if (propertyKey === P_IN_ROTATION || propertyKey === P_OUT_ROTATION) unwrapAngles(values);
+            const keys = sorted.map((key, i) => {
+              let interpType = INTERP_LINEAR;
+              let interpId = -1;
+              const next = sorted[i + 1];
+              if (next) {
+                const bez = cubicFor(next);
+                if (bez) { interpType = INTERP_CUBIC; interpId = emitInterpolator(bez); }
+              }
+              return { frame: toFrame(key.time, fps), value: values[i], interpType, interpId };
+            });
+            props.push({ objectId, propertyKey, keys });
+          }
+        }
+      }
+    }
+
     // Keyed draw order (z): a full per-drawable rank plan at the union of every z event.
     const zPlans: ZPlan[] = planZDrawTargets(scene, doc, clip, drawRules, hiddenIds, fps);
 
@@ -261,6 +320,22 @@ export function emitAnimations(
         scene.end();
       }
     }
+  }
+}
+
+function sameWarpTopology(target: WarpPathTarget, samples: RivSubpath[][]): boolean {
+  return samples.every((subpaths) =>
+    subpaths.length === target.subpaths.length && subpaths.every(
+      (subpath, index) => subpath.closed === target.subpaths[index].geometry.closed &&
+        subpath.verts.length === target.subpaths[index].vertexIndices.length,
+    ));
+}
+
+/** Keep scalar polar-handle keys on the closest equivalent turn across -pi/pi. */
+function unwrapAngles(values: number[]): void {
+  for (let i = 1; i < values.length; i++) {
+    while (values[i] - values[i - 1] > Math.PI) values[i] -= Math.PI * 2;
+    while (values[i] - values[i - 1] < -Math.PI) values[i] += Math.PI * 2;
   }
 }
 

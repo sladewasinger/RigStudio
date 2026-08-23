@@ -44,3 +44,4 @@ export * from './childOrder';
 export * from './slotReorder';
 export * from './paintOrder';
 export * from './idGen';
+export * from '../geometry/warp';

@@ -96,7 +96,7 @@ export function newBlankDoc(): RigDoc {
 // ---- Serialization (project save/load) ----
 
 const DOC_FORMAT = 'rig-studio';
-const DOC_VERSION = 2;
+const DOC_VERSION = 3;
 
 export function serializeDoc(doc: RigDoc): string {
   return JSON.stringify({ format: DOC_FORMAT, version: DOC_VERSION, doc }, null, 1);
@@ -186,6 +186,20 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
   }
   // Drop dangling parent references (e.g. hand-edited files).
   const ids = new Set(doc.parts.map((p) => p.id));
+  const pathOwners = new Map<string, string>();
+  for (const part of doc.parts) for (const path of part.paths) pathOwners.set(path.id, part.id);
+  if (!Array.isArray(doc.warps)) delete doc.warps;
+  if (doc.warps) doc.warps = doc.warps.filter((warp) => {
+    if (!warp || warp.version !== 1 || typeof warp.id !== 'string' || typeof warp.name !== 'string') return false;
+    if (!ids.has(warp.sourcePartId) || !ids.has(warp.targetPartId) || warp.sourcePartId === warp.targetPartId) return false;
+    if (!Array.isArray(warp.pairs)) warp.pairs = [];
+    warp.pairs = warp.pairs.filter((pair) =>
+      !!pair && typeof pair.id === 'string' && pathOwners.get(pair.sourcePathId) === pair.sourcePartId &&
+      pathOwners.get(pair.targetPathId) === pair.targetPartId &&
+      typeof pair.sourceFingerprint === 'string' && typeof pair.targetFingerprint === 'string',
+    ).map((pair) => ({ ...pair, seam: Number.isFinite(pair.seam) ? Math.max(0, Math.floor(pair.seam!)) : 0 }));
+    return true;
+  });
   const boneKindIds = new Set(doc.parts.filter((p) => p.kind === 'bone').map((p) => p.id));
   for (const part of doc.parts) {
     if (part.parentId && !ids.has(part.parentId)) part.parentId = null;
