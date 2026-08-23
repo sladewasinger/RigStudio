@@ -162,26 +162,26 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     // Layers eye: keep it a clean true/undefined (never keyable — see the field's doc
     // comment) so a hand-edited or legacy file can't smuggle a truthy-but-wrong-typed
     // value through to render.ts's display:none-equivalent toggle.
-    part.hidden = part.hidden === true ? true : undefined;
+    if (part.hidden !== true) delete part.hidden;
     // Unified Skeleton attach flag: same clean true/undefined treatment as `hidden`
     // above; the STRUCTURAL half of the repair (parent must actually resolve to a bone)
     // runs below once `boneKindIds` exists.
-    part.attachedRoot = part.attachedRoot === true ? true : undefined;
+    if (part.attachedRoot !== true) delete part.attachedRoot;
     part.parentId = part.parentId ?? null;
     part.boneTip = part.boneTip ?? null;
     healDegenerateBoneTip(part); // heals a present-but-degenerate tip in place; a no-op
     // for boneTip:null (nothing to heal) or an already-usable tip.
     part.skin = part.skin ?? null;
     if (part.skin && !Array.isArray(part.skin.bones)) part.skin = null;
-    part.influenceProfile = part.influenceProfile && Array.isArray(part.influenceProfile.bands)
-      ? part.influenceProfile
-      : null;
+    if (!part.influenceProfile || !Array.isArray(part.influenceProfile.bands)) {
+      delete part.influenceProfile;
+    }
     part.pivotHint = part.pivotHint ?? null;
     part.paths.forEach((p, i) => {
       trackId(p.id);
       p.label = p.label ?? `path_${i + 1}`;
       if (p.nodeTypes != null && typeof p.nodeTypes !== 'string') p.nodeTypes = null;
-      p.hidden = p.hidden === true ? true : undefined;
+      if (p.hidden !== true) delete p.hidden;
     });
   }
   // Drop dangling parent references (e.g. hand-edited files).
@@ -217,7 +217,7 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
         center: Math.max(-1e6, Math.min(1e6, band.center)),
         width: Math.max(1, Math.min(1e6, band.width)),
       }));
-      if (part.influenceProfile.bands.length === 0) part.influenceProfile = null;
+      if (part.influenceProfile.bands.length === 0) delete part.influenceProfile;
     }
     // The PART-level bind record (pin-tracking fix — docTypes.ts's skin.restWorldInv):
     // a malformed/non-finite matrix would poison the PIN-TO-BODY render target, so drop

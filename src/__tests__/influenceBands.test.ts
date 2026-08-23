@@ -47,6 +47,21 @@ describe('group influence bands', () => {
     expect(influenceProfileWeights([{ x: 20, y: 0 }], [bones[0]], { bands: [] })[0]).toEqual([1]);
   });
 
+  it('rebuilds safely when rebinding adds a joint, without any path-node references', () => {
+    const old = autoInfluenceProfile(bones);
+    old.bands[0].center = 7;
+    const extended: SkinBone[] = [...bones, {
+      id: 'hand', restWorldInv: identity,
+      bindSeg: { p: { x: 100, y: 0 }, q: { x: 130, y: 0 } },
+    }];
+    const rebuilt = normalizeInfluenceProfile(old, extended);
+    expect(rebuilt.bands).toHaveLength(2);
+    expect(rebuilt.bands[0].center).toBe(7);
+    expect(rebuilt.bands[1]).toEqual(expect.objectContaining({
+      parentBoneId: 'lower', childBoneId: 'hand', center: 0,
+    }));
+  });
+
   it('resolves the nearest ancestor profile for every descendant, including hidden art', () => {
     const group = makePart('arm', { kind: 'group', influenceProfile: autoInfluenceProfile(bones) });
     const art = makePart('art', { parentId: group.id, paths: [makePath('armPath')] });
@@ -73,6 +88,6 @@ describe('group influence bands', () => {
       parentBoneId: 'upper', childBoneId: 'lower', center: Number.NaN, width: 0,
     }] };
     normalizeDoc(loaded);
-    expect(loaded.parts[0].influenceProfile).toBeNull();
+    expect(loaded.parts[0].influenceProfile).toBeUndefined();
   });
 });
