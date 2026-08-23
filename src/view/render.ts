@@ -117,6 +117,47 @@ function skinWarpsForPart(doc: RigDoc, part: RigPart, time: number | null): Map<
   return result;
 }
 
+function referenceWarpForPart(doc: RigDoc, part: RigPart) {
+  let current: RigPart | null = part;
+  while (current) {
+    const warp = doc.warps?.find((candidate) => candidate.targetPartId === current!.id);
+    if (warp) return warp;
+    current = current.parentId ? doc.parts.find((candidate) => candidate.id === current!.parentId) ?? null : null;
+  }
+  return null;
+}
+
+function applyWarpCrossfades(doc: RigDoc, part: RigPart, time: number | null): void {
+  if (!ctx.rootGroup) return;
+  const referenceWarp = referenceWarpForPart(doc, part);
+  for (const path of part.paths) {
+    const element = ctx.rootGroup.querySelector<SVGPathElement>(`[data-path-id="${path.id}"]`);
+    if (!element) continue;
+    if (referenceWarp) {
+      const paired = referenceWarp.pairs.some((pair) => pair.targetPathId === path.id);
+      if (state.editorMode === 'setup' && state.warpSetupId === referenceWarp.id) {
+        element.removeAttribute('visibility'); element.removeAttribute('opacity');
+      } else if (paired) element.setAttribute('visibility', 'hidden');
+      else {
+        element.removeAttribute('visibility');
+        element.setAttribute('opacity', String(warpAmount(referenceWarp.id, time)));
+      }
+      continue;
+    }
+    const sourceWarp = doc.warps?.find((warp) => {
+      let current: RigPart | null = part;
+      while (current) {
+        if (current.id === warp.sourcePartId) return true;
+        current = current.parentId ? doc.parts.find((candidate) => candidate.id === current!.parentId) ?? null : null;
+      }
+      return false;
+    });
+    if (sourceWarp && !sourceWarp.pairs.some((pair) => pair.sourcePathId === path.id)) {
+      element.setAttribute('opacity', String(1 - warpAmount(sourceWarp.id, time)));
+    } else element.removeAttribute('opacity');
+  }
+}
+
 /**
  * Set/remove the `opacity` presentation attribute on a part's own group from its
  * effective (rest-or-keyed) opacity, clamped to 0..1 — but only TOUCH the DOM when the
@@ -245,13 +286,15 @@ export function renderPose(): void {
     // per part (not inherited) because the canvas is a FLAT list of run groups, not a
     // nested DOM tree, so a hidden ancestor's state can't cascade through CSS alone.
     const reference = isWarpReferencePart(doc, part.id);
-    const hidden = isEffectivelyHidden(part) || (reference && (state.warpSetupId === null || state.editorMode !== 'setup'));
+    const hidden = isEffectivelyHidden(part);
+    applyWarpCrossfades(doc, part, t);
     for (const g of groups) {
       g.classList.toggle('dimmed', dimmed);
       g.setAttribute('transform', transform);
       applyOpacity(part, g, t);
       g.classList.toggle('part-hidden', hidden);
-      g.classList.toggle('warp-reference', reference && !hidden);
+      g.classList.toggle('warp-reference', reference && state.editorMode === 'setup' && state.warpSetupId !== null && !hidden);
+      g.classList.toggle('warp-reference-runtime', reference && !hidden);
     }
   }
   applyDrawOrder(doc, t);

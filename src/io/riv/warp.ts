@@ -24,7 +24,21 @@ export interface CompiledRivWarpPair {
 
 export function compileRivWarpPairs(doc: RigDoc): CompiledRivWarpPair[] {
   const result: CompiledRivWarpPair[] = [];
-  for (const warp of doc.warps ?? []) for (const pair of warp.pairs) {
+  for (const warp of doc.warps ?? []) {
+    const descendantIds = (rootId: string) => {
+      const ids = new Set([rootId]);
+      let changed = true;
+      while (changed) { changed = false; for (const part of doc.parts) if (part.parentId && ids.has(part.parentId) && !ids.has(part.id)) { ids.add(part.id); changed = true; } }
+      return ids;
+    };
+    const sourceIds = descendantIds(warp.sourcePartId), targetIds = descendantIds(warp.targetPartId);
+    const sourcePaths = doc.parts.filter((part) => sourceIds.has(part.id)).flatMap((part) => part.paths).filter((path) => !path.hidden);
+    const targetPaths = doc.parts.filter((part) => targetIds.has(part.id)).flatMap((part) => part.paths).filter((path) => !path.hidden);
+    if (sourcePaths.some((path) => !warp.pairs.some((pair) => pair.sourcePathId === path.id)) ||
+      targetPaths.some((path) => !warp.pairs.some((pair) => pair.targetPathId === path.id))) {
+      throw new Error(`Warp "${warp.name}" contains unmatched artwork. Rive export cannot preserve its crossfade yet; pair the paths or remove the unmatched detail.`);
+    }
+    for (const pair of warp.pairs) {
     const compiled = compileWarpPathPair(doc, pair);
     const sourcePart = doc.parts.find((part) => part.id === pair.sourcePartId)!;
     const targetPart = doc.parts.find((part) => part.id === pair.targetPartId)!;
@@ -40,6 +54,7 @@ export function compileRivWarpPairs(doc: RigDoc): CompiledRivWarpPair[] {
       sourceStyle: sourcePath, targetStyle: targetPath,
       sourcePartOpacity: sourcePart.rest.opacity, targetPartOpacity: targetPart.rest.opacity,
     });
+  }
   }
   return result;
 }

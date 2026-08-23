@@ -147,6 +147,7 @@ input[type='number'],
 #warp-workspace footer { justify-content: flex-end; gap: 8px; border-top: 1px solid var(--divider); }
 #warp-workspace button.primary { background: var(--accent-2); color: #17171c; }
 .warp-reference { opacity: .18 !important; pointer-events: none; }
+.warp-reference-runtime { pointer-events: none; }
 @media (max-width: 700px) {
   #warp-workspace { top: auto; left: 6px; right: 6px; bottom: 6px; width: auto; max-height: 55vh; }
 }

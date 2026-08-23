@@ -99,4 +99,23 @@ describe('exportRiv native vertex warp', () => {
   it('is byte-deterministic', () => {
     expect(Array.from(exportRiv(warpDoc()))).toEqual(Array.from(exportRiv(warpDoc())));
   });
+
+  it('keys native paint color and stroke thickness with the same Warp track', () => {
+    const doc = warpDoc();
+    doc.parts[0].paths[0].stroke = '#000000';
+    doc.parts[0].paths[0].strokeWidth = 2;
+    doc.parts[1].paths[0].fill = '#ff0000';
+    doc.parts[1].paths[0].stroke = '#ffffff';
+    doc.parts[1].paths[0].strokeWidth = 8;
+    const animation = decodeRiv(exportRiv(doc)).animations.find((candidate) => candidate.name === 'morph')!;
+    expect(animation.objects.some((object) => object.props[0]?.propertyKey === PROP.COLOR)).toBe(true);
+    const thickness = animation.objects.find((object) => object.props[0]?.propertyKey === PROP.THICKNESS)!.props[0];
+    expect(thickness.keyframes.map((key) => key.value)).toEqual([2, 8]);
+  });
+
+  it('fails actionably instead of silently dropping unmatched crossfades', () => {
+    const doc = warpDoc();
+    doc.parts[0].paths.push(path('unmatched', 'M0 0 L1 1'));
+    expect(() => exportRiv(doc)).toThrow(/unmatched artwork.*cannot preserve.*pair/i);
+  });
 });
