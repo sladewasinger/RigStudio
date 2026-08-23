@@ -106,8 +106,24 @@ export function warpPathFingerprint(path: RigPath): string {
   return `v1:${topology(path)}`;
 }
 
-function holderMatrix(part: RigPart, path: RigPath): Mat {
-  return multiply(matrixOfTransform(part.transform), matrixOfTransform(path.transform));
+function restGroupMatrix(doc: RigDoc, part: RigPart): Mat {
+  const chain: RigPart[] = [];
+  let current: RigPart | null = part;
+  while (current) {
+    chain.unshift(current);
+    current = current.parentId ? doc.parts.find((candidate) => candidate.id === current!.parentId) ?? null : null;
+  }
+  const poses = chain.map((candidate) =>
+    `translate(${candidate.rest.tx},${candidate.rest.ty}) rotate(${candidate.rest.rotate},${candidate.pivot.x},${candidate.pivot.y})`,
+  ).join(' ');
+  const localPivot = applyMat(invertMat(matrixOfTransform(part.transform)), part.pivot.x, part.pivot.y);
+  const inner = `translate(${localPivot.x},${localPivot.y}) scale(${part.rest.sx},${part.rest.sy}) ` +
+    `skewX(${part.rest.kx}) skewY(${part.rest.ky}) translate(${-localPivot.x},${-localPivot.y})`;
+  return matrixOfTransform(`${poses} ${part.transform} ${inner}`);
+}
+
+function holderMatrix(doc: RigDoc, part: RigPart, path: RigPath): Mat {
+  return multiply(restGroupMatrix(doc, part), matrixOfTransform(path.transform));
 }
 
 export function compileWarpPathPair(doc: RigDoc, pair: WarpPathPair): { source: PathCmd[]; target: PathCmd[] } {
@@ -119,8 +135,8 @@ export function compileWarpPathPair(doc: RigDoc, pair: WarpPathPair): { source: 
   if (warpPathFingerprint(sourcePath) !== pair.sourceFingerprint || warpPathFingerprint(targetPath) !== pair.targetFingerprint) {
     throw new Error(`Warp correspondence "${sourcePath.label} ↔ ${targetPath.label}" is stale after a topology edit. Open Warp Setup and rebuild it.`);
   }
-  const sourceHolder = holderMatrix(sourcePart, sourcePath);
-  const targetToSource = multiply(invertMat(sourceHolder), holderMatrix(targetPart, targetPath));
+  const sourceHolder = holderMatrix(doc, sourcePart, sourcePath);
+  const targetToSource = multiply(invertMat(sourceHolder), holderMatrix(doc, targetPart, targetPath));
   const source = subpathsOf(sourcePath, matrixOfTransform(''));
   const target = subpathsOf(targetPath, targetToSource);
   if (source.length !== target.length) throw new Error(`Warp paths "${sourcePath.label}" and "${targetPath.label}" have different compound-path counts.`);

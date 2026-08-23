@@ -46,6 +46,18 @@ describe('Warp geometry and durable correspondence', () => {
     if (first.cmd === 'M') expect(first).toMatchObject({ x: 50, y: 60 });
   });
 
+  it('aligns endpoint groups with different pivots and nested rest transforms', () => {
+    const doc = createWarpTriangleSquareSample();
+    const targetPart = doc.parts.find((part) => part.id === 'square_shape')!;
+    targetPart.rest.tx = 12;
+    targetPart.rest.ty = -7;
+    targetPart.pivot = { x: 40, y: 40 };
+    targetPart.rest.rotate = 10;
+    const pair = doc.warps![0].pairs[0];
+    const before = serializePath(compileWarpPathPair(createWarpTriangleSquareSample(), pair).target);
+    expect(serializePath(compileWarpPathPair(doc, pair).target)).not.toBe(before);
+  });
+
   it('supports seam movement, direction reversal, and reverse timeline evaluation', () => {
     const doc = createWarpTriangleSquareSample();
     const pair = doc.warps![0].pairs[0];
