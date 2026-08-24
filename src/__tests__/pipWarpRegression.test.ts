@@ -103,6 +103,13 @@ describe('Pip independently-rigged arm Warp regression', () => {
     const shadowAfter = evaluateRiggedWarpCommands(doc, shadowPair, .5, 662).current;
     expectCommandsClose(shadowAfter, shadowBefore);
     expect(source.skin!.overrides!.path_878, 'the shadow owns a separate explicit pin record').toBeTruthy();
+
+    delete source.skin!.overrides!.path_878;
+    const shadowWithoutItsOwnPins = evaluateRiggedWarpCommands(doc, shadowPair, .5, 662).current;
+    expect(points(shadowWithoutItsOwnPins).some((point, index) => {
+      const pinned = points(shadowBefore)[index];
+      return Math.hypot(point.x - pinned.x, point.y - pinned.y) > .01;
+    }), 'removing the shadow\'s explicit pins changes only its own evaluated geometry').toBe(true);
   });
 
   it('exports the real rig as native skinned vertex keys without a duplicate target drawable', () => {
