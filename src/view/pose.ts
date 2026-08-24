@@ -67,6 +67,10 @@ export function effectiveOpacity(part: RigPart, t: number | null): number {
   return pose.effectiveOpacity(part, t, ctx.poseSampler ?? undefined);
 }
 
+export function effectiveVisibility(part: RigPart, t: number | null): number {
+  return pose.effectiveVisibility(part, t, ctx.poseSampler ?? undefined);
+}
+
 /** Ancestor poses composed with the part's own pose (bone hierarchy). */
 export function fullPoseTransform(part: RigPart, t: number | null): string {
   return pose.fullPoseTransform(part, t, ctx.poseSampler ?? undefined);

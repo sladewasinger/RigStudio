@@ -117,6 +117,13 @@ export function effectiveOpacity(part: RigPart, t: number | null, sampler?: Pose
   return sampler ? sampler(part.id, 'opacity') : channelValue(part, 'opacity', t);
 }
 
+export function effectiveVisibility(part: RigPart, t: number | null, sampler?: PoseSampler): number {
+  const parts = [part, ...ancestorChain(part)];
+  return parts.every((candidate) =>
+    (sampler ? sampler(candidate.id, 'visibility') : channelValue(candidate, 'visibility', t)) >= 0.5)
+    ? 1 : 0;
+}
+
 /** Ancestor poses composed with the part's own pose (bone hierarchy). */
 export function fullPoseTransform(part: RigPart, t: number | null, sampler?: PoseSampler): string {
   const pieces = ancestorChain(part).map((a) => ownPoseTransform(a, t, sampler));

@@ -133,6 +133,24 @@ describe('exportRiv native vertex warp', () => {
     expect(thickness.keyframes.map((key) => key.value)).toEqual([2, 8]);
   });
 
+  it('folds carrier visibility into the Warp paint plan without duplicate color properties', () => {
+    const doc = warpDoc();
+    doc.fps = 10;
+    doc.clips[0].tracks.push({ target: 'source', channel: 'visibility', keyframes: [
+      { time: 0, value: 1, easing: 'linear' },
+      { time: 1000, value: 0, easing: 'easeInOut' },
+    ] });
+    const animation = decodeRiv(exportRiv(doc)).animations.find((candidate) => candidate.name === 'morph')!;
+    const colors = animation.objects.filter((object) =>
+      object.props.some((property) => property.propertyKey === PROP.COLOR));
+    expect(colors).toHaveLength(1);
+    const keys = colors[0].props.find((property) => property.propertyKey === PROP.COLOR)!.keyframes;
+    expect(keys[0].value >>> 24).toBe(255);
+    expect(keys.find((key) => key.frame === 10)!.value >>> 24).toBe(0);
+    expect(keys.find((key) => key.frame === 9)!.interpType, 'segment entering hidden endpoint holds').toBe(0);
+    expect(keys.find((key) => key.frame === 8)!.interpType, 'Warp-only segment remains interpolated').toBe(1);
+  });
+
   it('fails actionably instead of silently dropping unmatched crossfades', () => {
     const doc = warpDoc();
     doc.parts[0].paths.push(path('unmatched', 'M0 0 L1 1'));

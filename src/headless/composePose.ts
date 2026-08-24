@@ -18,7 +18,7 @@
  * for H1b.
  */
 import {
-  RigDoc, Clip, RigPart, RigPath, state, artboardFrame, isEffectivelyHidden,
+  RigDoc, Clip, RigPart, RigPath, state, artboardFrame, effectiveVisibilityAt,
   flattenPaintOrder, PaintRun,
 } from '../core/model';
 import { effectiveOpacity, effectiveZ, groupTransformOf, rootPoseTransform } from '../geometry/pose';
@@ -107,7 +107,7 @@ export function composePose(doc: RigDoc, clip: Clip, timeMs: number): string {
     // drop a hidden subtree entirely, unlike the live canvas which keeps it in the DOM.
     const partsById = new Map(doc.parts.map((p) => [p.id, p]));
     const runs = flattenPaintOrder(doc, (part) => effectiveZ(part, timeMs))
-      .filter((run) => !isEffectivelyHidden(partsById.get(run.partId)!));
+      .filter((run) => effectiveVisibilityAt(doc, clip, partsById.get(run.partId)!, timeMs) >= 0.5);
     const groups = runs.map((run) => paintRunTag(partsById.get(run.partId)!, run, timeMs)).join('');
     return (
       `<svg xmlns="${SVG_NS}" viewBox="${frame.x} ${frame.y} ${frame.w} ${frame.h}" ` +

@@ -28,23 +28,12 @@
  * cannot be represented. Only the authored/rest stacking survives, via the doc.parts layer
  * order below. `trackOf` never looks up 'z', so z tracks simply don't participate.
  *
- * A keyed `opacity` channel and a non-1 `RestPose.opacity` are ALSO silently ignored this
- * wave — every layer's `ks.o` stays the static `{a:0, k:100}` it always was. Real opacity
- * export (rest AND keyed) is the next wave's work; exporting only the rest value while
- * dropping keys would silently strand mid-fade poses, a worse partial result than doing
- * neither yet.
- *
- * The Layers-panel eye (`RigPart.hidden`, editor-only, unrelated to the `opacity` channel
- * above) IS handled here: a hidden part's `shapes` array is emitted empty, so it paints
- * nothing. Its layer object, parenting, and transform tracks are otherwise untouched —
- * children may still ride a hidden part's pose (exactly like a bone/group today), so
- * removing the layer itself and remapping every descendant's `parent` index is left for a
- * future wave. `isEffectivelyHidden` cascades the flag down the parent chain per part.
+ * Paint-group opacity is frame-baked when opacity or stepped visibility animates, so
+ * visibility composes with opacity without inheriting through Lottie's parent layers.
  */
 
-import {
-  artboardFrame, Channel, Easing, isEffectivelyHidden, Keyframe, RigDoc, RigPart, RigPath, Track,
-} from '../core/model';
+import { artboardFrame, Channel, Easing, Keyframe, RigDoc, RigPart, RigPath, Track } from '../core/model';
+import { partPaintOpacityProp, partVisibleInSomeClip } from './lottieOpacity';
 import { parsePath, pathToCubics } from '../geometry/paths';
 import { Mat, applyMat, invertMat, matrixOfTransform, multiply } from '../geometry/transforms';
 
@@ -107,8 +96,9 @@ export function exportLottie(doc: RigDoc, clipIndex: number): string {
     // Lottie draws the first shape item on top, SVG paints the last one on top. A
     // Layers-eye-hidden part (or one riding a hidden ancestor) emits NO shapes — see the
     // module doc comment for why the layer itself stays (parenting/transform intact).
-    const shapes = isEffectivelyHidden(part) ? [] : part.paths.filter((p) => !p.hidden).reverse().flatMap((p) => {
-      const group = shapeGroup(part, p, ox, oy);
+    const paintOpacity = partPaintOpacityProp(doc, clip, part, fr);
+    const shapes = !partVisibleInSomeClip(doc, part, fr) ? [] : part.paths.filter((p) => !p.hidden).reverse().flatMap((p) => {
+      const group = shapeGroup(part, p, ox, oy, paintOpacity);
       return group ? [group] : [];
     });
     const ks = {
@@ -384,7 +374,7 @@ function pathToBeziers(d: string, m: Mat, ox: number, oy: number): SubPath[] {
  * mandatory default group transform. The baked part + path transforms are applied to
  * the geometry itself since they never animate.
  */
-function shapeGroup(part: RigPart, path: RigPath, ox: number, oy: number): JsonObj | null {
+function shapeGroup(part: RigPart, path: RigPath, ox: number, oy: number, paintOpacity: JsonObj): JsonObj | null {
   const baked = matrixOfTransform(part.transform);
   let m = baked;
   // Rest scale/skew: innermost (after baked), around the pivot mapped into pre-baked
@@ -439,7 +429,7 @@ function shapeGroup(part: RigPart, path: RigPath, ox: number, oy: number): JsonO
     a: { a: 0, k: [0, 0] },
     s: { a: 0, k: [100, 100] },
     r: { a: 0, k: 0 },
-    o: { a: 0, k: 100 },
+    o: paintOpacity,
     nm: 'transform',
   });
   return { ty: 'gr', it: items, nm: path.label };

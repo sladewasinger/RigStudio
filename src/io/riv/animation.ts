@@ -37,6 +37,8 @@ import { RivSubpath } from './geometry';
 import { CompiledRivWarpPair } from './warp';
 import { Scene } from './writer';
 import { DrawRulesSetup, emitZKeyedProperty, planZDrawTargets, ZPlan } from './drawRules';
+import { bakeVisibilityOpacity } from './visibilityOpacity';
+import { planWarpPaintVisibility } from './warpPaintVisibility';
 import {
   argb, DEG2RAD, EASING_CUBIC, FPS, INTERP_CUBIC, INTERP_LINEAR, P_ANIM_NAME, P_COLOR,
   P_DURATION, P_FPS, P_FRAME, P_INTERP_TYPE, P_INTERPOLATOR_ID, P_KEYFRAME_COLOR_VALUE,
@@ -120,12 +122,6 @@ export function emitAnimations(
     props: PlanProp[]; zPlans: ZPlan[]; opacityPlans: OpacityPlan[];
   }
 
-  const mixHex = (left: string, right: string, amount: number): string => {
-    const channel = (offset: number) => Math.round(parseInt(left.slice(offset, offset + 2), 16) +
-      (parseInt(right.slice(offset, offset + 2), 16) - parseInt(left.slice(offset, offset + 2), 16)) * amount);
-    return `#${[1, 3, 5].map((offset) => channel(offset).toString(16).padStart(2, '0')).join('')}`;
-  };
-
   // Canonical, deterministic per-target channel plan: [target, channel, propertyKey,
   // base offset, isAngle]. root first, then parts in doc order; fixed channel order.
   interface ChannelSpec {
@@ -170,6 +166,8 @@ export function emitAnimations(
   const buildOpacityPlans = (clip: Clip, partId: string): OpacityPlan[] => {
     const targets = opacityTargets.get(partId);
     if (!targets || targets.length === 0) return [];
+    const baked = bakeVisibilityOpacity(doc, clip, partId, targets, fps, toFrame);
+    if (baked) return baked;
     const track = clip.tracks.find((t) => t.target === partId && t.channel === 'opacity');
     const sorted = keysOf(track);
     if (sorted.length === 0) return [];
@@ -195,6 +193,7 @@ export function emitAnimations(
   const plans: PlanClip[] = doc.clips.map((clip) => {
     const props: PlanProp[] = [];
     const opacityPlans: OpacityPlan[] = [];
+    const warpPaintGovernedPartIds = new Set<string>();
     const trackOf = (target: string, channel: Channel): Track | undefined =>
       clip.tracks.find((t) => t.target === target && t.channel === channel);
 
@@ -228,6 +227,7 @@ export function emitAnimations(
       );
       const sorted = keysOf(track);
       if (sorted.length === 0) continue;
+      warpPaintGovernedPartIds.add(target.partId);
       if (clip.tracks.some((candidate) => candidate.target === target.partId && candidate.channel === 'opacity')) {
         throw new Error(`Warped part "${target.partId}" also animates opacity in clip "${clip.name}". Split the fade onto an unmatched detail before Rive export.`);
       }
@@ -276,14 +276,8 @@ export function emitAnimations(
         }
       }
       for (const paint of target.paints) {
-        const keys = sorted.map((key, i) => {
-          const amount = Math.min(1, Math.max(0, key.value));
-          let interpType = INTERP_LINEAR, interpId = -1;
-          const next = sorted[i + 1];
-          if (next) { const bez = cubicFor(next); if (bez) { interpType = INTERP_CUBIC; interpId = emitInterpolator(bez); } }
-          const opacity = paint.sourceOpacity + (paint.targetOpacity - paint.sourceOpacity) * amount;
-          return { frame: toFrame(key.time, fps), value: argb(mixHex(paint.sourceHex, paint.targetHex, amount), opacity), interpType, interpId };
-        });
+        const carrier = byId.get(target.partId)!;
+        const keys = planWarpPaintVisibility(doc, clip, carrier, paint, baked, fps);
         opacityPlans.push({ colorIndex: paint.colorIndex, keys });
       }
       if (target.stroke) {
@@ -302,7 +296,9 @@ export function emitAnimations(
     const zPlans: ZPlan[] = planZDrawTargets(scene, doc, clip, drawRules, hiddenIds, fps);
 
     // Keyed opacity: one plan per SolidColor owned by any part this clip keys opacity on.
-    for (const partId of opacityTargets.keys()) opacityPlans.push(...buildOpacityPlans(clip, partId));
+    for (const partId of opacityTargets.keys()) {
+      if (!warpPaintGovernedPartIds.has(partId)) opacityPlans.push(...buildOpacityPlans(clip, partId));
+    }
 
     return {
       name: clip.name,

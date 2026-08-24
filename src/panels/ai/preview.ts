@@ -108,6 +108,7 @@ function restFallbackFor(doc: RigDoc, target: string, channel: Channel): number 
     case 'sy': return part.rest.sy;
     case 'z': return CHANNEL_DEFAULTS.z; // stacking offset has no RestPose field
     case 'opacity': return part.rest.opacity;
+    case 'visibility': return part.hidden ? 0 : 1;
     case 'warp': return CHANNEL_DEFAULTS.warp;
   }
 }
@@ -120,7 +121,7 @@ function previewSampler(target: string, channel: Channel): number {
   const rest = restFallbackFor(doc, target, channel);
   const track = preview.tracks.find((t) => t.target === target && t.channel === channel);
   if (!track || track.keyframes.length === 0) return rest;
-  return sampleKeyList(track.keyframes, preview.timeMs, rest, channel === 'z');
+  return sampleKeyList(track.keyframes, preview.timeMs, rest, channel === 'z' || channel === 'visibility');
 }
 
 /** True once a running preview should be silently dropped — see the module comment's

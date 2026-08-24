@@ -486,6 +486,7 @@ export const LISTENER_TYPE: Record<SMListener['event'], number> = {
 
 // Rive keyframe interpolation enum (interpolationType). Linear needs no interpolator;
 // cubic references a CubicEaseInterpolator by index. (Hold=0/Linear=1/Cubic=2.)
+export const INTERP_HOLD = 0;
 export const INTERP_LINEAR = 1;
 export const INTERP_CUBIC = 2;
 

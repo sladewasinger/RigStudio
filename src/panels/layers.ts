@@ -13,7 +13,7 @@
 
 import {
   state, notify, selectedPart, selectPart, ancestorChain, effectiveChildOrder, RigPart,
-  RigPath, promotePathToPart,
+  RigPath, promotePathToPart, activeClip, channelValue, setKeyframe,
 } from '../core/model';
 import {
   renderPose, enterGroupsFor, selectPartContainer, updatePathAttrs, registerPart,
@@ -30,6 +30,7 @@ import {
 import { ensureLayersSplitter } from './layersResize';
 import { buildSearchBar, isDirectMatch, visiblePartIds } from './layersSearch';
 import { buildEmptyState } from '../ui/emptyState';
+import { buildPartVisibilityEye, layerVisibilityState } from './layerVisibility';
 
 /** layersDragAndDrop opens folders through this (the `expanded` set stays module-local). */
 const expandPart = (partId: string): void => { expanded.add(partId); };
@@ -130,7 +131,10 @@ function partNode(part: RigPart, visible: Set<string> | null): HTMLElement {
   const pathSelectedHere = part.id === state.selectedPartId && !!state.selectedPathId;
   if (part.id === state.selectedPartId && !pathSelectedHere) row.classList.add('selected');
   else if (pathSelectedHere || state.selectedPartIds.includes(part.id)) row.classList.add('in-selection');
-  if (part.hidden) row.classList.add('hidden-part');
+  const visibility = layerVisibilityState(part);
+  if (!visibility.effectivelyVisible) row.classList.add('hidden-part');
+  if (visibility.animated) row.classList.add('visibility-animated');
+  if (visibility.keyed) row.classList.add('visibility-keyed');
   if (isDirectMatch(part)) row.classList.add('search-match');
 
   // While a search is active, every visible row auto-expands (so a match is reachable
@@ -177,23 +181,7 @@ function partNode(part: RigPart, visible: Set<string> | null): HTMLElement {
     : `${part.paths.length}`;
   row.appendChild(count);
 
-  // Layers eye: editor-only visibility, NEVER keyable — the same `part.hidden` flag in
-  // both Edit and Animate, so toggling it never touches a clip's tracks (unlike the
-  // keyable `opacity` channel just above it in the inspector). stopPropagation so the
-  // click doesn't also run the row's select handler below.
-  const eye = document.createElement('button');
-  eye.type = 'button';
-  eye.className = 'layer-eye';
-  eye.appendChild(icon(part.hidden ? 'eyeClosed' : 'eyeOpen'));
-  eye.title = part.hidden ? 'Show this part' : 'Hide this part (editor only, never exported/keyed)';
-  eye.onclick = (ev) => {
-    ev.stopPropagation();
-    checkpoint();
-    part.hidden = !part.hidden;
-    renderPose();
-    notify();
-  };
-  row.appendChild(eye);
+  row.appendChild(buildPartVisibilityEye(part, visibility));
 
   row.onclick = (ev) => {
     // Shift = RANGE select between the anchor (current primary) and this row, in visible
@@ -291,9 +279,24 @@ function pathNode(part: RigPart, path: RigPath): HTMLElement {
   eye.onclick = (event) => {
     event.stopPropagation();
     checkpoint();
-    path.hidden = path.hidden ? undefined : true;
-    updatePathAttrs(path);
+    if (state.editorMode === 'animate' && activeClip()) {
+      const promoted = promotePathToPart(part, path.id);
+      if (promoted) {
+        if (promoted !== part) {
+          syncPartPathDom(part);
+          registerPart(promoted);
+          reorderCanvas();
+          selectPart(promoted.id);
+        }
+        const visible = channelValue(promoted, 'visibility', state.currentTime) >= 0.5;
+        setKeyframe(promoted.id, 'visibility', visible ? 0 : 1);
+      }
+    } else {
+      path.hidden = path.hidden ? undefined : true;
+      updatePathAttrs(path);
+    }
     notify();
+    renderPose();
   };
   pathRow.appendChild(eye);
   pathRow.onclick = () => {

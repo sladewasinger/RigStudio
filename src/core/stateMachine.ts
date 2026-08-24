@@ -342,7 +342,7 @@ class Instance implements SMInstance {
     const track = clip.tracks.find((t) => t.target === target && t.channel === channel);
     // Keyed channel → absolute sampled value; unkeyed → rest (the load-bearing rule).
     if (!track || track.keyframes.length === 0) return rest;
-    return sampleKeyList(track.keyframes, time, rest, channel === 'z');
+    return sampleKeyList(track.keyframes, time, rest, channel === 'z' || channel === 'visibility');
   }
 
   private restFallback(target: string, channel: Channel): number {
@@ -356,6 +356,7 @@ class Instance implements SMInstance {
       case 'sy': return part.rest.sy;
       case 'z': return CHANNEL_DEFAULTS.z; // draw-order offset has no RestPose field (rests at 0)
       case 'opacity': return part.rest.opacity;
+      case 'visibility': return part.hidden ? 0 : 1;
       case 'warp': return CHANNEL_DEFAULTS.warp;
     }
   }

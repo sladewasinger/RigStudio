@@ -34,7 +34,7 @@ export function buildClipSchema(opts: { withRig: boolean; withClipName: boolean 
               "A part label from the rig (art/bone/group) — NEVER 'root' (deprecated; " +
               'target a group part for whole-figure motion, see the targeting rule)',
           },
-          channel: { type: 'string', enum: ['rotate', 'tx', 'ty', 'sx', 'sy', 'z', 'opacity'] },
+          channel: { type: 'string', enum: ['rotate', 'tx', 'ty', 'sx', 'sy', 'z', 'opacity', 'visibility'] },
           keyframes: {
             type: 'array',
             items: {

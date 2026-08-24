@@ -36,6 +36,7 @@ export * from './docTypes';
 export * from './smTypes';
 export * from './appState';
 export * from './channels';
+export * from './visibility';
 export * from './boneOps';
 export * from './partHierarchy';
 export * from './structuralOps';

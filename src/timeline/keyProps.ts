@@ -132,12 +132,14 @@ export function buildKeyBar(): HTMLElement {
 
       const valIn = document.createElement('input');
       valIn.type = 'number';
-      valIn.step = 'any';
+      const visibilityKey = tlCtx.trackOfKey.get(key)?.channel === 'visibility';
+      valIn.step = visibilityKey ? '1' : 'any';
+      if (visibilityKey) { valIn.min = '0'; valIn.max = '1'; }
       valIn.value = String(key.value);
       valIn.title = 'Keyframe value';
       valIn.onchange = () => {
         checkpoint();
-        key.value = Number(valIn.value);
+        key.value = visibilityKey ? (Number(valIn.value) >= 0.5 ? 1 : 0) : Number(valIn.value);
         notify();
         renderPose();
       };
@@ -149,10 +151,13 @@ export function buildKeyBar(): HTMLElement {
     // The draw-order `z` channel samples STEPPED — easing/bezier are ignored for it — so
     // the dropdown is inert for an all-z selection. Disable it (with a why) rather than
     // let the user set an easing that silently does nothing.
-    const allZ = [...tlCtx.selectedKeys].every((k) => tlCtx.trackOfKey.get(k)?.channel === 'z');
-    if (allZ) {
+    const allStepped = [...tlCtx.selectedKeys].every((k) => {
+      const channel = tlCtx.trackOfKey.get(k)?.channel;
+      return channel === 'z' || channel === 'visibility';
+    });
+    if (allStepped) {
       easingSel.disabled = true;
-      easingSel.title = 'z is a stepped draw-order channel — easing does not apply to it.';
+      easingSel.title = 'Stepped channels hold their value — easing does not apply.';
     }
     const values = new Set([...tlCtx.selectedKeys].map((k) => k.easing));
     if (values.size > 1) {

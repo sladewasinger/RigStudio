@@ -302,7 +302,7 @@ export function clampRawClip(
         .map((k) => {
           const time = Math.min(duration, Math.max(0, k.time));
           if (time !== k.time) clampedCount++;
-          return { ...k, time };
+          return { ...k, time, value: t.channel === 'visibility' ? (k.value >= 0.5 ? 1 : 0) : k.value };
         })
         .sort((a, b) => a.time - b.time),
     }));

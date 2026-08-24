@@ -23,7 +23,7 @@ const KeyframeSchema = z.object({
     .describe('Custom cubic-bezier for the arriving segment; overrides `easing` when present.'),
 });
 
-const ChannelSchema = z.enum(['rotate', 'tx', 'ty', 'sx', 'sy', 'z', 'opacity']);
+const ChannelSchema = z.enum(['rotate', 'tx', 'ty', 'sx', 'sy', 'z', 'opacity', 'visibility']);
 
 const TrackSchema = z.object({
   target: z.string().describe('A part label (or "root", legacy) — never a new/unresolved label.'),

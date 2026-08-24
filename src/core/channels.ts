@@ -58,13 +58,17 @@ export function channelValue(part: RigPart, channel: Channel, time: number | nul
     : channel === 'sx' ? part.rest.sx
     : channel === 'sy' ? part.rest.sy
     : channel === 'opacity' ? part.rest.opacity
+    : channel === 'visibility' ? (part.hidden ? 0 : 1)
     : 0; // 'z' has no RestPose field — its stacking offset rests at 0 (CHANNEL_DEFAULTS.z)
   if (time === null) return rest;
   const clip = activeClip();
   const track = clip?.tracks.find((t) => t.target === part.id && t.channel === channel);
   if (!track || track.keyframes.length === 0) return rest;
-  return sampleChannel(part.id, channel, time);
+  return sampleKeyList(track.keyframes, time, rest, isSteppedChannel(channel));
 }
+
+export const isSteppedChannel = (channel: Channel): boolean =>
+  channel === 'z' || channel === 'visibility';
 
 /**
  * Interpolate a sorted keyframe list at a time (pure — no state lookup).
@@ -109,11 +113,12 @@ export function sampleKeyList(
 /** Sample a channel value from the active clip at the given time. */
 export function sampleChannel(target: string, channel: Channel, time: number): number {
   const clip = activeClip();
-  const fallback = CHANNEL_DEFAULTS[channel];
+  const part = state.doc?.parts.find((candidate) => candidate.id === target);
+  const fallback = channel === 'visibility' && part ? (part.hidden ? 0 : 1) : CHANNEL_DEFAULTS[channel];
   if (!clip) return fallback;
   const track = clip.tracks.find((t) => t.target === target && t.channel === channel);
   if (!track) return fallback;
-  return sampleKeyList(track.keyframes, time, fallback, channel === 'z');
+  return sampleKeyList(track.keyframes, time, fallback, isSteppedChannel(channel));
 }
 
 /**

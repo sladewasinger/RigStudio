@@ -406,7 +406,23 @@ input[type='number'] { width: 90px; }
 
 /* Layers eye (visibility toggle) */
 .layer-row.hidden-part { opacity: 0.55; }
+.layer-eye.visibility-animated::after {
+  content: '';
+  position: absolute;
+  right: 1px;
+  top: 1px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.layer-eye.visibility-keyed::after {
+  width: 6px;
+  height: 6px;
+  background: #ffd86b;
+}
 .layer-eye {
+  position: relative;
   flex: none;
   display: flex;
   align-items: center;

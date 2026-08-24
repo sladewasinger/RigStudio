@@ -225,7 +225,7 @@ describe('opacity channel (continuous, keyable — unlike z)', () => {
   });
 });
 
-describe('RigPart.hidden / isEffectivelyHidden (Layers eye — editor-only, never a channel)', () => {
+describe('RigPart.hidden / isEffectivelyHidden (Layers eye rest visibility)', () => {
   it('an unparented part is hidden only by its own flag', () => {
     const a = makePart('a');
     resetState(makeDoc([a]));

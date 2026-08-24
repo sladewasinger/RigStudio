@@ -46,7 +46,7 @@
  * headless/composePose.ts exactly.
  */
 
-import { artboardFrame, RigDoc, RigPart, RigPath } from '../../core/model';
+import { artboardFrame, hasVisibilityAnimation, RigDoc, RigPart, RigPath } from '../../core/model';
 import { assemble, Scene } from './writer';
 import {
   emitAnimations, OpacityColorTarget, WarpPathTarget, warpPathTargetKey,
@@ -92,7 +92,8 @@ function effectivelyHiddenIds(doc: RigDoc): Set<string> {
       // Warp targets are authoring references, not a second drawable pose. The live
       // canvas shows them only while Warp Setup is open; a runtime export never has
       // that editor-only mode, so exclude the target root and its descendants.
-      if (cur.hidden || warpReferenceRoots.has(cur.id)) { hidden.add(part.id); break; }
+      if (warpReferenceRoots.has(cur.id)) { hidden.add(part.id); break; }
+      if (cur.hidden && !hasVisibilityAnimation(doc, cur)) { hidden.add(part.id); break; }
       seen.add(cur.id);
       cur = cur.parentId ? byId.get(cur.parentId) : undefined;
     }
@@ -142,6 +143,16 @@ export function exportRiv(doc: RigDoc): Uint8Array {
   const partIndex = new Map<string, number>();
   const inProgress = new Set<string>();
   const byId = new Map(doc.parts.map((p) => [p.id, p]));
+  const restVisible = (part: RigPart): boolean => {
+    const seen = new Set<string>();
+    let current: RigPart | undefined = part;
+    while (current && !seen.has(current.id)) {
+      if (current.hidden) return false;
+      seen.add(current.id);
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+    return true;
+  };
 
   const emitPart = (part: RigPart): void => {
     if (partIndex.has(part.id) || inProgress.has(part.id)) return;
@@ -267,6 +278,7 @@ export function exportRiv(doc: RigDoc): Uint8Array {
       const shapeIndex = emitShape(
         scene, part, rigPath, partIndex.get(part.id)!, opacityTargets, warpPathTargets,
         warpPairsByPath.get(warpPathTargetKey(part.id, rigPath.id)) ?? [], skinPlan,
+        restVisible(part),
       );
       if (shapeIndex !== null) {
         emittedDrawableShapes.push({ partId: part.id, pathId: rigPath.id, shapeIndex });
@@ -317,6 +329,7 @@ function emitShape(
   opacityTargets: Map<string, OpacityColorTarget[]>,
   warpPathTargets: Map<string, WarpPathTarget>, warpPairs: CompiledRivWarpPair[],
   skinPlan: SkinPlan | null,
+  restVisible: boolean,
 ): number | null {
   const m = bakedMatrix(part, path);
   const sourceData = warpPairs.length > 0 ? rivWarpPathData(warpPairs[0], 0) : path.d;
@@ -370,7 +383,7 @@ function emitShape(
   // already do — see animation.ts's header comment for why the KEYED case targets these
   // SAME SolidColors (not Node.opacity, which cascades to children and would mismatch
   // this editor's non-propagating part opacity) and how it avoids double-applying rest.
-  const restOpacity = Math.min(1, Math.max(0, part.rest.opacity));
+  const restOpacity = restVisible ? Math.min(1, Math.max(0, part.rest.opacity)) : 0;
   if (path.fill) {
     const fillIndex = scene.begin(T_FILL);
     scene.propUint(P_PARENT_ID, shapeIndex);

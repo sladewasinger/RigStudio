@@ -9,7 +9,8 @@
  */
 
 import {
-  state, activeClip, Channel, RigDoc, RigPart, isEffectivelyHidden, flattenPaintOrder,
+  state, activeClip, Channel, RigDoc, RigPart, flattenPaintOrder,
+  effectiveVisibilityAt,
   sampleKeyList,
 } from '../core/model';
 import {
@@ -19,7 +20,7 @@ import { canUndo, canRedo } from '../core/history';
 import { ctx, SVG_NS, syncBonePlacementSurface } from './context';
 import {
   poseTime, rootPoseTransform, groupTransformOf, effectiveZ, effectiveOpacity,
-  effectiveScaleX, effectiveScaleY, effectivePivot,
+  effectiveScaleX, effectiveScaleY, effectivePivot, effectiveVisibility,
 } from './pose';
 import { focusContext, nodeEditSkinSuspendId } from './focus';
 import { renderSkinnedPart, SkinPathWarp } from './skinRender';
@@ -316,7 +317,7 @@ export function renderPose(): void {
     // per part (not inherited) because the canvas is a FLAT list of run groups, not a
     // nested DOM tree, so a hidden ancestor's state can't cascade through CSS alone.
     const reference = isWarpReferencePart(doc, part.id);
-    const hidden = isEffectivelyHidden(part);
+    const hidden = effectiveVisibility(part, t) < 0.5;
     applyWarpCrossfades(doc, part, t);
     for (const g of groups) {
       g.classList.toggle('dimmed', dimmed);
@@ -435,7 +436,7 @@ function renderOnion(): void {
     layer.setAttribute('class', `onion-ghost ${cls}`);
     layer.setAttribute('transform', rootPoseTransform(ghostTime));
     for (const part of doc.parts) {
-      if (isEffectivelyHidden(part)) continue; // a hidden part has no ghost either
+      if (effectiveVisibilityAt(doc, clip, part, ghostTime) < 0.5) continue;
       const g = document.createElementNS(SVG_NS, 'g');
       g.setAttribute('transform', groupTransformOf(part, ghostTime));
       // Each ghost is built FRESH (never cloned from the live part group), so sampling

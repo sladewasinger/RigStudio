@@ -305,6 +305,7 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     clip.loop = clip.loop ?? true;
     for (const track of clip.tracks) {
       for (const k of track.keyframes) {
+        if (track.channel === 'visibility') k.value = k.value >= 0.5 ? 1 : 0;
         if (!EASINGS.includes(k.easing)) k.easing = 'easeInOut';
         if (k.bezier != null) {
           const b = k.bezier;

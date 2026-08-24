@@ -1,6 +1,6 @@
 /**
  * Interaction tests for the opacity channel (keyable, continuous) and the Layers eye
- * (`RigPart.hidden`, editor-only, never keyable).
+ * (`RigPart.hidden` in Edit, stepped clip-local visibility keys in Animate).
  *
  * Opacity mirrors the z-order channel's render wiring (render.ts's `applyOpacity`,
  * pose.ts's `effectiveOpacity`) but EASES normally instead of stepping — scenario 1 pins
@@ -169,24 +169,38 @@ describe('scenario — Layers eye hides a part: visibility, hit-testing, undo', 
   });
 });
 
-describe('scenario — Layers eye never creates keyframes (Animate mode guard)', () => {
-  it('hides and shows a part in Animate mode with the active clip track count unchanged throughout', () => {
+describe('scenario — Layers eye creates clip-local stepped visibility keys in Animate', () => {
+  it('keys at the playhead without mutating rest visibility, scrubs, indicates animation, and undoes', () => {
     setEditorMode('animate');
     const part = state.doc!.parts[0];
+    const restHidden = part.hidden;
     notify();
-    const before = state.doc!.clips[state.activeClipIndex].tracks.length;
+    eyeButtonFor(part.label).click();
+    const track = state.doc!.clips[state.activeClipIndex].tracks.find(
+      (candidate) => candidate.target === part.id && candidate.channel === 'visibility',
+    )!;
+    expect(track.keyframes.map((key) => [key.time, key.value])).toEqual([[0, 0]]);
+    expect(part.hidden).toBe(restHidden);
+    expect(partGroupEl(part.label).classList.contains('part-hidden')).toBe(true);
+    expect(eyeButtonFor(part.label).classList.contains('visibility-keyed')).toBe(true);
 
-    eyeButtonFor(part.label).click(); // hide
-    expect(state.doc!.parts.find((p) => p.id === part.id)!.hidden).toBe(true);
-    expect(state.doc!.clips[state.activeClipIndex].tracks.length, 'hiding creates no track').toBe(before);
-    expect(
-      state.doc!.clips[state.activeClipIndex].tracks.some((t) => t.target === part.id),
-      'no track at all for this part appeared',
-    ).toBe(false);
+    state.currentTime = 500;
+    notify(); repaint();
+    eyeButtonFor(part.label).click();
+    expect(track.keyframes.map((key) => [key.time, key.value])).toEqual([[0, 0], [500, 1]]);
+    state.currentTime = 250;
+    notify(); repaint();
+    expect(partGroupEl(part.label).classList.contains('part-hidden')).toBe(true);
+    expect(eyeButtonFor(part.label).classList.contains('visibility-animated')).toBe(true);
+    state.currentTime = 750;
+    notify(); repaint();
+    expect(partGroupEl(part.label).classList.contains('part-hidden')).toBe(false);
 
-    eyeButtonFor(part.label).click(); // show again
-    expect(state.doc!.parts.find((p) => p.id === part.id)!.hidden).toBe(false);
-    expect(state.doc!.clips[state.activeClipIndex].tracks.length, 'showing creates no track').toBe(before);
+    undo();
+    const afterUndo = state.doc!.clips[state.activeClipIndex].tracks.find(
+      (candidate) => candidate.target === part.id && candidate.channel === 'visibility',
+    )!;
+    expect(afterUndo.keyframes.map((key) => [key.time, key.value])).toEqual([[0, 0]]);
   });
 });
 

@@ -245,16 +245,8 @@ export interface RigPart {
   /** Shared group/subtree weight-authoring profile compiled into descendant skins. */
   influenceProfile?: SkinInfluenceProfile | null;
   paths: RigPath[];
-  /**
-   * Layers-panel visibility (the eye icon). EDITOR-ONLY, doc data but NEVER keyable and
-   * NEVER animated — "Keyable channels must map to Rive runtime features" (CLAUDE.md),
-   * and there is no Rive/Lottie runtime property for "this layer disappears at frame N"
-   * short of a full opacity/visibility keyframe, which is what the `opacity` Channel is
-   * for. Toggling this never touches a clip's tracks in either editor mode. Cascades DOWN
-   * the parent chain at render/export time (`isEffectivelyHidden`) rather than being
-   * copied onto descendants, since the doc is a flat part list, not nested DOM/JSON.
-   * Absent/false = visible (the default for every part that predates this field).
-   */
+  /** Rest visibility edited by the Layers eye in Edit mode. Animate mode keys the
+   * stepped `visibility` channel instead, leaving this authored default untouched. */
   hidden?: boolean;
   /**
    * U1 (unified child ordering, 2026-07-13): this part's OWN paths and DIRECT child
@@ -283,12 +275,10 @@ export interface RigPart {
  * like every channel but SAMPLED STEPPED (hold the latest key at-or-before t; easing/bezier
  * ignored — a stacking rank is discrete, not blendable). See sampleKeyList's `stepped` arg.
  *
- * `opacity` is a normal CONTINUOUS channel (0..1, eases like rotate/tx/ty — no stepped
- * flag) backed by `RestPose.opacity`. It is the keyable half of the Layers-panel eye: the
- * eye toggle (`RigPart.hidden`) is editor-only and never becomes a track, but fading a
- * part in/out over time is a real Rive/Lottie runtime feature, so it gets a real channel.
+ * `opacity` is continuous. `visibility` is a stepped 0/1 channel written by the Layers
+ * eye in Animate; before its first key it falls back to the part's `hidden` rest state.
  */
-export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy' | 'z' | 'opacity' | 'warp';
+export type Channel = 'rotate' | 'tx' | 'ty' | 'sx' | 'sy' | 'z' | 'opacity' | 'visibility' | 'warp';
 
 export type Easing = 'linear' | 'easeIn' | 'easeOut' | 'easeInOut';
 
@@ -373,5 +363,6 @@ export const CHANNEL_DEFAULTS: Record<Channel, number> = {
   sy: 1,
   z: 0, // stacking OFFSET rest value; 0 = authored (doc.parts) draw order
   opacity: 1, // fully opaque; used for the synthetic 'root' target (no RestPose there)
+  visibility: 1,
   warp: 0,
 };

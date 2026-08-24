@@ -3,7 +3,7 @@
 import { IDENTITY, applyMat, matrixOfTransform, multiply, rotationMat } from '../geometry/transforms';
 import { Bounds, boundsCenter, pathBoundsThroughMatrix, unionBounds } from '../geometry/pathBounds';
 import { Channel, Easing, RigDoc, RigPart, Track, Vec2 } from './docTypes';
-import { selectPart, state } from './appState';
+import { activeClip, selectPart, state } from './appState';
 import { sampleKeyList } from './channels';
 import { restRenderMatrixOf } from './boneOps';
 import { freshId } from './idGen';
@@ -56,7 +56,17 @@ export function isGroupLike(part: RigPart, parts: RigPart[]): boolean {
  * apply this per part rather than relying on any kind of inheritance.
  */
 export function isEffectivelyHidden(part: RigPart): boolean {
-  return !!part.hidden || ancestorChain(part).some((a) => !!a.hidden);
+  const hiddenAtPlayhead = (candidate: RigPart): boolean => {
+    const rest = candidate.hidden ? 0 : 1;
+    if (state.editorMode !== 'animate') return rest === 0;
+    const track = activeClip()?.tracks.find((item) =>
+      item.target === candidate.id && item.channel === 'visibility');
+    const visible = track?.keyframes.length
+      ? sampleKeyList(track.keyframes, state.currentTime, rest, true)
+      : rest;
+    return visible < 0.5;
+  };
+  return hiddenAtPlayhead(part) || ancestorChain(part).some(hiddenAtPlayhead);
 }
 
 /**
