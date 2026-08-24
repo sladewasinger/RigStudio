@@ -6,6 +6,7 @@ import {
   createWarpTriangleSquareSample,
   WARP_TRIANGLE_SQUARE_SAMPLE,
 } from '../samples/warpTriangleSquare';
+import { exportRiv } from '../io/riv';
 
 describe('Triangle ↔ Square warp sample', () => {
   it('is discoverable and its public project matches the factory', () => {
@@ -25,7 +26,7 @@ describe('Triangle ↔ Square warp sample', () => {
     const warp = doc.warps?.[0];
     expect(warp).toBeTruthy();
     expect(doc.parts.filter((part) => part.kind === 'group').map((part) => part.label))
-      .toEqual(['Triangle', 'Square']);
+      .toEqual(['Triangle', 'Square', 'Rigged arm · side hand', 'Arm variant · open palm']);
 
     for (const rootId of ['triangle_group', 'square_group']) {
       expect(doc.parts.filter((part) => part.parentId === rootId).map((part) => part.label))
@@ -40,6 +41,22 @@ describe('Triangle ↔ Square warp sample', () => {
       expect(source && warpPathFingerprint(source)).toBe(pair.sourceFingerprint);
       expect(target && warpPathFingerprint(target)).toBe(pair.targetFingerprint);
     }
+  });
+
+  it('includes an editable shared-chain arm and combined showcase animation', () => {
+    const doc = createWarpTriangleSquareSample();
+    const armWarp = doc.warps!.find((warp) => warp.id === 'arm_side_to_palm')!;
+    expect(armWarp.pairs).toHaveLength(2);
+    expect(doc.parts.find((part) => part.id === 'arm_side_shape')!.skin!.bones.map((bone) => bone.id))
+      .toEqual(['arm_shoulder', 'arm_wrist']);
+    expect(doc.parts.find((part) => part.id === 'arm_side_shadow')!.skin!.bones.map((bone) => bone.id))
+      .toEqual(['arm_shoulder', 'arm_wrist']);
+    const showcase = doc.clips.find((clip) => clip.name === 'Warp Showcase · Shapes + Rigged Arm')!;
+    expect(showcase.tracks.map((track) => `${track.target}.${track.channel}`)).toEqual(expect.arrayContaining([
+      'triangle_group.rotate', 'triangle_to_square.warp', 'arm_shoulder.rotate',
+      'arm_wrist.rotate', 'arm_side_to_palm.warp',
+    ]));
+    expect(exportRiv(doc).byteLength).toBeGreaterThan(1000);
   });
 
   it('plays Triangle to Square to Triangle and compiles its unequal node counts', () => {
