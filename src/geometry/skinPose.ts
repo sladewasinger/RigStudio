@@ -186,13 +186,28 @@ export function compensateForCarrierSkin(
   // for the static carrier. The closing curve's independently compensated incoming
   // handle is retained, so tangent fidelity is unaffected.
   let start: { x: number; y: number } | null = null;
+  let bindStart: { x: number; y: number } | null = null;
   for (let index = 0; index < result.length; index++) {
     const command = result[index];
-    if (command.cmd === 'M') start = { x: command.x, y: command.y };
+    const bindCommand = carrierBind[index];
+    if (command.cmd === 'M' && bindCommand.cmd === 'M') {
+      start = { x: command.x, y: command.y };
+      bindStart = { x: bindCommand.x, y: bindCommand.y };
+    }
     else if (command.cmd === 'Z') {
       const previous = result[index - 1];
-      if (start && previous?.cmd === 'C') { previous.x = start.x; previous.y = start.y; }
-      start = null;
+      const bindPrevious = carrierBind[index - 1];
+      if (start && bindStart && previous?.cmd === 'C' && bindPrevious?.cmd === 'C') {
+        const explicitClose = Math.hypot(bindPrevious.x - bindStart.x, bindPrevious.y - bindStart.y) < 1e-3;
+        if (explicitClose) { previous.x = start.x; previous.y = start.y; }
+        else if (Math.hypot(previous.x - start.x, previous.y - start.y) < 1e-3) {
+          const dx = bindPrevious.x - bindStart.x, dy = bindPrevious.y - bindStart.y;
+          const length = Math.hypot(dx, dy) || 1;
+          previous.x = start.x + dx / length * .002;
+          previous.y = start.y + dy / length * .002;
+        }
+      }
+      start = null; bindStart = null;
     }
   }
   return result;

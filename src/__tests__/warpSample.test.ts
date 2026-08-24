@@ -46,15 +46,17 @@ describe('Triangle ↔ Square warp sample', () => {
   it('includes an editable shared-chain arm and combined showcase animation', () => {
     const doc = createWarpTriangleSquareSample();
     const armWarp = doc.warps!.find((warp) => warp.id === 'arm_side_to_palm')!;
-    expect(armWarp.pairs).toHaveLength(2);
+    expect(armWarp.pairs).toHaveLength(3);
     expect(doc.parts.find((part) => part.id === 'arm_side_shape')!.skin!.bones.map((bone) => bone.id))
-      .toEqual(['arm_shoulder', 'arm_wrist']);
+      .toEqual(['arm_shoulder', 'arm_wrist', 'arm_hand']);
     expect(doc.parts.find((part) => part.id === 'arm_side_shadow')!.skin!.bones.map((bone) => bone.id))
-      .toEqual(['arm_shoulder', 'arm_wrist']);
+      .toEqual(['arm_shoulder', 'arm_wrist', 'arm_hand']);
+    expect(doc.parts.find((part) => part.id === 'arm_palm_shape')!.skin!.bones.map((bone) => bone.id))
+      .toEqual(['arm_shoulder', 'arm_wrist', 'arm_hand']);
     const showcase = doc.clips.find((clip) => clip.name === 'Warp Showcase · Shapes + Rigged Arm')!;
     expect(showcase.tracks.map((track) => `${track.target}.${track.channel}`)).toEqual(expect.arrayContaining([
       'triangle_group.rotate', 'triangle_to_square.warp', 'arm_shoulder.rotate',
-      'arm_wrist.rotate', 'arm_side_to_palm.warp',
+      'arm_wrist.rotate', 'arm_hand.rotate', 'arm_side_to_palm.warp',
     ]));
     expect(exportRiv(doc).byteLength).toBeGreaterThan(1000);
   });

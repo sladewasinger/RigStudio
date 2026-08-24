@@ -4,6 +4,7 @@ import { notify, state } from '../../core/model';
 import { renderPose } from '../../view';
 import { createWarpTriangleSquareSample } from '../../samples/warpTriangleSquare';
 import { bootRig, setEditorMode } from './harness';
+import pipFixture from '../fixtures/pip-failing-warp-test.json';
 
 beforeAll(bootRig);
 
@@ -41,6 +42,14 @@ describe('right dock visual QA artifacts', () => {
     for (const [label, time] of [['initial', 0], ['bone-pose', 700], ['both-midpoints', 1100], ['exact-targets', 1700], ['wave-left', 2200], ['wave-right', 2700], ['return', 4000]] as const) {
       state.currentTime = time; notify(); renderPose();
       await page.screenshot({ path: `../../../docs/qa/warp-showcase/${label}.png` });
+    }
+
+    api.loadProjectText(JSON.stringify(pipFixture));
+    state.editorMode = 'animate'; state.activeClipIndex = 0;
+    document.getElementById('right-dock-tab-warps')!.click();
+    for (const [label, time] of [['posed-source', 314], ['forward-midpoint', 488], ['horizontal-target', 662], ['reverse-midpoint', 900], ['return-source', 1155]] as const) {
+      state.currentTime = time; notify(); renderPose();
+      await page.screenshot({ path: `../../../docs/qa/pip-warp/${label}.png` });
     }
   });
 });
