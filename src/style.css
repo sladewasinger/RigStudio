@@ -465,6 +465,11 @@ input[type='number'] { width: 90px; }
   margin: var(--sp-1) 0;
 }
 .field span { color: var(--muted); }
+.visibility-key-readout output { text-align: right; overflow-wrap: anywhere; }
+.visibility-key-choices { margin: 0; }
+.visibility-key-choices button.active { background: var(--accent); color: #111; border-color: var(--accent); }
+.visibility-key-time input { width: 96px; }
+.visibility-key-actions { margin-top: var(--sp-3); flex-wrap: wrap; }
 
 .ai-panel { margin-top: 18px; border-top: 1px solid var(--border); padding-top: var(--sp-3); }
 .ai-panel textarea { margin: 6px 0; resize: vertical; }

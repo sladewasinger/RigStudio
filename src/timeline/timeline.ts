@@ -21,5 +21,6 @@ export { buildTimeline, render } from './panel';
 export { togglePlay } from './transport';
 export {
   hasKeySelection, clearKeySelection, copySelectedKeys, pasteKeysAtPlayhead,
-  deleteSelectedKeys, nudgeSelectedKeys, selectColumnAtPlayhead,
+  deleteSelectedKeys, nudgeSelectedKeys, selectColumnAtPlayhead, selectedKeyEntries,
 } from './keyProps';
+export type { SelectedKeyEntry } from './keyProps';

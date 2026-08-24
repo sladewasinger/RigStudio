@@ -16,6 +16,7 @@ import { buildPathSection, buildArtboardSection } from './objectSection';
 import { buildEmptyState } from '../../ui/emptyState';
 import { buildInfluenceBandsSection } from './influenceBandsSection';
 import { cancelInfluenceEditing } from '../../view';
+import { buildVisibilityKeySection } from './visibilityKeySection';
 
 // ---- Inspector ----
 
@@ -56,6 +57,8 @@ export function buildInspector(el: HTMLElement): void {
   } else {
     el.appendChild(heading);
   }
+
+  if (!setup && buildVisibilityKeySection(el)) return;
 
   const part = selectedPart();
   if (part) {

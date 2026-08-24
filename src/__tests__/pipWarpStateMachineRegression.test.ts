@@ -73,12 +73,13 @@ describe('real Pip Warp state-machine and Rive parity', () => {
     state.doc = doc;
     state.activeClipIndex = 1;
     const clip = doc.clips[1];
+    const fps = doc.fps ?? 60;
     const warp = doc.warps![0];
     const warpTrack = clip.tracks.find((track) => track.target === warp.id && track.channel === 'warp')!;
     let observedClockDrift = 0;
 
     for (const frame of [35, 42, 49, 90, 308, 326]) {
-      const time = frame / doc.fps * 1000;
+      const time = frame / fps * 1000;
       const amount = sampleKeyList(warpTrack.keyframes, time, 0);
       const runtimeSampler = riveFramePoseSampler(doc, clip, time);
       const runtimeAmount = runtimeSampler(warp.id, 'warp');
@@ -103,7 +104,7 @@ describe('real Pip Warp state-machine and Rive parity', () => {
       const frames = property.keyframes.map((key) => key.frame);
       expect(new Set(frames).size).toBe(frames.length);
       expect(frames[0]).toBe(0);
-      expect(frames[frames.length - 1]).toBe(Math.round(clip.duration / 1000 * doc.fps));
+      expect(frames[frames.length - 1]).toBe(Math.round(clip.duration / 1000 * fps));
     }
 
     const idleAnimation = decoded.animations.find((candidate) => candidate.name === 'idle')!;

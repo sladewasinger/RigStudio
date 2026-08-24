@@ -22,10 +22,27 @@ export function clearKeySelection(): void {
   tlCtx.selectedKeys.clear();
 }
 
+export interface SelectedKeyEntry {
+  key: Keyframe;
+  track: Track;
+}
+
+/** Live selected keys in the active clip. History restores replace every key object, so
+ * consumers outside the timeline must not trust selectedKeys/trackOfKey on their own. */
+export function selectedKeyEntries(): SelectedKeyEntry[] {
+  const clip = activeClip();
+  if (!clip) return [];
+  const entries: SelectedKeyEntry[] = [];
+  for (const track of clip.tracks) {
+    for (const key of track.keyframes) {
+      if (tlCtx.selectedKeys.has(key)) entries.push({ key, track });
+    }
+  }
+  return entries;
+}
+
 export function copySelectedKeys(): number {
-  const entries = [...tlCtx.selectedKeys]
-    .map((key) => ({ key, track: tlCtx.trackOfKey.get(key) }))
-    .filter((e): e is { key: Keyframe; track: Track } => !!e.track);
+  const entries = selectedKeyEntries();
   return copyKeys(entries.map(({ track, key }) => ({ track, key })));
 }
 
@@ -146,8 +163,8 @@ export function buildKeyBar(): HTMLElement {
       keyBar.appendChild(valIn);
     }
 
-    const easingSel = document.createElement('select');
-    easingSel.title = 'Easing of the segment arriving at the key';
+    const allVisibility = [...tlCtx.selectedKeys].every((k) =>
+      tlCtx.trackOfKey.get(k)?.channel === 'visibility');
     // The draw-order `z` channel samples STEPPED — easing/bezier are ignored for it — so
     // the dropdown is inert for an all-z selection. Disable it (with a why) rather than
     // let the user set an easing that silently does nothing.
@@ -155,33 +172,39 @@ export function buildKeyBar(): HTMLElement {
       const channel = tlCtx.trackOfKey.get(k)?.channel;
       return channel === 'z' || channel === 'visibility';
     });
-    if (allStepped) {
-      easingSel.disabled = true;
-      easingSel.title = 'Stepped channels hold their value — easing does not apply.';
+    // Visibility is intrinsically stepped. Do not present an easing control at all:
+    // even a disabled dropdown suggests that easing is meaningful serialized data.
+    if (!allVisibility) {
+      const easingSel = document.createElement('select');
+      easingSel.title = 'Easing of the segment arriving at the key';
+      if (allStepped) {
+        easingSel.disabled = true;
+        easingSel.title = 'Stepped channels hold their value — easing does not apply.';
+      }
+      const values = new Set([...tlCtx.selectedKeys].map((k) => k.easing));
+      if (values.size > 1) {
+        const mixed = document.createElement('option');
+        mixed.value = '';
+        mixed.textContent = '(mixed)';
+        mixed.selected = true;
+        easingSel.appendChild(mixed);
+      }
+      for (const e of EASINGS) {
+        const opt = document.createElement('option');
+        opt.value = e;
+        opt.textContent = e;
+        if (values.size === 1 && values.has(e)) opt.selected = true;
+        easingSel.appendChild(opt);
+      }
+      easingSel.onchange = () => {
+        if (!easingSel.value) return;
+        checkpoint();
+        for (const key of tlCtx.selectedKeys) key.easing = easingSel.value as Easing;
+        notify();
+        renderPose();
+      };
+      keyBar.appendChild(easingSel);
     }
-    const values = new Set([...tlCtx.selectedKeys].map((k) => k.easing));
-    if (values.size > 1) {
-      const mixed = document.createElement('option');
-      mixed.value = '';
-      mixed.textContent = '(mixed)';
-      mixed.selected = true;
-      easingSel.appendChild(mixed);
-    }
-    for (const e of EASINGS) {
-      const opt = document.createElement('option');
-      opt.value = e;
-      opt.textContent = e;
-      if (values.size === 1 && values.has(e)) opt.selected = true;
-      easingSel.appendChild(opt);
-    }
-    easingSel.onchange = () => {
-      if (!easingSel.value) return;
-      checkpoint();
-      for (const key of tlCtx.selectedKeys) key.easing = easingSel.value as Easing;
-      notify();
-      renderPose();
-    };
-    keyBar.appendChild(easingSel);
 
     keyBar.appendChild(button('delete keys', deleteSelectedKeys));
   } else {
