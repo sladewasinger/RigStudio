@@ -5,7 +5,7 @@ import {
   interpolateWarpCommands, repairWarpPair, resolvedWarpAlignment, warpPairIsStale, warpPathFingerprint,
 } from '../geometry/warp';
 import { serializePath } from '../geometry/paths';
-import { state } from '../core/model';
+import { deserializeDoc, serializeDoc, state } from '../core/model';
 import { groupTransformOf } from '../geometry/pose';
 import { applyMat, matrixOfTransform, multiply } from '../geometry/transforms';
 
@@ -163,6 +163,10 @@ describe('Warp geometry and durable correspondence', () => {
     repairWarpPair(doc, shadowPair);
     expect(warpPairIsStale(doc, shadowPair)).toBe(false);
     expect(shapePair.sourceFingerprint).toBe(shapeFingerprint);
+    const restored = deserializeDoc(serializeDoc(doc));
+    const restoredPair = restored.warps![0].pairs[1];
+    expect(warpPairIsStale(restored, restoredPair)).toBe(false);
+    expect(resolvedWarpAlignment(restored, restoredPair)).toEqual(resolvedWarpAlignment(doc, shadowPair));
   });
 
   it('prioritizes unique exact names and never accepts fuzzy names silently', () => {
