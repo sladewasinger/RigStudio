@@ -72,6 +72,12 @@ function renderPartRigidPaths(part: RigPart): void {
 function warpAmount(warpId: string, time: number | null): number {
   if (time === null) return 0;
   if (state.warpSetupId === warpId && state.warpPreviewActive && !state.playing) return state.warpPreviewAmount;
+  // State-machine preview owns independent clip clocks. Every ordinary pose channel
+  // already reaches that clock through ctx.poseSampler; Warp must do the same instead
+  // of accidentally sampling the Animate tab's selected clip/currentTime below.
+  // Keeping this at the common Warp boundary also means endpoint transforms, rigs,
+  // crossfades and reference suppression all consume one canonical blended amount.
+  if (ctx.poseSampler) return Math.min(1, Math.max(0, ctx.poseSampler(warpId, 'warp')));
   const track = activeClip()?.tracks.find((candidate) => candidate.target === warpId && candidate.channel === 'warp');
   return Math.min(1, Math.max(0, sampleKeyList(track?.keyframes ?? [], time, 0)));
 }

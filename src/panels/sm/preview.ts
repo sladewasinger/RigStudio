@@ -214,7 +214,7 @@ if (typeof window !== 'undefined') {
     selectState: (id: string | null) => { ctx.selStateId = id; ctx.selTransitionId = null; rerender(); },
     selectTransition: (id: string | null) => { ctx.selTransitionId = id; ctx.selStateId = null; rerender(); },
     selectMachine: (id: string | null) => { ctx.selMachineId = id; ctx.selStateId = null; ctx.selTransitionId = null; rerender(); },
-    channelValue: (target: string, channel: 'rotate' | 'tx' | 'ty' | 'sx' | 'sy') =>
+    channelValue: (target: string, channel: 'rotate' | 'tx' | 'ty' | 'sx' | 'sy' | 'warp') =>
       preview ? preview.instance.channelValue(target, channel) : null,
   };
 }
