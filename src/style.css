@@ -564,6 +564,16 @@ input[type='number'] { width: 90px; }
 }
 .tl-key:hover { background: #ffd166; transform: translate(-50%, -50%) rotate(45deg) scale(1.22); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5); }
 .tl-key.selected { background: #ffd166; outline: 1.5px solid #fff; outline-offset: -1px; }
+.tl-key.armed {
+  cursor: grab;
+  filter: brightness(1.12);
+}
+.tl-key.dragging {
+  cursor: grabbing;
+  transition: none;
+  transform: translate(-50%, -50%) rotate(45deg) scale(1.28);
+  box-shadow: 0 0 0 2px rgba(255, 209, 102, 0.3), 0 2px 7px rgba(0, 0, 0, 0.6);
+}
 .tl-empty { color: var(--muted); padding: 10px; }
 
 /* Timeline extras */

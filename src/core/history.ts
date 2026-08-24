@@ -34,6 +34,46 @@ export function checkpoint(): void {
   announce();
 }
 
+export interface CheckpointTransaction {
+  commit(): void;
+  /**
+   * Discard this checkpoint after the caller has restored any live mutations it made.
+   * This is for cancelable pointer gestures: Escape/pointercancel must leave neither a
+   * document edit nor a phantom undo/dirty entry behind.
+   */
+  cancel(): void;
+}
+
+/**
+ * Start one checkpoint that can still be discarded while a gesture is in flight.
+ * Callers must restore their own live model fields before `cancel()`; keeping that
+ * restoration local avoids replacing `state.doc` and invalidating pointer-held object
+ * references. A settled transaction is idempotent.
+ */
+export function beginCheckpointTransaction(): CheckpointTransaction {
+  const undoDepth = undoStack.length;
+  const redoBefore = redoStack;
+  const dirtyBefore = state.dirty;
+  checkpoint();
+  let settled = false;
+  return {
+    commit() {
+      settled = true;
+    },
+    cancel() {
+      if (settled) return;
+      settled = true;
+      if (undoStack.length !== undoDepth + 1) {
+        throw new Error('Cannot cancel a checkpoint after another history entry was added');
+      }
+      undoStack.pop();
+      redoStack = redoBefore;
+      state.dirty = dirtyBefore;
+      announce();
+    },
+  };
+}
+
 export function undo(): void {
   if (!state.doc || undoStack.length === 0) return;
   redoStack.push(structuredClone(state.doc));

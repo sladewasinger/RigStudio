@@ -5,8 +5,15 @@
 
 import { state, notify, deleteKeyframe, Track, Keyframe, Clip } from '../core/model';
 import { renderPose } from '../view';
-import { checkpoint } from '../core/history';
+import { beginCheckpointTransaction, checkpoint, CheckpointTransaction } from '../core/history';
 import { tlCtx, div, movePlayheadTo, syncPartSelectionFromKeys, formatTime } from './tlState';
+
+/** Screen-space gesture thresholds. Five pixels of press wobble is always a click.
+ * A deliberate 10px move starts immediately; a subtler 6px move starts after a short
+ * press, so precision dragging remains available without making expert drags sluggish. */
+export const KEY_DRAG_HOLD_MS = 180;
+export const KEY_DRAG_AFTER_HOLD_PX = 6;
+export const KEY_DRAG_IMMEDIATE_PX = 10;
 
 /** The whole lanes area: ruler + padding + one lane per track + padding, with marquee
  *  box-select wired across the block. */
@@ -116,7 +123,9 @@ function buildLane(track: Track, duration: number, index: number): HTMLElement {
     if (tlCtx.selectedKeys.has(key)) diamond.classList.add('selected');
     diamond.title =
       `${key.time} ms = ${key.value} · ${key.easing}\n` +
-      'click: select · drag: retime · double-click: delete';
+      'click: select · hold + drag: retime · double-click: delete';
+    diamond.draggable = false;
+    diamond.addEventListener('dragstart', (event) => event.preventDefault());
     tlCtx.diamondEls.push({ el: diamond, key });
     diamond.addEventListener('dblclick', () => {
       checkpoint();
@@ -126,16 +135,29 @@ function buildLane(track: Track, duration: number, index: number): HTMLElement {
       renderPose();
     });
     diamond.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0 || !ev.isPrimary) return;
+      ev.preventDefault();
       ev.stopPropagation();
-      // Selection first: plain click selects this key; Shift toggles membership; a key
-      // already in the selection keeps the group (so dragging moves them all).
+      const selectionBefore = new Set(tlCtx.selectedKeys);
+      const selectedPartIdBefore = state.selectedPartId;
+      const selectedPartIdsBefore = [...state.selectedPartIds];
+      const selectedPathIdBefore = state.selectedPathId;
+      const playheadBefore = state.currentTime;
+
+      // Keep a Shift-clicked selected key in the armed set until pointerup. If this turns
+      // into a drag it must move the whole selection; if it stays a click, pointerup
+      // performs the requested toggle-off.
+      const shiftToggleOff = ev.shiftKey && tlCtx.selectedKeys.has(key);
       if (ev.shiftKey) {
-        if (tlCtx.selectedKeys.has(key)) tlCtx.selectedKeys.delete(key);
-        else tlCtx.selectedKeys.add(key);
+        if (!shiftToggleOff) tlCtx.selectedKeys.add(key);
       } else if (!tlCtx.selectedKeys.has(key)) {
         tlCtx.selectedKeys.clear();
         tlCtx.selectedKeys.add(key);
       }
+      for (const { el, key: candidate } of tlCtx.diamondEls) {
+        el.classList.toggle('selected', tlCtx.selectedKeys.has(candidate));
+      }
+      diamond.classList.add('armed');
       // Selects the target part(s) too — ONCE per press, not per retime-drag pointermove
       // (see tlState.ts's syncPartSelectionFromKeys); the deferred notify() in `up` below
       // is what actually repaints the layers tree/inspector for it.
@@ -143,23 +165,45 @@ function buildLane(track: Track, duration: number, index: number): HTMLElement {
       // Scrub to the clicked key so the canvas shows the pose it records.
       movePlayheadTo(key.time, duration);
 
-      let pendingCheckpoint = true; // defer until real movement, not a plain click
-      let moved = false;
+      const pointerId = ev.pointerId;
+      const pointerStart = { x: ev.clientX, y: ev.clientY };
+      const pressedAt = performance.now();
+      let latestPointer = { ...pointerStart };
+      let active = false;
+      let finished = false;
+      let history: CheckpointTransaction | null = null;
       const startTimes = new Map<Keyframe, number>([...tlCtx.selectedKeys].map((k) => [k, k.time]));
       const grabTime = key.time;
       try { diamond.setPointerCapture(ev.pointerId); } catch { /* synthetic/pen events */ }
-      const move = (e: PointerEvent) => {
-        if (pendingCheckpoint) {
-          checkpoint();
-          pendingCheckpoint = false;
-        }
-        moved = true;
+
+      const distanceFromPress = (point: { x: number; y: number }) =>
+        Math.hypot(point.x - pointerStart.x, point.y - pointerStart.y);
+
+      const activate = () => {
+        if (active || finished) return;
+        active = true;
+        diamond.classList.remove('armed');
+        diamond.classList.add('dragging');
+      };
+
+      const applyPointer = (point: { x: number; y: number }) => {
         const rect = strip.getBoundingClientRect();
-        const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-        const newTime = Math.round((frac * duration) / 10) * 10;
+        if (rect.width <= 0) return;
+        // Delta-from-press avoids the old subpixel/layout mismatch where the first
+        // pointermove snapped an untouched key to a neighboring 10ms grid position.
+        const rawGrabTime = grabTime + ((point.x - pointerStart.x) / rect.width) * duration;
+        const newTime = Math.min(duration, Math.max(0, Math.round(rawGrabTime / 10) * 10));
         const dt = newTime - grabTime;
-        for (const [k, t0] of startTimes) {
-          k.time = Math.min(duration, Math.max(0, Math.round((t0 + dt) / 10) * 10));
+        const proposed = new Map<Keyframe, number>();
+        let differs = false;
+        for (const [candidate, t0] of startTimes) {
+          const time = Math.min(duration, Math.max(0, Math.round((t0 + dt) / 10) * 10));
+          proposed.set(candidate, time);
+          if (candidate.time !== time) differs = true;
+        }
+        if (differs && !history) history = beginCheckpointTransaction();
+        for (const [candidate, time] of proposed) {
+          candidate.time = time;
         }
         // Reposition every selected diamond in place — a full render() would destroy
         // the element currently holding pointer capture and kill the drag.
@@ -169,19 +213,83 @@ function buildLane(track: Track, duration: number, index: number): HTMLElement {
         // The playhead follows the grabbed key, previewing the pose as it retimes.
         movePlayheadTo(key.time, duration);
       };
-      const up = () => {
+
+      const maybeActivate = (now: number) => {
+        const distance = distanceFromPress(latestPointer);
+        if (distance >= KEY_DRAG_IMMEDIATE_PX ||
+            (now - pressedAt >= KEY_DRAG_HOLD_MS && distance >= KEY_DRAG_AFTER_HOLD_PX)) {
+          activate();
+          applyPointer(latestPointer);
+        }
+      };
+
+      const holdTimer = window.setTimeout(() => maybeActivate(performance.now()), KEY_DRAG_HOLD_MS);
+
+      const move = (e: PointerEvent) => {
+        if (e.pointerId !== pointerId || finished) return;
+        latestPointer = { x: e.clientX, y: e.clientY };
+        if (!active) maybeActivate(performance.now());
+        else applyPointer(latestPointer);
+      };
+
+      const removeListeners = () => {
+        window.clearTimeout(holdTimer);
         diamond.removeEventListener('pointermove', move);
         diamond.removeEventListener('pointerup', up);
-        if (moved) {
-          for (const k of startTimes.keys()) {
-            tlCtx.trackOfKey.get(k)?.keyframes.sort((a, b) => a.time - b.time);
+        diamond.removeEventListener('pointercancel', cancel);
+        diamond.removeEventListener('lostpointercapture', lostCapture);
+        document.removeEventListener('keydown', keydown, true);
+        diamond.classList.remove('armed', 'dragging');
+      };
+
+      const finish = (cancelled: boolean) => {
+        if (finished) return;
+        finished = true;
+        removeListeners();
+        if (cancelled) {
+          for (const [candidate, time] of startTimes) candidate.time = time;
+          history?.cancel();
+          tlCtx.selectedKeys.clear();
+          for (const candidate of selectionBefore) tlCtx.selectedKeys.add(candidate);
+          state.selectedPartId = selectedPartIdBefore;
+          state.selectedPartIds = selectedPartIdsBefore;
+          state.selectedPathId = selectedPathIdBefore;
+          state.currentTime = playheadBefore;
+        } else {
+          const netChanged = [...startTimes].some(([candidate, time]) => candidate.time !== time);
+          if (netChanged) history?.commit();
+          else history?.cancel();
+          if (!active && shiftToggleOff) tlCtx.selectedKeys.delete(key);
+          if (netChanged) {
+            for (const k of startTimes.keys()) {
+              tlCtx.trackOfKey.get(k)?.keyframes.sort((a, b) => a.time - b.time);
+            }
           }
         }
         notify();
         renderPose();
       };
+
+      const up = (e: PointerEvent) => {
+        if (e.pointerId === pointerId) finish(false);
+      };
+      const cancel = (e: PointerEvent) => {
+        if (e.pointerId === pointerId) finish(true);
+      };
+      const lostCapture = (e: PointerEvent) => {
+        if (e.pointerId === pointerId) finish(true);
+      };
+      const keydown = (e: KeyboardEvent) => {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        finish(true);
+      };
       diamond.addEventListener('pointermove', move);
       diamond.addEventListener('pointerup', up);
+      diamond.addEventListener('pointercancel', cancel);
+      diamond.addEventListener('lostpointercapture', lostCapture);
+      document.addEventListener('keydown', keydown, true);
     });
     strip.appendChild(diamond);
   }
