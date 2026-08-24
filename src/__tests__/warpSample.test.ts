@@ -75,7 +75,7 @@ describe('Triangle ↔ Square warp sample', () => {
     const middle = evaluateWarpPath(doc, pair, 0.5);
     const end = evaluateWarpPath(doc, pair, 1);
     expect(new Set([start, middle, end]).size).toBe(3);
-    expect(start.match(/C/g)?.length).toBe(3);
-    expect(end.match(/C/g)?.length).toBe(3);
+    expect(start.match(/C/g)?.length).toBe(4);
+    expect(end.match(/C/g)?.length).toBe(4);
   });
 });

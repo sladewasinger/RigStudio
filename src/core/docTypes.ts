@@ -138,6 +138,11 @@ export interface WarpPathPair {
   targetPathId: string;
   reverse?: boolean;
   seam?: number;
+  /** Last geometry-derived alignment. Explicit `reverse`/`seam` remain authoritative. */
+  autoReverse?: boolean;
+  autoSeam?: number;
+  alignmentConfidence?: number;
+  alignmentWarning?: string;
   sourceFingerprint: string;
   targetFingerprint: string;
 }

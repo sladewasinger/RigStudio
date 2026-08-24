@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { notify, selectPart, state, RigDoc, warpPathFingerprint } from '../../core/model';
+import { notify, selectPart, state, RigDoc, warpPairIsStale, warpPathFingerprint } from '../../core/model';
 import { redo, undo } from '../../core/history';
 import { createWarpTriangleSquareSample } from '../../samples/warpTriangleSquare';
 import { bootRig, clientCenterOf, gestureDrag, overlayEl, waitFor } from './harness';
@@ -203,5 +203,28 @@ describe('Warp dock workflow', () => {
     source.skin!.overrides = { path_877: source.skin!.overrides!.path_877 };
     renderPose();
     expect(source.skin!.overrides?.path_878, 'editing main-arm pins does not recreate shadow pins').toBeUndefined();
+  });
+
+  it('surfaces and spatially repairs only a correspondence changed by node editing', () => {
+    load(); state.editorMode = 'animate'; notify();
+    document.getElementById('right-dock-tab-warps')!.click();
+    const warp = state.doc!.warps![0];
+    const [shapePair, shadowPair] = warp.pairs;
+    const untouched = shapePair.sourceFingerprint;
+    const shadow = state.doc!.parts.find((part) => part.id === shadowPair.sourcePartId)!.paths.find((path) => path.id === shadowPair.sourcePathId)!;
+    shadow.d = shadow.d.replace(' Z', ' L 128 150 Z');
+    shadow.nodeTypes = `${shadow.nodeTypes ?? ''}s`;
+    notify(); renderPose();
+    expect(warpPairIsStale(state.doc!, shadowPair)).toBe(true);
+    const panel = document.querySelector<HTMLElement>('.warps-panel')!;
+    expect(panel.textContent).toContain('Topology changed · spatial repair available');
+    const repair = Array.from(panel.querySelectorAll<HTMLButtonElement>('button')).find((item) => item.textContent?.includes('Repair'))!;
+    expect(repair).toBeTruthy(); repair.click();
+    expect(warpPairIsStale(state.doc!, shadowPair)).toBe(false);
+    expect(shapePair.sourceFingerprint).toBe(untouched);
+    undo(); notify();
+    expect(warpPairIsStale(state.doc!, state.doc!.warps![0].pairs[1])).toBe(true);
+    redo(); notify();
+    expect(warpPairIsStale(state.doc!, state.doc!.warps![0].pairs[1])).toBe(false);
   });
 });

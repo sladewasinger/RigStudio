@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { deserializeDoc, sampleKeyList, serializeDoc, state } from '../core/model';
-import { compileWarpEndpointPair, normalizeEvaluatedWarpCommands } from '../geometry/warp';
+import { compileWarpEndpointPair, normalizeEvaluatedWarpCommands, resolvedWarpAlignment } from '../geometry/warp';
 import { evaluateRiggedWarpCommands, evaluateSkinnedCommands } from '../geometry/skinPose';
 import { parsePath, pathToCubics, PathCmd } from '../geometry/paths';
 import { exportRiv } from '../io/riv';
@@ -90,7 +90,8 @@ describe('Pip independently-rigged arm Warp regression', () => {
       const posedTarget = evaluateSkinnedCommands(
         doc, targetPart, targetPath.id, pathToCubics(parsePath(targetPath.d)), 662,
       );
-      const expected = normalizeEvaluatedWarpCommands(posedSource, posedTarget, pair.reverse, pair.seam ?? 0);
+      const alignment = resolvedWarpAlignment(doc, pair);
+      const expected = normalizeEvaluatedWarpCommands(posedSource, posedTarget, alignment.reverse, alignment.seam);
       const actual = evaluateRiggedWarpCommands(doc, pair, .5, 662);
       expectCommandsClose(actual.source, expected.source);
       expectCommandsClose(actual.target, expected.target);

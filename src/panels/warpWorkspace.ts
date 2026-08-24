@@ -1,4 +1,7 @@
-import { state, notify, selectedParts, createWarpDefinition, WarpDefinition, setKeyframeAt, activeClip, sampleKeyList } from '../core/model';
+import {
+  state, notify, selectedParts, createWarpDefinition, WarpDefinition, setKeyframeAt,
+  activeClip, sampleKeyList, repairWarpPair, resolvedWarpAlignment, warpPairIsStale,
+} from '../core/model';
 import { checkpoint } from '../core/history';
 import { renderPose } from '../view';
 import { dialog } from '../ui/dialogs';
@@ -47,7 +50,17 @@ function amount(warp: WarpDefinition): number {
 }
 
 function rebuild(warp: WarpDefinition): void {
-  warp.pairs = createWarpDefinition(state.doc!, warp.sourcePartId, warp.targetPartId, warp.name).definition.pairs;
+  const previous = new Map(warp.pairs.map((pair) => [`${pair.sourcePathId}|${pair.targetPathId}`, pair]));
+  const next = createWarpDefinition(state.doc!, warp.sourcePartId, warp.targetPartId, warp.name).definition.pairs;
+  warp.pairs = next.map((pair) => {
+    const old = previous.get(`${pair.sourcePathId}|${pair.targetPathId}`);
+    if (!old) return pair;
+    const preserved = { ...pair, id: old.id };
+    if ('reverse' in old) preserved.reverse = old.reverse;
+    if ('seam' in old) preserved.seam = old.seam;
+    repairWarpPair(state.doc!, preserved);
+    return preserved;
+  });
 }
 
 function selectWarp(warp: WarpDefinition): void {
@@ -73,12 +86,29 @@ function buildCorrespondence(host: HTMLElement, warp: WarpDefinition): void {
     const targetPart = state.doc!.parts.find((part) => part.id === pair.targetPartId);
     const source = `${sourcePart?.label ?? '?'} / ${sourcePart?.paths.find((path) => path.id === pair.sourcePathId)?.label ?? '?'}`;
     const target = `${targetPart?.label ?? '?'} / ${targetPart?.paths.find((path) => path.id === pair.targetPathId)?.label ?? '?'}`;
-    const row = document.createElement('div'); row.className = 'warp-pair'; row.tabIndex = 0;
+    const stale = warpPairIsStale(state.doc!, pair);
+    const alignment = resolvedWarpAlignment(state.doc!, pair);
+    const row = document.createElement('div'); row.className = `warp-pair${stale || alignment.ambiguous ? ' warning' : ''}`; row.tabIndex = 0;
     row.innerHTML = `<span>${source}</span><b>→</b><span>${target}</span><small>Exact name · confirmed</small>`;
     const highlight = (on: boolean) => [pair.sourcePathId, pair.targetPathId].forEach((id) => document.querySelector(`[data-path-id="${id}"]`)?.classList.toggle('warp-pair-highlight', on));
     row.onmouseenter = row.onfocus = () => highlight(true); row.onmouseleave = row.onblur = () => highlight(false);
+    const status = document.createElement('small');
+    status.textContent = stale ? `Topology changed · spatial repair available${alignment.ambiguous ? ' · review alternatives' : ''}` :
+      `${pair.seam === undefined && pair.reverse === undefined ? 'Auto spatial match' : 'Manual alignment'} · ${Math.round(alignment.confidence * 100)}% confidence`;
+    row.appendChild(status);
     const actions = document.createElement('div'); actions.className = 'warp-inline-actions';
-    actions.append(button(pair.reverse ? 'Reversed' : 'Reverse path', () => { checkpoint(); pair.reverse = !pair.reverse; notify(); renderPose(); }), button(`Move seam (${pair.seam ?? 0})`, () => { checkpoint(); pair.seam = (pair.seam ?? 0) + 1; notify(); renderPose(); }), button('Unpair', () => { checkpoint(); warp.pairs = warp.pairs.filter((item) => item.id !== pair.id); notify(); renderPose(); }));
+    actions.append(
+      button((pair.reverse ?? alignment.reverse) ? 'Reversed' : 'Reverse path', () => {
+        checkpoint(); pair.reverse = !(pair.reverse ?? alignment.reverse); repairWarpPair(state.doc!, pair); notify(); renderPose();
+      }),
+      button(`Move seam (${pair.seam ?? alignment.seam})`, () => {
+        checkpoint(); pair.seam = (pair.seam ?? alignment.seam) + 1; repairWarpPair(state.doc!, pair); notify(); renderPose();
+      }),
+      ...(stale ? [button(alignment.ambiguous ? 'Review & repair' : 'Repair spatially', () => {
+        checkpoint(); delete pair.reverse; delete pair.seam; repairWarpPair(state.doc!, pair); notify(); renderPose();
+      }, 'primary')] : []),
+      button('Unpair', () => { checkpoint(); warp.pairs = warp.pairs.filter((item) => item.id !== pair.id); notify(); renderPose(); }),
+    );
     row.appendChild(actions); list.appendChild(row);
   }
   const pairedSources = new Set(warp.pairs.map((pair) => pair.sourcePathId));

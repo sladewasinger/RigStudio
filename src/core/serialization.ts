@@ -197,7 +197,14 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
       !!pair && typeof pair.id === 'string' && pathOwners.get(pair.sourcePathId) === pair.sourcePartId &&
       pathOwners.get(pair.targetPathId) === pair.targetPartId &&
       typeof pair.sourceFingerprint === 'string' && typeof pair.targetFingerprint === 'string',
-    ).map((pair) => ({ ...pair, seam: Number.isFinite(pair.seam) ? Math.max(0, Math.floor(pair.seam!)) : 0 }));
+    ).map((pair) => {
+      const normalized = { ...pair };
+      if (Number.isFinite(pair.seam)) normalized.seam = Math.max(0, Math.floor(pair.seam!));
+      else delete normalized.seam;
+      if (!Number.isFinite(pair.autoSeam)) delete normalized.autoSeam;
+      if (!Number.isFinite(pair.alignmentConfidence)) delete normalized.alignmentConfidence;
+      return normalized;
+    });
     return true;
   });
   const boneKindIds = new Set(doc.parts.filter((p) => p.kind === 'bone').map((p) => p.id));

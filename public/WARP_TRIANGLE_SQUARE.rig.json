@@ -1035,8 +1035,8 @@
       "sourcePathId": "triangle_shape_path",
       "targetPartId": "square_shape",
       "targetPathId": "square_shape_path",
-      "sourceFingerprint": "v1:c:3",
-      "targetFingerprint": "v1:c:3",
+      "sourceFingerprint": "v2:c:3:M 128,48 L 128,48 L 224,216 L 32,216 Z",
+      "targetFingerprint": "v2:c:3:M 40,40 L 216,40 L 216,216 L 40,216 Z",
       "seam": 0
      },
      {
@@ -1045,8 +1045,8 @@
       "sourcePathId": "triangle_shadow_path",
       "targetPartId": "square_shadow",
       "targetPathId": "square_shadow_path",
-      "sourceFingerprint": "v1:c:3",
-      "targetFingerprint": "v1:c:3",
+      "sourceFingerprint": "v2:c:3:M 128,48 L 128,48 L 224,216 L 174,216 Z",
+      "targetFingerprint": "v2:c:3:M 142,40 L 216,40 L 216,216 L 142,216 Z",
       "seam": 0
      }
     ]
@@ -1064,8 +1064,8 @@
       "sourcePathId": "arm_side_path",
       "targetPartId": "arm_palm_shape",
       "targetPathId": "arm_palm_path",
-      "sourceFingerprint": "v1:c:8",
-      "targetFingerprint": "v1:c:11"
+      "sourceFingerprint": "v2:c:7:M 276,103 C 310,94 352,94 397,101 C 420,98 452,99 482,104 C 496,106 497,113 484,117 C 465,121 449,120 438,118 C 452,125 447,135 436,132 C 425,129 417,123 407,121 C 360,125 316,132 276,131 C 267,124 268,111 276,103 Z",
+      "targetFingerprint": "v2:c:10:M 276,103 C 314,94 365,94 408,101 C 414,98 418,93 420,86 C 424,76 435,76 439,87 C 440,72 452,68 458,84 C 462,67 475,69 478,87 C 486,76 498,81 496,96 C 507,94 514,104 507,114 C 501,126 484,135 466,137 C 447,139 430,132 412,122 C 360,126 313,133 276,131 C 267,124 268,111 276,103 Z"
      },
      {
       "id": "arm_shadow_pair",
@@ -1073,8 +1073,8 @@
       "sourcePathId": "arm_shadow_path",
       "targetPartId": "arm_palm_shadow",
       "targetPathId": "palm_shadow_path",
-      "sourceFingerprint": "v1:c:6",
-      "targetFingerprint": "v1:c:6"
+      "sourceFingerprint": "v2:c:6:M 276,120 C 320,116 362,113 407,113 C 429,116 451,118 482,113 C 474,122 455,124 438,119 C 449,127 444,134 435,131 C 423,127 417,123 406,121 C 354,126 311,133 276,131 Z",
+      "targetFingerprint": "v2:c:6:M 276,120 C 324,116 369,113 412,114 C 430,125 449,132 467,131 C 483,130 498,123 507,114 C 500,128 484,137 466,139 C 445,140 428,132 411,122 C 357,127 311,133 276,131 Z"
      },
      {
       "id": "arm_detail_pair",
@@ -1082,8 +1082,8 @@
       "sourcePathId": "arm_side_detail_path",
       "targetPartId": "arm_palm_detail",
       "targetPathId": "arm_palm_detail_path",
-      "sourceFingerprint": "v1:o:1|o:1",
-      "targetFingerprint": "v1:o:1|o:1"
+      "sourceFingerprint": "v2:o:1|o:1:M 408,102 C 414,108 414,116 408,123 M 450,104 C 460,109 470,111 481,108",
+      "targetFingerprint": "v2:o:1|o:1:M 409,100 C 416,107 417,116 412,123 M 443,105 C 452,111 464,113 477,108"
      }
     ]
    }

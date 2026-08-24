@@ -3,9 +3,11 @@ import { freshId } from '../core/idGen';
 import { parsePath, pathToCubics, serializePath, PathCmd } from './paths';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from './transforms';
 import { groupTransformOf, PoseSampler } from './pose';
+import { alignAndEqualize, resolveSubpathAlignment, WarpAlignment, WarpSubpath } from './warpAlignment';
 
 type Cubic = Extract<PathCmd, { cmd: 'C' }>;
-type Subpath = { start: { x: number; y: number }; curves: Cubic[]; closed: boolean };
+type Subpath = WarpSubpath;
+export type { WarpAlignment } from './warpAlignment';
 export type WarpCandidate = { sourcePartId: string; sourcePathId: string; targetPartId: string; targetPathId: string; confidence: 'exact'; reason: string };
 export type WarpBuildResult = { definition: WarpDefinition; warnings: string[]; ambiguous: string[] };
 
@@ -33,7 +35,16 @@ function subpathsOfCommands(commands: PathCmd[], matrix: Mat): Subpath[] {
         current.curves.push({ cmd: 'C', x1: one.x, y1: one.y, x2: two.x, y2: two.y, x: end.x, y: end.y });
       }
       point = end;
-    } else if (command.cmd === 'Z' && current) current.closed = true;
+    } else if (command.cmd === 'Z' && current) {
+      // Make the implicit closing edge explicit before cyclic rotation/reversal. Without
+      // this edge, reversing a closed contour changes its shape and can send one side
+      // across the other during a Warp.
+      if (Math.hypot(point.x - current.start.x, point.y - current.start.y) > 1e-9) {
+        current.curves.push(cubicLine(point, current.start));
+      }
+      current.closed = true;
+      point = current.start;
+    }
   }
   if (current) result.push(current);
   return result;
@@ -41,56 +52,6 @@ function subpathsOfCommands(commands: PathCmd[], matrix: Mat): Subpath[] {
 
 function subpathsOf(path: RigPath, matrix: Mat): Subpath[] {
   return subpathsOfCommands(pathToCubics(parsePath(path.d)), matrix);
-}
-
-const midpoint = (a: number, b: number) => (a + b) / 2;
-
-function split(curve: Cubic, start: { x: number; y: number }): [Cubic, Cubic] {
-  const a = { x: midpoint(start.x, curve.x1), y: midpoint(start.y, curve.y1) };
-  const b = { x: midpoint(curve.x1, curve.x2), y: midpoint(curve.y1, curve.y2) };
-  const c = { x: midpoint(curve.x2, curve.x), y: midpoint(curve.y2, curve.y) };
-  const d = { x: midpoint(a.x, b.x), y: midpoint(a.y, b.y) };
-  const e = { x: midpoint(b.x, c.x), y: midpoint(b.y, c.y) };
-  const p = { x: midpoint(d.x, e.x), y: midpoint(d.y, e.y) };
-  return [
-    { cmd: 'C', x1: a.x, y1: a.y, x2: d.x, y2: d.y, x: p.x, y: p.y },
-    { cmd: 'C', x1: e.x, y1: e.y, x2: c.x, y2: c.y, x: curve.x, y: curve.y },
-  ];
-}
-
-function splitLongest(subpath: Subpath): void {
-  let start = subpath.start;
-  let best = 0;
-  let bestLength = -1;
-  for (let i = 0; i < subpath.curves.length; i++) {
-    const curve = subpath.curves[i];
-    const length = Math.hypot(curve.x1 - start.x, curve.y1 - start.y) +
-      Math.hypot(curve.x2 - curve.x1, curve.y2 - curve.y1) +
-      Math.hypot(curve.x - curve.x2, curve.y - curve.y2);
-    if (length > bestLength) { best = i; bestLength = length; }
-    start = { x: curve.x, y: curve.y };
-  }
-  start = best === 0 ? subpath.start : { x: subpath.curves[best - 1].x, y: subpath.curves[best - 1].y };
-  subpath.curves.splice(best, 1, ...split(subpath.curves[best], start));
-}
-
-function rotateClosed(subpath: Subpath, seam: number): void {
-  if (!subpath.closed || subpath.curves.length === 0) return;
-  const amount = ((seam % subpath.curves.length) + subpath.curves.length) % subpath.curves.length;
-  if (!amount) return;
-  const curves = [...subpath.curves.slice(amount), ...subpath.curves.slice(0, amount)];
-  const previous = subpath.curves[(amount - 1 + subpath.curves.length) % subpath.curves.length];
-  subpath.start = { x: previous.x, y: previous.y };
-  subpath.curves = curves;
-}
-
-function reverseSubpath(subpath: Subpath): void {
-  const points = [subpath.start, ...subpath.curves.map((curve) => ({ x: curve.x, y: curve.y }))];
-  const curves = subpath.curves.map((curve, index) => ({ curve, start: points[index] })).reverse();
-  subpath.start = points[points.length - 1];
-  subpath.curves = curves.map(({ curve, start }) => ({
-    cmd: 'C', x1: curve.x2, y1: curve.y2, x2: curve.x1, y2: curve.y1, x: start.x, y: start.y,
-  }));
 }
 
 function commandsOf(subpaths: Subpath[]): PathCmd[] {
@@ -108,7 +69,7 @@ function commandsOf(subpaths: Subpath[]): PathCmd[] {
  * unrelated manual override by their new command ordinal.
  */
 export function normalizeEvaluatedWarpCommands(
-  sourceCommands: PathCmd[], targetCommands: PathCmd[], reverse = false, seam = 0,
+  sourceCommands: PathCmd[], targetCommands: PathCmd[], reverse?: boolean, seam?: number,
 ): { source: PathCmd[]; target: PathCmd[] } {
   const identity = matrixOfTransform('');
   const source = subpathsOfCommands(sourceCommands, identity);
@@ -116,22 +77,66 @@ export function normalizeEvaluatedWarpCommands(
   if (source.length !== target.length) throw new Error('Warp paths have different compound-path counts.');
   for (let i = 0; i < source.length; i++) {
     if (source[i].closed !== target[i].closed) throw new Error('Warp paths mix open and closed geometry.');
-    if (reverse) reverseSubpath(target[i]);
-    rotateClosed(target[i], seam);
-    const count = Math.max(source[i].curves.length, target[i].curves.length);
-    while (source[i].curves.length < count) splitLongest(source[i]);
-    while (target[i].curves.length < count) splitLongest(target[i]);
+    alignAndEqualize(source[i], target[i], reverse, seam);
   }
   return { source: commandsOf(source), target: commandsOf(target) };
 }
 
 function topology(path: RigPath): string {
   const subs = subpathsOf(path, matrixOfTransform(''));
-  return subs.map((subpath) => `${subpath.closed ? 'c' : 'o'}:${subpath.curves.length}`).join('|');
+  // v1 fingerprints predate explicit closing-edge normalization.
+  return subs.map((subpath) => `${subpath.closed ? 'c' : 'o'}:${subpath.curves.length - (subpath.closed ? 1 : 0)}`).join('|');
 }
 
 export function warpPathFingerprint(path: RigPath): string {
-  return `v1:${topology(path)}`;
+  return `v2:${topology(path)}:${serializePath(parsePath(path.d))}`;
+}
+
+export function warpPairIsStale(doc: RigDoc, pair: WarpPathPair): boolean {
+  const source = doc.parts.find((part) => part.id === pair.sourcePartId)?.paths.find((path) => path.id === pair.sourcePathId);
+  const target = doc.parts.find((part) => part.id === pair.targetPartId)?.paths.find((path) => path.id === pair.targetPathId);
+  if (!source || !target) return true;
+  const legacyMatches = (stored: string, path: RigPath) => stored.startsWith('v1:') && stored === `v1:${topology(path)}`;
+  return !(pair.sourceFingerprint === warpPathFingerprint(source) || legacyMatches(pair.sourceFingerprint, source)) ||
+    !(pair.targetFingerprint === warpPathFingerprint(target) || legacyMatches(pair.targetFingerprint, target));
+}
+
+export function repairWarpPair(doc: RigDoc, pair: WarpPathPair): WarpAlignment {
+  const sourcePart = doc.parts.find((part) => part.id === pair.sourcePartId)!;
+  const targetPart = doc.parts.find((part) => part.id === pair.targetPartId)!;
+  const sourcePath = sourcePart.paths.find((path) => path.id === pair.sourcePathId)!;
+  const targetPath = targetPart.paths.find((path) => path.id === pair.targetPathId)!;
+  const source = subpathsOf(sourcePath, holderMatrix(doc, sourcePart, sourcePath));
+  const target = subpathsOf(targetPath, holderMatrix(doc, targetPart, targetPath));
+  // Older serializers materialized an absent seam as `0`; a v1 pair with no auto
+  // metadata therefore cannot mean "manual seam zero". Recover its intended auto mode.
+  const legacyDefaultSeam = pair.sourceFingerprint.startsWith('v1:') && pair.seam === 0 && pair.reverse === undefined && pair.autoSeam === undefined;
+  const alignment = resolveSubpathAlignment(source[0], target[0], pair.reverse, legacyDefaultSeam ? undefined : pair.seam);
+  if (legacyDefaultSeam) delete pair.seam;
+  pair.sourceFingerprint = warpPathFingerprint(sourcePath);
+  pair.targetFingerprint = warpPathFingerprint(targetPath);
+  pair.autoReverse = alignment.reverse;
+  pair.autoSeam = alignment.seam;
+  pair.alignmentConfidence = alignment.confidence;
+  pair.alignmentWarning = alignment.ambiguous ? alignment.reason : undefined;
+  return alignment;
+}
+
+export function resolvedWarpAlignment(doc: RigDoc, pair: WarpPathPair): WarpAlignment {
+  const sourcePart = doc.parts.find((part) => part.id === pair.sourcePartId)!;
+  const targetPart = doc.parts.find((part) => part.id === pair.targetPartId)!;
+  const sourcePath = sourcePart.paths.find((path) => path.id === pair.sourcePathId)!;
+  const targetPath = targetPart.paths.find((path) => path.id === pair.targetPathId)!;
+  if (!sourcePath || !targetPath) return { reverse: false, seam: 0, confidence: 0, ambiguous: true, reason: 'Missing artwork.' };
+  if (!warpPairIsStale(doc, pair) && pair.reverse === undefined && pair.seam === undefined && pair.autoSeam !== undefined) {
+    return { reverse: !!pair.autoReverse, seam: pair.autoSeam, confidence: pair.alignmentConfidence ?? 0, ambiguous: !!pair.alignmentWarning, reason: pair.alignmentWarning ?? 'Stored spatial match.' };
+  }
+  const legacyDefaultSeam = pair.sourceFingerprint.startsWith('v1:') && pair.seam === 0 && pair.reverse === undefined && pair.autoSeam === undefined;
+  return resolveSubpathAlignment(
+    subpathsOf(sourcePath, holderMatrix(doc, sourcePart, sourcePath))[0],
+    subpathsOf(targetPath, holderMatrix(doc, targetPart, targetPath))[0],
+    pair.reverse, legacyDefaultSeam ? undefined : pair.seam,
+  );
 }
 
 function restGroupMatrix(doc: RigDoc, part: RigPart): Mat {
@@ -173,19 +178,13 @@ function compileWarpPairWithMatrices(
   const sourcePath = sourcePart?.paths.find((path) => path.id === pair.sourcePathId);
   const targetPath = targetPart?.paths.find((path) => path.id === pair.targetPathId);
   if (!sourcePart || !targetPart || !sourcePath || !targetPath) throw new Error('Warp correspondence references missing artwork. Open Warp Setup to repair it.');
-  if (warpPathFingerprint(sourcePath) !== pair.sourceFingerprint || warpPathFingerprint(targetPath) !== pair.targetFingerprint) {
-    throw new Error(`Warp correspondence "${sourcePath.label} ↔ ${targetPath.label}" is stale after a topology edit. Open Warp Setup and rebuild it.`);
-  }
+  const resolved = resolvedWarpAlignment(doc, pair);
   const source = subpathsOf(sourcePath, sourceMatrix);
   const target = subpathsOf(targetPath, targetMatrix);
   if (source.length !== target.length) throw new Error(`Warp paths "${sourcePath.label}" and "${targetPath.label}" have different compound-path counts.`);
   for (let i = 0; i < source.length; i++) {
     if (source[i].closed !== target[i].closed) throw new Error(`Warp paths "${sourcePath.label}" and "${targetPath.label}" mix open and closed geometry.`);
-    if (pair.reverse) reverseSubpath(target[i]);
-    rotateClosed(target[i], pair.seam ?? 0);
-    const count = Math.max(source[i].curves.length, target[i].curves.length);
-    while (source[i].curves.length < count) splitLongest(source[i]);
-    while (target[i].curves.length < count) splitLongest(target[i]);
+    alignAndEqualize(source[i], target[i], i === 0 ? resolved.reverse : pair.reverse, i === 0 ? resolved.seam : pair.seam);
   }
   return { source: commandsOf(source), target: commandsOf(target) };
 }
@@ -268,6 +267,7 @@ export function createWarpDefinition(doc: RigDoc, sourcePartId: string, targetPa
       targetPartId: match.part.id, targetPathId: match.path.id,
       sourceFingerprint: warpPathFingerprint(sourcePath), targetFingerprint: warpPathFingerprint(match.path),
     });
+    repairWarpPair(doc, pairs[pairs.length - 1]);
   }
   const unmatchedSource = source.flatMap((part) => part.paths).length - pairs.length;
   const unmatchedTarget = target.flatMap((part) => part.paths).filter((path) => !used.has(path.id)).length;

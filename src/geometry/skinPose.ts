@@ -6,7 +6,7 @@ import {
 } from './skin';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from './transforms';
 import { PoseSampler } from './pose';
-import { interpolateWarpCommands, normalizeEvaluatedWarpCommands } from './warp';
+import { interpolateWarpCommands, normalizeEvaluatedWarpCommands, resolvedWarpAlignment } from './warp';
 
 type CommandPoint = { x: number; y: number; node: number };
 
@@ -235,9 +235,8 @@ export function evaluateRiggedWarpCommands(
   const posedTarget = evaluateSkinnedCommands(
     doc, targetPart, pair.targetPathId, pathToCubics(parsePath(targetPath.d)), time, sampler,
   );
-  const normalized = normalizeEvaluatedWarpCommands(
-    posedSource, posedTarget, pair.reverse, pair.seam ?? 0,
-  );
+  const alignment = resolvedWarpAlignment(doc, pair);
+  const normalized = normalizeEvaluatedWarpCommands(posedSource, posedTarget, alignment.reverse, alignment.seam);
   const source = normalized.source;
   const target = normalized.target;
   return { source, target, current: interpolateWarpCommands(source, target, amount) };

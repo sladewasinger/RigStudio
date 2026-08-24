@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createWarpTriangleSquareSample } from '../samples/warpTriangleSquare';
 import {
   compileWarpPathPair, createWarpDefinition, evaluateWarpPath,
-  interpolateWarpCommands, warpPathFingerprint,
+  interpolateWarpCommands, repairWarpPair, resolvedWarpAlignment, warpPairIsStale, warpPathFingerprint,
 } from '../geometry/warp';
 import { serializePath } from '../geometry/paths';
 import { state } from '../core/model';
@@ -108,11 +108,61 @@ describe('Warp geometry and durable correspondence', () => {
     expect(evaluateWarpPath(doc, pair, 1)).toBe(evaluateWarpPath(doc, pair, 1));
   });
 
-  it('invalidates structural topology edits with an actionable repair error', () => {
+  it('spatially repairs structural topology edits instead of reusing a stale ordinal seam', () => {
     const doc = createWarpTriangleSquareSample();
     const pair = doc.warps![0].pairs[0];
     doc.parts.find((part) => part.id === pair.sourcePartId)!.paths[0].d += ' L 128,128';
-    expect(() => compileWarpPathPair(doc, pair)).toThrow(/stale.*Warp Setup.*rebuild/i);
+    const before = compileWarpPathPair(doc, pair);
+    expect(before.source).toHaveLength(before.target.length);
+    expect(pair.sourceFingerprint).not.toBe(warpPathFingerprint(doc.parts.find((part) => part.id === pair.sourcePartId)!.paths[0]));
+  });
+
+  it('aligns a closed hard shadow spatially after an inserted node shifts ordinals', () => {
+    const doc = createWarpTriangleSquareSample();
+    const source = doc.parts.find((part) => part.id === 'triangle_shadow')!.paths[0];
+    const target = doc.parts.find((part) => part.id === 'square_shadow')!.paths[0];
+    source.d = 'M 0 0 L 100 0 L 100 20 L 0 20 Z';
+    target.d = 'M 100 20 L 0 20 L 0 0 L 50 0 L 100 0 Z';
+    source.nodeTypes = 'cccc'; target.nodeTypes = 'ccscc';
+    const pair = doc.warps![0].pairs[1];
+    delete pair.seam; delete pair.reverse;
+    const alignment = resolvedWarpAlignment(doc, pair);
+    expect(alignment.reverse).toBe(false);
+    expect(alignment.seam).toBe(2);
+    const compiled = compileWarpPathPair(doc, pair);
+    const midpoint = interpolateWarpCommands(compiled.source, compiled.target, .5);
+    const nodes = midpoint.filter((command) => command.cmd === 'M' || command.cmd === 'C').map((command) => ({ x: command.x, y: command.y }));
+    expect(Math.min(...nodes.map((point) => point.x))).toBeCloseTo(0);
+    expect(Math.max(...nodes.map((point) => point.x))).toBeCloseTo(100);
+    expect(nodes[0]).toEqual({ x: 0, y: 0 });
+  });
+
+  it('repairs reversed winding without reflecting or crossing the closed contour', () => {
+    const doc = createWarpTriangleSquareSample();
+    const source = doc.parts.find((part) => part.id === 'triangle_shadow')!.paths[0];
+    const target = doc.parts.find((part) => part.id === 'square_shadow')!.paths[0];
+    source.d = 'M 0 0 L 100 0 L 100 20 L 0 20 Z';
+    target.d = 'M 0 0 L 0 20 L 100 20 L 100 0 Z';
+    source.nodeTypes = target.nodeTypes = 'cccc';
+    const pair = doc.warps![0].pairs[1];
+    delete pair.seam; delete pair.reverse;
+    const alignment = resolvedWarpAlignment(doc, pair);
+    expect(alignment.reverse).toBe(true);
+    const normalized = compileWarpPathPair(doc, pair);
+    expect(serializePath(normalized.source)).toBe(serializePath(normalized.target));
+  });
+
+  it('repairs only the stale pair and persists the new topology fingerprint', () => {
+    const doc = createWarpTriangleSquareSample();
+    const [shapePair, shadowPair] = doc.warps![0].pairs;
+    const shapeFingerprint = shapePair.sourceFingerprint;
+    const shadow = doc.parts.find((part) => part.id === shadowPair.sourcePartId)!.paths[0];
+    shadow.d = shadow.d.replace(' Z', ' L 128 146 Z');
+    expect(warpPairIsStale(doc, shadowPair)).toBe(true);
+    expect(warpPairIsStale(doc, shapePair)).toBe(false);
+    repairWarpPair(doc, shadowPair);
+    expect(warpPairIsStale(doc, shadowPair)).toBe(false);
+    expect(shapePair.sourceFingerprint).toBe(shapeFingerprint);
   });
 
   it('prioritizes unique exact names and never accepts fuzzy names silently', () => {
