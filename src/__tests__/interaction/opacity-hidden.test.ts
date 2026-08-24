@@ -8,10 +8,8 @@
  * stepped `sampleKeyList` path z uses. Scenario 2 exercises the real Setup-mode inspector
  * field (not a direct model call) so a regression in the field wiring itself is caught.
  *
- * The Layers eye is DATA (`part.hidden`), not app state and NEVER a channel — scenario 4
- * is the mutation guard for "toggling never creates keys" (CLAUDE.md's "Keyable channels
- * must map to Rive runtime features" convention: visibility has no such feature, so it
- * stays editor-only). Scenario 3 pins the render.ts `.part-hidden` (visibility:hidden)
+ * The Layers eye writes rest DATA (`part.hidden`) in Edit and stepped visibility keys in
+ * Animate. Scenario 3 pins the render.ts `.part-hidden` (visibility:hidden)
  * class, that elementFromPoint hit-testing goes dead, and that undo restores everything
  * in one step. Scenario 5 pins the overlay.ts glyph-loop hidden gate for descendant bones
  * (glyphs render into a SEPARATE #overlay tree, not inside the hidden part's own flat DOM

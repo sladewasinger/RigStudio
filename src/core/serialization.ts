@@ -159,9 +159,8 @@ export function normalizeDoc(doc: RigDoc): RigDoc {
     part.rest.opacity = Number.isFinite(part.rest.opacity)
       ? Math.min(1, Math.max(0, part.rest.opacity))
       : 1;
-    // Layers eye: keep it a clean true/undefined (never keyable — see the field's doc
-    // comment) so a hand-edited or legacy file can't smuggle a truthy-but-wrong-typed
-    // value through to render.ts's display:none-equivalent toggle.
+    // Rest visibility stays a clean true/undefined; Animate visibility lives separately
+    // in stepped clip tracks.
     if (part.hidden !== true) delete part.hidden;
     // Unified Skeleton attach flag: same clean true/undefined treatment as `hidden`
     // above; the STRUCTURAL half of the repair (parent must actually resolve to a bone)

@@ -309,7 +309,7 @@ export function renderPose(): void {
     // Drill-down focus: parts outside the editing context fade and stop catching
     // pointer events (clicks fall through; node marquees sweep right over them).
     const dimmed = !!focus && !focus.has(part.id);
-    // Layers eye (editor-only, never keyable — see RigPart.hidden's doc comment):
+    // Evaluated Layers visibility (rest hidden in Edit, stepped clip keys in Animate):
     // visibility:hidden rather than display:none so getBBox() (align/distribute,
     // selection boxes, snapping candidates, node-editing suspend hints — several call
     // sites outside this module) keeps working on a hidden-but-still-selected part
