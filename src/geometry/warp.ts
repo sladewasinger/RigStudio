@@ -14,8 +14,7 @@ const cubicLine = (a: { x: number; y: number }, b: { x: number; y: number }): Cu
   x2: a.x + 2 * (b.x - a.x) / 3, y2: a.y + 2 * (b.y - a.y) / 3, x: b.x, y: b.y,
 });
 
-function subpathsOf(path: RigPath, matrix: Mat): Subpath[] {
-  const commands = pathToCubics(parsePath(path.d));
+function subpathsOfCommands(commands: PathCmd[], matrix: Mat): Subpath[] {
   const result: Subpath[] = [];
   let current: Subpath | null = null;
   let point = { x: 0, y: 0 };
@@ -38,6 +37,10 @@ function subpathsOf(path: RigPath, matrix: Mat): Subpath[] {
   }
   if (current) result.push(current);
   return result;
+}
+
+function subpathsOf(path: RigPath, matrix: Mat): Subpath[] {
+  return subpathsOfCommands(pathToCubics(parsePath(path.d)), matrix);
 }
 
 const midpoint = (a: number, b: number) => (a + b) / 2;
@@ -96,6 +99,30 @@ function commandsOf(subpaths: Subpath[]): PathCmd[] {
     ...subpath.curves,
     ...(subpath.closed ? [{ cmd: 'Z' as const }] : []),
   ]);
+}
+
+/**
+ * Equalize two already-evaluated command streams. Keeping this step AFTER endpoint
+ * skinning is important: synthetic vertices introduced only for Warp correspondence
+ * are subdivisions of the rendered curve, not authored nodes that may borrow an
+ * unrelated manual override by their new command ordinal.
+ */
+export function normalizeEvaluatedWarpCommands(
+  sourceCommands: PathCmd[], targetCommands: PathCmd[], reverse = false, seam = 0,
+): { source: PathCmd[]; target: PathCmd[] } {
+  const identity = matrixOfTransform('');
+  const source = subpathsOfCommands(sourceCommands, identity);
+  const target = subpathsOfCommands(targetCommands, identity);
+  if (source.length !== target.length) throw new Error('Warp paths have different compound-path counts.');
+  for (let i = 0; i < source.length; i++) {
+    if (source[i].closed !== target[i].closed) throw new Error('Warp paths mix open and closed geometry.');
+    if (reverse) reverseSubpath(target[i]);
+    rotateClosed(target[i], seam);
+    const count = Math.max(source[i].curves.length, target[i].curves.length);
+    while (source[i].curves.length < count) splitLongest(source[i]);
+    while (target[i].curves.length < count) splitLongest(target[i]);
+  }
+  return { source: commandsOf(source), target: commandsOf(target) };
 }
 
 function topology(path: RigPath): string {

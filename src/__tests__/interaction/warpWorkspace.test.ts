@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { notify, selectPart, state, RigDoc, warpPathFingerprint } from '../../core/model';
+import { redo, undo } from '../../core/history';
 import { createWarpTriangleSquareSample } from '../../samples/warpTriangleSquare';
-import { bootRig, waitFor } from './harness';
+import { bootRig, clientCenterOf, gestureDrag, overlayEl, waitFor } from './harness';
 import { renderPose } from '../../view';
 import pipFixture from '../fixtures/pip-failing-warp-test.json';
-import { compileWarpEndpointPair } from '../../geometry/warp';
-import { evaluateSkinnedCommands } from '../../geometry/skinPose';
+import { evaluateRiggedWarpCommands } from '../../geometry/skinPose';
 import { serializePath } from '../../geometry/paths';
 
 beforeAll(bootRig);
@@ -144,9 +144,7 @@ describe('Warp dock workflow', () => {
     state.editorMode = 'animate'; state.activeClipIndex = 0; state.currentTime = 662; renderPose();
     const warp = state.doc!.warps![0];
     for (const pair of warp.pairs) {
-      const normalized = compileWarpEndpointPair(state.doc!, pair);
-      const target = state.doc!.parts.find((part) => part.id === pair.targetPartId)!;
-      const expected = serializePath(evaluateSkinnedCommands(state.doc!, target, pair.targetPathId, normalized.target, 662));
+      const expected = serializePath(evaluateRiggedWarpCommands(state.doc!, pair, 1, 662).target);
       const actual = document.querySelector<SVGPathElement>(`[data-path-id="${pair.sourcePathId}"]`)!.getAttribute('d');
       expect(actual).toBe(expected);
     }
@@ -157,5 +155,53 @@ describe('Warp dock workflow', () => {
     state.currentTime = 1155; renderPose();
     const returned = document.querySelector<SVGPathElement>('[data-path-id="path_877"]')!.getBBox();
     expect(returned.width).toBeGreaterThan(returned.height * 2);
+  });
+
+  it('keeps real Pip Warp endpoints on their ordinary live skins while posing in Edit', () => {
+    const api = (window as unknown as { __rigStudio: { loadProjectText: (text: string) => boolean } }).__rigStudio;
+    api.loadProjectText(JSON.stringify(pipFixture));
+    state.editorMode = 'setup'; state.freezeMode = false; state.tool = 'ik';
+    selectPart('part_876'); notify(); renderPose();
+
+    const arm = () => document.querySelector<SVGPathElement>('[data-path-id="path_877"]')!.getAttribute('d')!;
+    const shadow = () => document.querySelector<SVGPathElement>('[data-path-id="path_878"]')!.getAttribute('d')!;
+    const armBefore = arm(), shadowBefore = shadow();
+    const tip = overlayEl().querySelector<SVGElement>('[data-part-id="part_909"]')!;
+    expect(tip, 'real leaf-bone IK handle').toBeTruthy();
+    const from = clientCenterOf(tip);
+    gestureDrag(from, { x: from.x + 42, y: from.y - 30 }, { steps: 10 });
+
+    expect(arm(), 'main arm visibly deforms from the real Edit-mode pointer drag').not.toBe(armBefore);
+    expect(shadow(), 'the separately weighted shadow deforms in the same gesture').not.toBe(shadowBefore);
+    const firstPose = arm();
+    const movedTip = overlayEl().querySelector<SVGElement>('[data-part-id="part_909"]')!;
+    const nextFrom = clientCenterOf(movedTip);
+    gestureDrag(nextFrom, { x: nextFrom.x - 28, y: nextFrom.y + 24 }, { steps: 8 });
+    const secondPose = arm();
+    expect(secondPose, 'a sequential drag keeps deforming continuously').not.toBe(firstPose);
+    undo(); renderPose(); expect(arm(), 'one undo restores the first bone pose').toBe(firstPose);
+    redo(); renderPose(); expect(arm(), 'redo restores the second bone pose').toBe(secondPose);
+
+    state.editorMode = 'animate'; state.currentTime = 662; renderPose();
+    state.editorMode = 'setup'; renderPose();
+    expect(arm(), 'returning to Edit restores the authored live rest pose').toBe(secondPose);
+  });
+
+  it('a Warp relationship is render-neutral in Edit, including path-scoped pins', () => {
+    const api = (window as unknown as { __rigStudio: { loadProjectText: (text: string) => boolean } }).__rigStudio;
+    api.loadProjectText(JSON.stringify(pipFixture));
+    state.editorMode = 'setup'; renderPose();
+    const ids = ['path_877', 'path_878'];
+    const withWarp = ids.map((id) => document.querySelector<SVGPathElement>(`[data-path-id="${id}"]`)!.getAttribute('d'));
+    state.doc!.warps = []; renderPose();
+    const withoutWarp = ids.map((id) => document.querySelector<SVGPathElement>(`[data-path-id="${id}"]`)!.getAttribute('d'));
+    expect(withWarp).toEqual(withoutWarp);
+
+    const source = state.doc!.parts.find((part) => part.id === 'part_876')!;
+    expect(source.skin!.overrides?.path_877).toBeTruthy();
+    expect(source.skin!.overrides?.path_878, 'shadow pins remain a distinct path record').toBeTruthy();
+    source.skin!.overrides = { path_877: source.skin!.overrides!.path_877 };
+    renderPose();
+    expect(source.skin!.overrides?.path_878, 'editing main-arm pins does not recreate shadow pins').toBeUndefined();
   });
 });

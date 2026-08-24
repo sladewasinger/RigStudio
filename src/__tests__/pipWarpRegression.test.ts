@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { deserializeDoc, sampleKeyList, serializeDoc, state } from '../core/model';
-import { compileWarpEndpointPair } from '../geometry/warp';
+import { compileWarpEndpointPair, normalizeEvaluatedWarpCommands } from '../geometry/warp';
 import { evaluateRiggedWarpCommands, evaluateSkinnedCommands } from '../geometry/skinPose';
-import { PathCmd } from '../geometry/paths';
+import { parsePath, pathToCubics, PathCmd } from '../geometry/paths';
 import { exportRiv } from '../io/riv';
 import { decodeRiv, PROP, TYPE } from './rivDecoder';
 
@@ -73,6 +73,36 @@ describe('Pip independently-rigged arm Warp regression', () => {
     }
     const reversed = evaluateRiggedWarpCommands(doc, warp.pairs[0], 0, 1155);
     expect(bounds(reversed.current).w).toBeGreaterThan(bounds(reversed.current).h * 2);
+  });
+
+  it('applies manual pins by authored path/node before Warp adds synthetic vertices', () => {
+    const doc = deserializeDoc(projectText);
+    state.doc = doc; state.activeClipIndex = 0;
+    const warp = doc.warps![0];
+    for (const pair of warp.pairs) {
+      const sourcePart = doc.parts.find((part) => part.id === pair.sourcePartId)!;
+      const targetPart = doc.parts.find((part) => part.id === pair.targetPartId)!;
+      const sourcePath = sourcePart.paths.find((path) => path.id === pair.sourcePathId)!;
+      const targetPath = targetPart.paths.find((path) => path.id === pair.targetPathId)!;
+      const posedSource = evaluateSkinnedCommands(
+        doc, sourcePart, sourcePath.id, pathToCubics(parsePath(sourcePath.d)), 662,
+      );
+      const posedTarget = evaluateSkinnedCommands(
+        doc, targetPart, targetPath.id, pathToCubics(parsePath(targetPath.d)), 662,
+      );
+      const expected = normalizeEvaluatedWarpCommands(posedSource, posedTarget, pair.reverse, pair.seam ?? 0);
+      const actual = evaluateRiggedWarpCommands(doc, pair, .5, 662);
+      expectCommandsClose(actual.source, expected.source);
+      expectCommandsClose(actual.target, expected.target);
+    }
+
+    const source = doc.parts.find((part) => part.id === 'part_876')!;
+    const shadowPair = warp.pairs.find((pair) => pair.sourcePathId === 'path_878')!;
+    const shadowBefore = evaluateRiggedWarpCommands(doc, shadowPair, .5, 662).current;
+    delete source.skin!.overrides!.path_877;
+    const shadowAfter = evaluateRiggedWarpCommands(doc, shadowPair, .5, 662).current;
+    expectCommandsClose(shadowAfter, shadowBefore);
+    expect(source.skin!.overrides!.path_878, 'the shadow owns a separate explicit pin record').toBeTruthy();
   });
 
   it('exports the real rig as native skinned vertex keys without a duplicate target drawable', () => {

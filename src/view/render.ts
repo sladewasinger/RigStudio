@@ -253,7 +253,12 @@ export function renderPose(): void {
     if (!groups || groups.length === 0) continue;
 
     let transform: string;
-    const hasWarp = part.paths.some((path) => warpForSourcePath(doc, path.id));
+    // Warp is an Animate/export relationship, never an Edit-mode replacement for either
+    // endpoint's ordinary artwork. In Edit both variants must render through their own
+    // live skin so posing, pin refinement, hit testing, and bind editing remain faithful
+    // to the authored objects even when a Warp relationship exists between them.
+    const hasWarp = state.editorMode === 'animate' &&
+      part.paths.some((path) => warpForSourcePath(doc, path.id));
     if (part.skin && part.id !== suspendSkinId) {
       // Skinned parts deform by their bones, not by a group transform. RENDER
       // RESILIENCE: one part's poisoned/malformed skin data (dangling bone, NaN bind

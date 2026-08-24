@@ -1,12 +1,12 @@
 import { channelValue, RigDoc, RigPart, WarpPathPair } from '../core/model';
-import { PathCmd } from './paths';
+import { parsePath, pathToCubics, PathCmd } from './paths';
 import {
   influenceProfileOwner, influenceProfileWeights, overrideWeightRow, Seg,
   skinWeights, SKIN_WEIGHT_POWER,
 } from './skin';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from './transforms';
 import { PoseSampler } from './pose';
-import { compileWarpEndpointPair, interpolateWarpCommands } from './warp';
+import { interpolateWarpCommands, normalizeEvaluatedWarpCommands } from './warp';
 
 type CommandPoint = { x: number; y: number; node: number };
 
@@ -222,8 +222,23 @@ export function evaluateRiggedWarpCommands(
   if (!sourcePart?.skin || !targetPart?.skin) {
     throw new Error('Rigged Warp endpoints must both have compatible bindings. Bind the unrigged endpoint or repair the Warp.');
   }
-  const normalized = compileWarpEndpointPair(doc, pair);
-  const source = evaluateSkinnedCommands(doc, sourcePart, pair.sourcePathId, normalized.source, time, sampler);
-  const target = evaluateSkinnedCommands(doc, targetPart, pair.targetPathId, normalized.target, time, sampler);
+  const sourcePath = sourcePart.paths.find((path) => path.id === pair.sourcePathId);
+  const targetPath = targetPart.paths.find((path) => path.id === pair.targetPathId);
+  if (!sourcePath || !targetPath) throw new Error('Warp correspondence references missing artwork.');
+  // Apply each path's exact authored weights/overrides BEFORE topology equalization.
+  // Normalizing first changes command ordinals; an inserted split point could then
+  // accidentally inherit an override belonging to a different authored node (the Pip
+  // arm's shoulder pins made its shadow appear stuck for precisely this reason).
+  const posedSource = evaluateSkinnedCommands(
+    doc, sourcePart, pair.sourcePathId, pathToCubics(parsePath(sourcePath.d)), time, sampler,
+  );
+  const posedTarget = evaluateSkinnedCommands(
+    doc, targetPart, pair.targetPathId, pathToCubics(parsePath(targetPath.d)), time, sampler,
+  );
+  const normalized = normalizeEvaluatedWarpCommands(
+    posedSource, posedTarget, pair.reverse, pair.seam ?? 0,
+  );
+  const source = normalized.source;
+  const target = normalized.target;
   return { source, target, current: interpolateWarpCommands(source, target, amount) };
 }
