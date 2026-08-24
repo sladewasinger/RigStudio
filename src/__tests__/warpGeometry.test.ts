@@ -2,9 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { createWarpTriangleSquareSample } from '../samples/warpTriangleSquare';
 import {
   compileWarpPathPair, createWarpDefinition, evaluateWarpPath,
-  interpolateWarpCommands, repairWarpPair, resolvedWarpAlignment, warpPairIsStale, warpPathFingerprint,
+  interpolateWarpCommands, normalizeEvaluatedWarpCommands, repairWarpPair,
+  resolvedWarpAlignment, warpPairIsStale, warpPathFingerprint,
 } from '../geometry/warp';
-import { serializePath } from '../geometry/paths';
+import { parsePath, serializePath } from '../geometry/paths';
 import { deserializeDoc, serializeDoc, state } from '../core/model';
 import { groupTransformOf } from '../geometry/pose';
 import { applyMat, matrixOfTransform, multiply } from '../geometry/transforms';
@@ -163,6 +164,23 @@ describe('Warp geometry and durable correspondence', () => {
     expect(alignment.reverse).toBe(true);
     const normalized = compileWarpPathPair(doc, pair);
     expect(serializePath(normalized.source)).toBe(serializePath(normalized.target));
+  });
+
+  it('aligns outer and hole subpaths independently while preserving their winding semantics', () => {
+    const source = parsePath('M0 0 L100 0 L100 100 L0 100 Z M25 25 L25 75 L75 75 L75 25 Z');
+    const target = parsePath('M100 100 L0 100 L0 0 L100 0 Z M75 25 L75 75 L25 75 L25 25 Z');
+    const normalized = normalizeEvaluatedWarpCommands(source, target);
+    expect(serializePath(normalized.source)).toBe(serializePath(normalized.target));
+    expect(normalized.source.filter((command) => command.cmd === 'Z')).toHaveLength(2);
+  });
+
+  it('keeps open endpoints unless the opposite orientation is decisively closer', () => {
+    const source = parsePath('M0 0 C20 0 80 10 100 10');
+    const target = parsePath('M100 10 C80 10 20 0 0 0');
+    const normalized = normalizeEvaluatedWarpCommands(source, target);
+    expect(serializePath(normalized.source)).toBe(serializePath(normalized.target));
+    const manual = normalizeEvaluatedWarpCommands(source, target, false);
+    expect(serializePath(manual.source)).not.toBe(serializePath(manual.target));
   });
 
   it('repairs only the stale pair and persists the new topology fingerprint', () => {
