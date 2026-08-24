@@ -3,6 +3,7 @@ import { notify, sampleKeyList, state, StateMachine } from '../../core/model';
 import { renderPose } from '../../view';
 import { createWarpTriangleSquareSample } from '../../samples/warpTriangleSquare';
 import { bootRig, setEditorMode } from './harness';
+import pipFixture from '../fixtures/pip-warp-state-machine.json';
 
 interface RigStudioHook {
   loadProjectText: (text: string) => boolean;
@@ -90,5 +91,29 @@ describe('state-machine preview uses canonical Warp pose evaluation', () => {
     const outgoing = doc.clips[0].tracks.find((t) => t.target === 'triangle_to_square' && t.channel === 'warp')!;
     const expected = 0.5 * sampleKeyList(outgoing.keyframes, 250, 0);
     expect(smApi().channelValue('triangle_to_square', 'warp')).toBeCloseTo(expected, 8);
+  });
+
+  it('matches direct hold_pill geometry in the user project after firing its real trigger', () => {
+    api().loadProjectText(JSON.stringify(pipFixture));
+    setEditorMode('animate');
+    state.activeClipIndex = 1;
+    state.currentTime = 820;
+    notify(); renderPose();
+    const directArm = pathD('path_1148');
+    const directShadow = pathD('path_1149');
+
+    smApi().startPreviewByMachineId('sm_1206');
+    smApi().firePreviewTrigger('trigger_pill');
+    smApi().tick(0);
+    smApi().tick(820);
+
+    expect(smApi().channelValue('warp_1248', 'warp')).toBeCloseTo(1, 8);
+    expect(pathD('path_1148')).toBe(directArm);
+    expect(pathD('path_1149')).toBe(directShadow);
+
+    smApi().firePreviewTrigger('trigger_idle');
+    smApi().tick(0);
+    smApi().tick(500);
+    expect(smApi().channelValue('warp_1248', 'warp')).toBe(0);
   });
 });
