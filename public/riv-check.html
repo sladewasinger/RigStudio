@@ -39,9 +39,13 @@
     <!-- Skinned-deformation check draws 1:1 (100x100 artboard on a 100x100 canvas) via
          its own low-level renderer so getImageData samples exact artboard coords. -->
     <canvas id="c2" width="100" height="100"></canvas>
+    <canvas id="c3" width="450" height="410"></canvas>
+    <canvas id="c4" width="450" height="410"></canvas>
     <pre id="out">running…</pre>
     <script type="module">
       import { exportRiv } from '/src/io/riv/index.ts';
+      import { deserializeDoc } from '/src/core/model.ts';
+      import pipWarpProject from '/src/__tests__/fixtures/pip-warp-state-machine.json';
 
       const DEG = 180 / Math.PI;
       const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -668,6 +672,69 @@
         return { samples, checks, pass };
       }
 
+      async function pipWarpStateMachineCheck() {
+        const doc = deserializeDoc(JSON.stringify(pipWarpProject));
+        const bytes = exportRiv(doc);
+        const directCanvas = document.getElementById('c3');
+        const machineCanvas = document.getElementById('c4');
+        const direct = await loadRive(bytes, directCanvas);
+        const machine = await loadRive(bytes, machineCanvas);
+        const drawNow = (inst) => {
+          const renderer = inst.renderer;
+          renderer.clear(); renderer.save(); inst.alignRenderer(); inst.artboard.draw(renderer);
+          renderer.restore(); renderer.flush();
+          if (typeof inst.runtime.resolveAnimationFrame === 'function') inst.runtime.resolveAnimationFrame();
+        };
+        const pixels = (canvas) => canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+        const compare = (left, right) => {
+          let changed = 0, total = 0, max = 0;
+          for (let index = 0; index < left.length; index++) {
+            const delta = Math.abs(left[index] - right[index]);
+            if (delta > 2) changed++;
+            total += delta; max = Math.max(max, delta);
+          }
+          return { changed, mean: total / left.length, max };
+        };
+        const directAnimation = (name, seconds) => {
+          const definition = direct.artboard.animationByName(name);
+          const instance = new direct.runtime.LinearAnimationInstance(definition, direct.artboard);
+          instance.advance(seconds); instance.apply(1); direct.artboard.advance(0); drawNow(direct);
+          if (instance.delete) instance.delete();
+          return new Uint8ClampedArray(pixels(directCanvas));
+        };
+        const definition = machine.artboard.stateMachineByName('home_screen');
+        const smi = new machine.runtime.StateMachineInstance(definition, machine.artboard);
+        const input = (name) => {
+          for (let index = 0; index < smi.inputCount(); index++) {
+            const candidate = smi.input(index);
+            if (candidate.name === name) return candidate;
+          }
+          return null;
+        };
+
+        smi.advanceAndApply(0);
+        const take = input('trigger_pill');
+        (take.asTrigger ? take.asTrigger() : take).fire();
+        smi.advanceAndApply(.001); smi.advanceAndApply(.5); smi.advanceAndApply(.999);
+        machine.artboard.advance(0); drawNow(machine);
+        const holdComparison = compare(directAnimation('hold_pill', 1.5), pixels(machineCanvas));
+
+        const idle = input('trigger_idle');
+        (idle.asTrigger ? idle.asTrigger() : idle).fire();
+        smi.advanceAndApply(.001); smi.advanceAndApply(.5);
+        machine.artboard.advance(0); drawNow(machine);
+        const idleComparison = compare(directAnimation('idle', .501), pixels(machineCanvas));
+        const checks = {
+          // State-machine mixing and a direct LinearAnimation take different internal
+          // invalidation paths, so edge antialiasing can differ by a few channel values;
+          // require >99.7% of channels identical within 2 and a sub-.05 mean delta.
+          holdMachineMatchesDirectClip: holdComparison.changed < 2000 && holdComparison.mean < .05,
+          idleResetsEveryStickyProperty: idleComparison.changed < 2000 && idleComparison.mean < .05,
+        };
+        if (smi.delete) smi.delete();
+        return { holdComparison, idleComparison, checks, pass: Object.values(checks).every(Boolean) };
+      }
+
       async function main() {
         try {
           if (!window.rive) throw new Error('Rive runtime failed to load');
@@ -679,6 +746,7 @@
           const skinned = await skinnedCheck();
           const pinnedSkinned = await pinnedSkinnedCheck();
           const interleavedStack = await interleavedStackCheck();
+          const pipWarpStateMachine = await pipWarpStateMachineCheck();
           report({
             status: 'ok',
             note: 'Transform-level checks + pixel-level skinned articulation (drawNow flush).',
@@ -689,6 +757,7 @@
             skinned,
             pinnedSkinned,
             interleavedStack,
+            pipWarpStateMachine,
           });
         } catch (e) {
           report({ status: 'error', error: String((e && e.message) || e) });
