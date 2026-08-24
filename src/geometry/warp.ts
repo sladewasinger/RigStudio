@@ -2,6 +2,7 @@ import { RigDoc, RigPart, RigPath, WarpDefinition, WarpPathPair } from '../core/
 import { freshId } from '../core/idGen';
 import { parsePath, pathToCubics, serializePath, PathCmd } from './paths';
 import { applyMat, invertMat, matrixOfTransform, multiply, Mat } from './transforms';
+import { groupTransformOf, PoseSampler } from './pose';
 
 type Cubic = Extract<PathCmd, { cmd: 'C' }>;
 type Subpath = { start: { x: number; y: number }; curves: Cubic[]; closed: boolean };
@@ -126,7 +127,18 @@ function holderMatrix(doc: RigDoc, part: RigPart, path: RigPath): Mat {
   return multiply(restGroupMatrix(doc, part), matrixOfTransform(path.transform));
 }
 
-export function compileWarpPathPair(doc: RigDoc, pair: WarpPathPair): { source: PathCmd[]; target: PathCmd[] } {
+function evaluatedHolderMatrix(doc: RigDoc, part: RigPart, path: RigPath, time: number, sampler?: PoseSampler): Mat {
+  if (!sampler) return multiply(matrixOfTransform(groupTransformOf(part, time)), matrixOfTransform(path.transform));
+  const chain: RigPart[] = [];
+  let current = part.parentId ? doc.parts.find((candidate) => candidate.id === part.parentId) ?? null : null;
+  while (current) { chain.unshift(current); current = current.parentId ? doc.parts.find((candidate) => candidate.id === current!.parentId) ?? null : null; }
+  const pose = (candidate: RigPart) => `translate(${sampler(candidate.id, 'tx')},${sampler(candidate.id, 'ty')}) rotate(${sampler(candidate.id, 'rotate')},${candidate.pivot.x},${candidate.pivot.y})`;
+  const localPivot = applyMat(invertMat(matrixOfTransform(part.transform)), part.pivot.x, part.pivot.y);
+  const inner = `translate(${localPivot.x},${localPivot.y}) scale(${sampler(part.id, 'sx')},${sampler(part.id, 'sy')}) skewX(${part.rest.kx}) skewY(${part.rest.ky}) translate(${-localPivot.x},${-localPivot.y})`;
+  return multiply(matrixOfTransform(`${chain.map(pose).join(' ')} ${pose(part)} ${part.transform} ${inner}`), matrixOfTransform(path.transform));
+}
+
+export function compileWarpPathPair(doc: RigDoc, pair: WarpPathPair, time?: number, sampler?: PoseSampler): { source: PathCmd[]; target: PathCmd[] } {
   const sourcePart = doc.parts.find((part) => part.id === pair.sourcePartId);
   const targetPart = doc.parts.find((part) => part.id === pair.targetPartId);
   const sourcePath = sourcePart?.paths.find((path) => path.id === pair.sourcePathId);
@@ -135,8 +147,9 @@ export function compileWarpPathPair(doc: RigDoc, pair: WarpPathPair): { source: 
   if (warpPathFingerprint(sourcePath) !== pair.sourceFingerprint || warpPathFingerprint(targetPath) !== pair.targetFingerprint) {
     throw new Error(`Warp correspondence "${sourcePath.label} ↔ ${targetPath.label}" is stale after a topology edit. Open Warp Setup and rebuild it.`);
   }
-  const sourceHolder = holderMatrix(doc, sourcePart, sourcePath);
-  const targetToSource = multiply(invertMat(sourceHolder), holderMatrix(doc, targetPart, targetPath));
+  const sourceHolder = time === undefined ? holderMatrix(doc, sourcePart, sourcePath) : evaluatedHolderMatrix(doc, sourcePart, sourcePath, time, sampler);
+  const targetHolder = time === undefined ? holderMatrix(doc, targetPart, targetPath) : evaluatedHolderMatrix(doc, targetPart, targetPath, time, sampler);
+  const targetToSource = multiply(invertMat(sourceHolder), targetHolder);
   const source = subpathsOf(sourcePath, matrixOfTransform(''));
   const target = subpathsOf(targetPath, targetToSource);
   if (source.length !== target.length) throw new Error(`Warp paths "${sourcePath.label}" and "${targetPath.label}" have different compound-path counts.`);
@@ -168,8 +181,8 @@ export function interpolateWarpCommands(source: PathCmd[], target: PathCmd[], am
   });
 }
 
-export function evaluateWarpPath(doc: RigDoc, pair: WarpPathPair, amount: number): string {
-  const compiled = compileWarpPathPair(doc, pair);
+export function evaluateWarpPath(doc: RigDoc, pair: WarpPathPair, amount: number, time?: number): string {
+  const compiled = compileWarpPathPair(doc, pair, time);
   return serializePath(interpolateWarpCommands(compiled.source, compiled.target, amount));
 }
 

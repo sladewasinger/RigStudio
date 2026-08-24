@@ -206,7 +206,15 @@ export function renderSkinnedPart(
     let k = 0;
     const currentCommands = warps?.get(pd.id)?.current ?? pd.cmds;
     const out: PathCmd[] = currentCommands.map((c, i) => {
-      const mapped = pd.pts[i].map((pt) => {
+      const currentPoints = c.cmd === 'C'
+        ? [{ x: c.x1, y: c.y1 }, { x: c.x2, y: c.y2 }, { x: c.x, y: c.y }]
+        : c.cmd === 'Z' ? [] : [{ x: c.x, y: c.y }];
+      const mapped = pd.pts[i].map((bindPoint, pointIndex) => {
+        // Correspondence normalization guarantees command/point parity. Keep the
+        // carrier's bind-space weights, but skin the MORPHED bind coordinate—not the
+        // original source coordinate (the old code made skinned Warps stay thin or
+        // collapse near 100%).
+        const pt = currentPoints[pointIndex] ?? bindPoint;
         const idx = k++;
         const w = pd.weights[idx];
         const pin = pd.pins[idx];

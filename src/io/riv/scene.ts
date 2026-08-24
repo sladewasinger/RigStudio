@@ -356,8 +356,8 @@ function emitShape(
   for (const pair of warpPairs) {
     const target: WarpPathTarget = {
       partId: part.id, pathId: path.id, subpaths: warpSubpaths, pair,
-      geometryAt: (amount) => pathToLocalSubpaths(
-        rivWarpPathData(pair, amount), m, part.pivot.x, part.pivot.y,
+      geometryAt: (amount, time, sampler) => pathToLocalSubpaths(
+        rivWarpPathData(pair, amount, time, sampler), m, part.pivot.x, part.pivot.y,
       ),
       paints: [],
     };

@@ -31,7 +31,8 @@
  * see its header for the full mechanism; this file only plans+emits per clip.
  */
 
-import { Channel, Clip, Keyframe, RigDoc, Track } from '../../core/model';
+import { Channel, Clip, Keyframe, RigDoc, Track, sampleKeyList } from '../../core/model';
+import { PoseSampler } from '../../geometry/pose';
 import { RivSubpath } from './geometry';
 import { CompiledRivWarpPair } from './warp';
 import { Scene } from './writer';
@@ -61,7 +62,7 @@ export interface WarpPathTarget {
   pathId: string;
   subpaths: { geometry: RivSubpath; vertexIndices: number[] }[];
   pair: CompiledRivWarpPair;
-  geometryAt: (amount: number) => RivSubpath[];
+  geometryAt: (amount: number, time?: number, sampler?: PoseSampler) => RivSubpath[];
   paints: { colorIndex: number; sourceHex: string; targetHex: string; sourceOpacity: number; targetOpacity: number }[];
   stroke?: { objectId: number; sourceWidth: number; targetWidth: number };
 }
@@ -230,7 +231,25 @@ export function emitAnimations(
       if (clip.tracks.some((candidate) => candidate.target === target.partId && candidate.channel === 'opacity')) {
         throw new Error(`Warped part "${target.partId}" also animates opacity in clip "${clip.name}". Split the fade onto an unmatched detail before Rive export.`);
       }
-      const sampled = sorted.map((key) => target.geometryAt(key.value));
+      const restValue = (targetId: string, channel: Channel): number => {
+        if (targetId === 'root') return channel === 'sx' || channel === 'sy' || channel === 'opacity' ? 1 : 0;
+        const rest = byId.get(targetId)?.rest;
+        return rest ? rest[channel as keyof typeof rest] as number : (channel === 'sx' || channel === 'sy' || channel === 'opacity' ? 1 : 0);
+      };
+      const samplerAt = (time: number): PoseSampler => (targetId, channel) => {
+        const source = clip.tracks.find((candidate) => candidate.target === targetId && candidate.channel === channel);
+        return sampleKeyList(source?.keyframes ?? [], time, restValue(targetId, channel), channel === 'z');
+      };
+      // Vertex compensation depends on both endpoint hierarchies, not only Warp keys.
+      // Bake every output frame so arbitrary combinations of transform and Warp easing
+      // remain exact at endpoints and deterministic between them in the native schema.
+      const frameMs = 1000 / fps;
+      const times = new Set<number>(sorted.map((key) => key.time));
+      for (let time = 0; time <= clip.duration + frameMs / 2; time += frameMs) times.add(Math.min(clip.duration, time));
+      const baked = [...times].sort((a, b) => a - b).map((time) => ({
+        time, value: Math.min(1, Math.max(0, sampleKeyList(sorted, time, 0))), easing: 'linear' as const,
+      }));
+      const sampled = baked.map((key) => target.geometryAt(key.value, key.time, samplerAt(key.time)));
       if (!sameWarpTopology(target, sampled)) {
         throw new Error(`Warp correspondence "${target.pair.pairId}" no longer matches its emitted source geometry.`);
       }
@@ -249,16 +268,9 @@ export function emitAnimations(
           for (const [propertyKey, valueOf] of properties) {
             const values = sampled.map((subpaths) => valueOf(subpaths[si].verts[vi]));
             if (propertyKey === P_IN_ROTATION || propertyKey === P_OUT_ROTATION) unwrapAngles(values);
-            const keys = sorted.map((key, i) => {
-              let interpType = INTERP_LINEAR;
-              let interpId = -1;
-              const next = sorted[i + 1];
-              if (next) {
-                const bez = cubicFor(next);
-                if (bez) { interpType = INTERP_CUBIC; interpId = emitInterpolator(bez); }
-              }
-              return { frame: toFrame(key.time, fps), value: values[i], interpType, interpId };
-            });
+            const keys = baked.map((key, i) => ({
+              frame: toFrame(key.time, fps), value: values[i], interpType: INTERP_LINEAR, interpId: -1,
+            }));
             props.push({ objectId, propertyKey, keys });
           }
         }

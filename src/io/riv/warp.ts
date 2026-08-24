@@ -3,6 +3,7 @@
 import { RigDoc } from '../../core/model';
 import { compileWarpPathPair, interpolateWarpCommands } from '../../geometry/warp';
 import { PathCmd, serializePath } from '../../geometry/paths';
+import { PoseSampler } from '../../geometry/pose';
 
 export interface RivWarpStyle {
   fill: string | null; fillOpacity: number;
@@ -20,6 +21,7 @@ export interface CompiledRivWarpPair {
   targetStyle: RivWarpStyle;
   sourcePartOpacity: number;
   targetPartOpacity: number;
+  geometryAt: (amount: number, time?: number, sampler?: PoseSampler) => PathCmd[];
 }
 
 export function compileRivWarpPairs(doc: RigDoc): CompiledRivWarpPair[] {
@@ -53,14 +55,18 @@ export function compileRivWarpPairs(doc: RigDoc): CompiledRivWarpPair[] {
       source: compiled.source, target: compiled.target,
       sourceStyle: sourcePath, targetStyle: targetPath,
       sourcePartOpacity: sourcePart.rest.opacity, targetPartOpacity: targetPart.rest.opacity,
+      geometryAt: (amount, time, sampler) => {
+        const current = compileWarpPathPair(doc, pair, time, sampler);
+        return interpolateWarpCommands(current.source, current.target, amount);
+      },
     });
   }
   }
   return result;
 }
 
-export function rivWarpPathData(pair: CompiledRivWarpPair, amount: number): string {
-  return serializePath(interpolateWarpCommands(pair.source, pair.target, amount));
+export function rivWarpPathData(pair: CompiledRivWarpPair, amount: number, time?: number, sampler?: PoseSampler): string {
+  return serializePath(pair.geometryAt(amount, time, sampler));
 }
 
 export function assertSharedSourceTopology(pairs: CompiledRivWarpPair[]): void {

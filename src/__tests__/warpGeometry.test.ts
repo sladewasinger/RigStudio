@@ -5,6 +5,9 @@ import {
   interpolateWarpCommands, warpPathFingerprint,
 } from '../geometry/warp';
 import { serializePath } from '../geometry/paths';
+import { state } from '../core/model';
+import { groupTransformOf } from '../geometry/pose';
+import { applyMat, matrixOfTransform, multiply } from '../geometry/transforms';
 
 describe('Warp geometry and durable correspondence', () => {
   it('preserves both authored endpoints exactly after deterministic cubic normalization', () => {
@@ -56,6 +59,41 @@ describe('Warp geometry and durable correspondence', () => {
     const pair = doc.warps![0].pairs[0];
     const before = serializePath(compileWarpPathPair(createWarpTriangleSquareSample(), pair).target);
     expect(serializePath(compileWarpPathPair(doc, pair).target)).not.toBe(before);
+  });
+
+  it('cancels a held carrier rotation so 100% equals the evaluated target in world space', () => {
+    const doc = createWarpTriangleSquareSample();
+    state.doc = doc; state.activeClipIndex = 1;
+    const pair = doc.warps![0].pairs[0];
+    const source = doc.parts.find((part) => part.id === pair.sourcePartId)!;
+    const target = doc.parts.find((part) => part.id === pair.targetPartId)!;
+    const sourcePath = source.paths[0], targetPath = target.paths[0];
+    const compiled = compileWarpPathPair(doc, pair, 1500);
+    const local = compiled.target[0];
+    expect(local.cmd).toBe('M');
+    if (local.cmd !== 'M') return;
+    const rendered = applyMat(multiply(matrixOfTransform(groupTransformOf(source, 1500)), matrixOfTransform(sourcePath.transform)), local.x, local.y);
+    const authored = applyMat(multiply(matrixOfTransform(groupTransformOf(target, 1500)), matrixOfTransform(targetPath.transform)), 40, 40);
+    expect(rendered.x).toBeCloseTo(authored.x, 8);
+    expect(rendered.y).toBeCloseTo(authored.y, 8);
+    expect(rendered.x).toBeCloseTo(40, 10);
+    expect(rendered.y).toBeCloseTo(40, 10);
+  });
+
+  it('evaluates target and ancestor animation independently at the Warp endpoint', () => {
+    const doc = createWarpTriangleSquareSample();
+    doc.clips[1].tracks.push({ target: 'square_group', channel: 'rotate', keyframes: [{ time: 1500, value: -30, easing: 'linear' }] });
+    state.doc = doc; state.activeClipIndex = 1;
+    const pair = doc.warps![0].pairs[0];
+    const source = doc.parts.find((part) => part.id === pair.sourcePartId)!;
+    const target = doc.parts.find((part) => part.id === pair.targetPartId)!;
+    const first = compileWarpPathPair(doc, pair, 1500).target[0];
+    expect(first.cmd).toBe('M');
+    if (first.cmd !== 'M') return;
+    const rendered = applyMat(matrixOfTransform(groupTransformOf(source, 1500)), first.x, first.y);
+    const authored = applyMat(matrixOfTransform(groupTransformOf(target, 1500)), 40, 40);
+    expect(rendered.x).toBeCloseTo(authored.x, 8);
+    expect(rendered.y).toBeCloseTo(authored.y, 8);
   });
 
   it('supports seam movement, direction reversal, and reverse timeline evaluation', () => {

@@ -80,7 +80,7 @@ describe('exportRiv native vertex warp', () => {
     }
   });
 
-  it('writes source-local endpoint values and preserves arriving-key easing', () => {
+  it('frame-bakes deterministic source-local endpoint values for transform composition', () => {
     const decoded = decodeRiv(exportRiv(warpDoc()));
     const vertex = decoded.objects.find((object) => object.typeKey === TYPE.CUBIC_VERTEX)!;
     const animation = decoded.animations.find((candidate) => candidate.name === 'morph')!;
@@ -90,10 +90,30 @@ describe('exportRiv native vertex warp', () => {
     const y = animation.objects.find((object) =>
       object.objectId === vertex.index && object.props[0]?.propertyKey === PROP.VERT_Y,
     )!.props[0];
-    expect(x.keyframes.map((key) => key.value)).toEqual([0, 20]);
-    expect(y.keyframes.map((key) => key.value)).toEqual([0, 5]);
-    expect(x.keyframes[0].interpType).toBe(2);
-    expect(x.keyframes[0].interpId).toBeGreaterThanOrEqual(0);
+    expect(x.keyframes[0].value).toBe(0);
+    expect(x.keyframes[x.keyframes.length - 1].value).toBe(20);
+    expect(y.keyframes[0].value).toBe(0);
+    expect(y.keyframes[y.keyframes.length - 1].value).toBe(5);
+    expect(x.keyframes.length).toBeGreaterThan(30);
+    expect(x.keyframes.every((key) => key.interpType === 1)).toBe(true);
+  });
+
+  it('bakes inverse carrier rotation so the native 100% endpoint lands on the target', () => {
+    const doc = warpDoc();
+    doc.clips[0].tracks.push({ target: 'source', channel: 'rotate', keyframes: [
+      { time: 0, value: 45, easing: 'linear' }, { time: 1000, value: 45, easing: 'linear' },
+    ] });
+    const decoded = decodeRiv(exportRiv(doc));
+    const vertex = decoded.objects.find((object) => object.typeKey === TYPE.CUBIC_VERTEX)!;
+    const animation = decoded.animations.find((candidate) => candidate.name === 'morph')!;
+    const prop = (key: number) => animation.objects.find((object) => object.objectId === vertex.index && object.props[0]?.propertyKey === key)!.props[0];
+    const xKeys = prop(PROP.VERT_X).keyframes, yKeys = prop(PROP.VERT_Y).keyframes;
+    const x = xKeys[xKeys.length - 1].value;
+    const y = yKeys[yKeys.length - 1].value;
+    const radians = Math.PI / 4;
+    const world = { x: x * Math.cos(radians) - y * Math.sin(radians), y: x * Math.sin(radians) + y * Math.cos(radians) };
+    expect(world.x).toBeCloseTo(20, 3);
+    expect(world.y).toBeCloseTo(5, 3);
   });
 
   it('is byte-deterministic', () => {

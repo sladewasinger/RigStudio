@@ -81,7 +81,7 @@ function renderWarpedPaths(doc: RigDoc, part: RigPart, time: number | null): voi
     if (!found) { element.setAttribute('d', path.d); continue; }
     const amount = warpAmount(found.warp.id, time);
     try {
-      element.setAttribute('d', evaluateWarpPath(doc, found.pair, amount));
+      element.setAttribute('d', evaluateWarpPath(doc, found.pair, amount, time ?? undefined));
       const targetPart = doc.parts.find((candidate) => candidate.id === found.pair.targetPartId);
       const target = targetPart?.paths.find((candidate) => candidate.id === found.pair.targetPathId);
       if (target) {
@@ -109,6 +109,9 @@ function skinWarpsForPart(doc: RigDoc, part: RigPart, time: number | null): Map<
   for (const path of part.paths) {
     const found = warpForSourcePath(doc, path.id);
     if (!found) continue;
+    // Skinning consumes canonical bind-space geometry and applies the evaluated bone
+    // pose afterward. Feeding evaluated endpoint transforms here would pre-pose the
+    // target and then skin it again (the thin/collapsed near-100% failure).
     const compiled = compileWarpPathPair(doc, found.pair);
     result.set(path.id, {
       source: compiled.source,
