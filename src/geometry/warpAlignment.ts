@@ -118,15 +118,22 @@ export function resolveSubpathAlignment(source: WarpSubpath, target: WarpSubpath
   if (!source.closed) {
     const direct = cost(source, target, false, 0), flipped = cost(source, target, true, 0), explicit = reverse !== undefined;
     const gap = Math.abs(direct - flipped) / Math.max(1e-6, Math.max(direct, flipped));
-    return { reverse: explicit ? reverse : flipped < direct * .75, seam: 0, confidence: explicit ? 1 : gap, ambiguous: !explicit && gap < .08, reason: explicit ? 'Manual open-path direction.' : 'Matched open-path endpoints spatially.' };
+    const chosen = explicit ? reverse : flipped < direct * .75;
+    const manualMismatch = explicit && (chosen ? flipped : direct) > Math.min(direct, flipped) * 1.75;
+    return { reverse: chosen, seam: 0, confidence: explicit ? (manualMismatch ? 0 : 1) : gap, ambiguous: manualMismatch || (!explicit && gap < .08), reason: manualMismatch ? 'Manual direction no longer agrees with the edited endpoint geometry.' : explicit ? 'Manual open-path direction.' : 'Matched open-path endpoints spatially.' };
   }
   const windingReverse = area(source) * area(target) < 0;
   const candidates = Array.from({ length: target.curves.length }, (_, candidateSeam) => ({ reverse: windingReverse, seam: candidateSeam, cost: cost(source, target, windingReverse, candidateSeam) }))
     .sort((a, b) => a.cost - b.cost || a.seam - b.seam);
   const best = candidates[0] ?? { reverse: false, seam: 0, cost: 0 }, second = candidates[1];
   const gap = second ? (second.cost - best.cost) / Math.max(1e-6, second.cost) : 1;
-  const ambiguous = reverse === undefined && seam === undefined && !!second && gap < .035;
-  return { reverse: reverse ?? (ambiguous ? windingReverse : best.reverse), seam: seam ?? (ambiguous ? 0 : best.seam), confidence: reverse !== undefined || seam !== undefined ? 1 : Math.max(0, Math.min(1, gap / .2)), ambiguous, reason: ambiguous ? 'Several spatial seams are nearly equivalent; review the alternatives.' : reverse !== undefined || seam !== undefined ? 'Manual seam/direction.' : 'Matched by winding, position, tangent, and curvature.' };
+  const manual = reverse !== undefined || seam !== undefined;
+  const symmetric = !manual && !!second && gap < .035;
+  const chosenReverse = reverse ?? (symmetric ? windingReverse : best.reverse), chosenSeam = seam ?? (symmetric ? 0 : best.seam);
+  const chosenCost = cost(source, target, chosenReverse, chosenSeam);
+  const manualMismatch = manual && chosenCost > best.cost * 1.75 + .002;
+  const ambiguous = manualMismatch || symmetric;
+  return { reverse: chosenReverse, seam: chosenSeam, confidence: manual ? (manualMismatch ? 0 : 1) : Math.max(0, Math.min(1, gap / .2)), ambiguous, reason: manualMismatch ? 'Manual seam/direction no longer agrees with the edited endpoint geometry.' : ambiguous ? 'Several spatial seams are nearly equivalent; review the alternatives.' : manual ? 'Manual seam/direction.' : 'Matched by winding, position, tangent, and curvature.' };
 }
 
 export function alignAndEqualize(source: WarpSubpath, target: WarpSubpath, reverse?: boolean, seam?: number): WarpAlignment {

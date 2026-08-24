@@ -137,6 +137,19 @@ describe('Warp geometry and durable correspondence', () => {
     expect(nodes[0]).toEqual({ x: 0, y: 0 });
   });
 
+  it('keeps a manual seam authoritative but warns when topology makes it spatially unsafe', () => {
+    const doc = createWarpTriangleSquareSample();
+    const source = doc.parts.find((part) => part.id === 'triangle_shadow')!.paths[0];
+    const target = doc.parts.find((part) => part.id === 'square_shadow')!.paths[0];
+    source.d = 'M 0 0 L 100 0 L 100 20 L 0 20 Z';
+    target.d = 'M 100 20 L 0 20 L 0 0 L 50 0 L 100 0 Z';
+    const pair = doc.warps![0].pairs[1];
+    pair.seam = 0; pair.reverse = false;
+    const alignment = resolvedWarpAlignment(doc, pair);
+    expect(alignment).toMatchObject({ seam: 0, reverse: false, ambiguous: true, confidence: 0 });
+    expect(alignment.reason).toMatch(/manual.*no longer agrees/i);
+  });
+
   it('repairs reversed winding without reflecting or crossing the closed contour', () => {
     const doc = createWarpTriangleSquareSample();
     const source = doc.parts.find((part) => part.id === 'triangle_shadow')!.paths[0];
