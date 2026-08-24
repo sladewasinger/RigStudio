@@ -4,9 +4,7 @@
  * decision"): a skinned part's bones are parented under it, so its rotate/tx/ty
  * genuinely carry the whole chain — the LBS-deformed art follows exactly like .riv
  * playback — so body drags for those two channels now behave EXACTLY like any other
- * part's. Scale/skew stay blocked (never propagate to a part's children in the editor,
- * unlike a Rive Node at runtime), both on canvas (no handles render — overlayHandles.ts)
- * and in the inspector (fields disabled — transformSection.ts). IK stays its own entry
+ * part's. Scale composes after LBS around the part pivot; skew stays blocked. IK stays its own entry
  * gesture, unaffected (still pinned by ikDrag.ts's scenario IK4 and bones.test.ts's B10).
  * Full realistic gestures via the harness (elementFromPoint hit targets, real drag
  * sequences) — see "Testing interactions" in CLAUDE.md.
@@ -128,15 +126,14 @@ describe('scenario SP2 — Shift+drag TRANSLATES a skinned part, keys tx/ty, and
   });
 });
 
-describe('scenario SP3 — handle-set toggle on a skinned part: scale/skew stay off, rotate corners go live', () => {
-  it('Edit mode: first click has 0 scale handles (passive corners only); second click has 4 ACTIVE rotate corners and 0 skew', () => {
+describe('scenario SP3 — handle-set toggle on a skinned part: scale and rotate compose; skew stays off', () => {
+  it('Edit mode: first click has scale handles; second click has 4 ACTIVE rotate corners and 0 skew', () => {
     skinLimb();
     setEditorMode('setup');
 
     let pt = clientPointOnPart(LIMB);
     click(pt.x, pt.y); // select → scale/translate mode (default)
-    expect(overlayCount('.scale-handle'), 'scale is blocked on a skinned part').toBe(0);
-    expect(overlayCount('.select-corner'), 'passive translate corners show instead').toBe(4);
+    expect(overlayCount('.scale-handle'), 'scale composes with the deformed artwork').toBe(8);
 
     pt = clientPointOnPart(LIMB);
     click(pt.x, pt.y); // toggle to rotate mode
@@ -158,43 +155,48 @@ describe('scenario SP3 — handle-set toggle on a skinned part: scale/skew stay 
   });
 });
 
-describe('scenario SP4 — inspector locks scale/skew on a skinned part; rotate/translate stay live', () => {
-  it('Edit mode: rest scale x/y and skew x/y are disabled with a title; rotate/x/y stay live', () => {
+describe('scenario SP4 — inspector permits scale on a skinned part and locks only skew', () => {
+  it('Edit mode: rest scale x/y and rotate/x/y stay live; skew is disabled with a title', () => {
     skinLimb();
     setEditorMode('setup');
     modelSelectPart(partByLabel(LIMB).id);
     notify();
 
-    for (const label of ['rest scale x', 'rest scale y', 'skew x (deg)', 'skew y (deg)']) {
+    for (const label of ['skew x (deg)', 'skew y (deg)']) {
       const input = fieldInput(label);
       expect(input, `${label} field present`).toBeTruthy();
       expect(input!.disabled, `${label} disabled on a skinned part`).toBe(true);
       expect(input!.title.length, `${label} carries an explanatory title`).toBeGreaterThan(0);
     }
-    for (const label of ['rest rotate (deg)', 'rest x', 'rest y']) {
+    for (const label of ['rest rotate (deg)', 'rest x', 'rest y', 'rest scale x', 'rest scale y']) {
       const input = fieldInput(label);
       expect(input, `${label} field present`).toBeTruthy();
       expect(input!.disabled, `${label} stays live`).toBe(false);
     }
+    const before = partGroupEl(LIMB).getBoundingClientRect();
+    const sx = fieldInput('rest scale x')!;
+    sx.value = '1.4';
+    sx.dispatchEvent(new Event('change', { bubbles: true }));
+    const after = partGroupEl(LIMB).getBoundingClientRect();
+    expectClose(after.width / before.width, 1.4, 0.04, 'post-skin scale changes rendered width');
   });
 
-  it('Animate mode: keyed scale x/y are disabled with a title; rotate/translate x/y stay live', () => {
+  it('Animate mode: keyed scale x/y and rotate/translate x/y all stay live', () => {
     skinLimb();
     setEditorMode('animate');
     document.getElementById('right-dock-tab-inspector')!.click();
     modelSelectPart(partByLabel(LIMB).id);
     notify();
 
-    for (const label of ['scale x', 'scale y']) {
-      const input = fieldInput(label);
-      expect(input, `${label} field present`).toBeTruthy();
-      expect(input!.disabled, `${label} disabled on a skinned part`).toBe(true);
-      expect(input!.title.length, `${label} carries an explanatory title`).toBeGreaterThan(0);
-    }
-    for (const label of ['rotate (deg)', 'translate x', 'translate y']) {
+    for (const label of ['rotate (deg)', 'translate x', 'translate y', 'scale x', 'scale y']) {
       const input = fieldInput(label);
       expect(input, `${label} field present`).toBeTruthy();
       expect(input!.disabled, `${label} stays live`).toBe(false);
     }
+    const id = partByLabel(LIMB).id;
+    const sx = fieldInput('scale x')!;
+    sx.value = '1.25';
+    sx.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(clipTrack(id, 'sx')?.keyframes[0].value).toBe(1.25);
   });
 });

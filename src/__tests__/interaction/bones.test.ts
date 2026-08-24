@@ -337,7 +337,7 @@ describe('scenario B8 — skinned-part overlay is fresh + explains itself', () =
     expect(state.selectedPartId, 'skinned part selected').toBe(partByLabel(LIMB).id);
     expect(overlayCount('.select-box'), 'selection box present WITHOUT a pan/zoom').toBeGreaterThan(0);
     expect(overlayCount('.skin-hint'), 'the bone-deformed limits hint is shown').toBe(1);
-    expect(overlayCount('.scale-handle'), 'scale stays blocked on a skinned part').toBe(0);
+    expect(overlayCount('.scale-handle'), 'scale composes with a skinned part').toBe(8);
     expect(overlayCount('.rotate-handle'), 'first click is translate mode — rotate corners appear on the second').toBe(0);
   });
 });

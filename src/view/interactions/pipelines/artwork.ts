@@ -5,9 +5,8 @@
  * "Skinned-part UX"): its bones are parented under it, so its rotate/tx/ty carry the
  * whole chain and the LBS-deformed art follows, matching .riv playback exactly. IK stays
  * its OWN entry gesture (grab-point-relative FABRIK over the bone chain) rather than
- * falling into translate/rotate; scale/skew stay blocked (never propagate to children in
- * the editor, unlike a Rive Node) — see the `!part.skin` gates in overlayHandles.ts and
- * the disabled sx/sy/kx/ky inspector fields. This is the deepest DOM-driven row: it
+ * falling into translate/rotate. Scale is handled by the transform handles and composes
+ * after LBS; skew remains unavailable for skinned art. This is the deepest DOM-driven row: it
  * fires for ANY element carrying data-part-id (art, bone glyph, group glyph alike), so
  * the skinned-art-IK and bone-glyph-IK special cases live INLINE here rather than as
  * separate priority-table rows — they share this press's group-substitution + selection
@@ -89,8 +88,8 @@ export const ARTWORK_PIPELINE: GesturePipeline = {
       // construction below handles it, no special case needed. IK stays its own entry
       // gesture: dragging the art bends the bone chain that deforms it (drag near the
       // chain end → the limb folds, art follows live), so it's checked FIRST and never
-      // falls into translate/rotate. Scale is still blocked (no handles render for a
-      // skinned part — overlayHandles.ts — so a scale drag can never be claimed here).
+      // falls into translate/rotate. Scale remains a separate handle gesture that
+      // composes around the part pivot after skin deformation.
       if (part.skin) {
         // Deepest-in-chain bone is the effector: FABRIK solves the whole chain root→that
         // bone, driving the ACTUAL grabbed point to the pointer (grab-point-relative —

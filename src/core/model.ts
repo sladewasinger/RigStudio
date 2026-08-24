@@ -42,6 +42,7 @@ export * from './structuralOps';
 export * from './serialization';
 export * from './childOrder';
 export * from './slotReorder';
+export * from './promotePath';
 export * from './paintOrder';
 export * from './idGen';
 export * from '../geometry/warp';

@@ -92,6 +92,7 @@ export type DragState =
   | {
       kind: 'scale';
       part: RigPart;
+      setup: boolean;
       handle: string; // nw|ne|se|sw|n|e|s|w
       startSx: number; startSy: number;
       startTx: number; startTy: number;

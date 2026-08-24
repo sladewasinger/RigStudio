@@ -4,20 +4,19 @@
  * pivot section. Bone parts use `boneSection.ts` instead — see the
  * `buildInspector` orchestration in `panel.ts`.
  */
-import { state, RigDoc, RigPart, channelValue, setKeyframe } from '../../core/model';
-import { renderPose } from '../../view';
+import {
+  state, RigDoc, RigPart, channelValue, setKeyframe, promotePathToPart, selectPart, notify,
+} from '../../core/model';
+import { renderPose, registerPart, reorderCanvas, syncPartPathDom } from '../../view';
 import { checkpoint } from '../../core/history';
 import { numberField, keyableField, poseEdited, buildParentSelector } from './shared';
 
-// A skinned part's rotate/tx/ty carry its whole bone chain (the bones are parented under
-// it), so those stay live — but its scale/skew never propagate to a part's children in
-// the editor (unlike a Rive Node at runtime), so offering them here would be a channel
-// the canvas can't actually show (user ruling 2026-07-12, "Allow rotate+translate" —
-// CLAUDE.md "Skinned-part UX"; WYSIWYG per the ruling's own wording).
-const SKIN_SCALE_LOCK_TITLE =
-  "Blocked on a skinned part — scale/skew never propagate to a part's children in the " +
-  'editor, unlike a Rive Node at runtime. Pose the limb with rotate/translate, or reshape ' +
-  'its bones.';
+// A skinned part's rotate/tx/ty carry its whole bone chain. Scale is applied after LBS
+// around the part pivot, so it remains a useful whole-limb channel; skew stays locked
+// because the skin renderer has no equivalent compositing rule for it.
+const SKIN_SKEW_LOCK_TITLE =
+  'Skew is not supported on bone-deformed artwork. Scale composes with the rig; use ' +
+  'bones or node editing for shape changes.';
 
 /** Disables a field built by `numberField`/`keyableField` (and its key-toggle, if any)
  *  with an explanatory title — used for a skinned part's scale/skew fields only. */
@@ -29,48 +28,58 @@ function lockField(field: HTMLElement, title: string): HTMLElement {
   return field;
 }
 
+function setupTransformTarget(part: RigPart): RigPart {
+  if (!state.selectedPathId) return part;
+  const promoted = promotePathToPart(part, state.selectedPathId);
+  if (!promoted || promoted === part) return part;
+  syncPartPathDom(part);
+  registerPart(promoted);
+  reorderCanvas();
+  selectPart(promoted.id);
+  notify();
+  return promoted;
+}
+
 export function buildPartTransformFields(el: HTMLElement, part: RigPart, setup: boolean): void {
   if (setup) {
     el.appendChild(numberField('rest rotate (deg)', part.rest.rotate, (v) => {
       checkpoint();
-      part.rest.rotate = v;
+      setupTransformTarget(part).rest.rotate = v;
       poseEdited();
     }));
     el.appendChild(numberField('rest x', part.rest.tx, (v) => {
       checkpoint();
-      part.rest.tx = v;
+      setupTransformTarget(part).rest.tx = v;
       poseEdited();
     }));
     el.appendChild(numberField('rest y', part.rest.ty, (v) => {
       checkpoint();
-      part.rest.ty = v;
+      setupTransformTarget(part).rest.ty = v;
       poseEdited();
     }));
     const restSx = numberField('rest scale x', part.rest.sx, (v) => {
       checkpoint();
-      part.rest.sx = v || 1;
+      setupTransformTarget(part).rest.sx = v || 1;
       poseEdited();
     }, 0.01);
     const restSy = numberField('rest scale y', part.rest.sy, (v) => {
       checkpoint();
-      part.rest.sy = v || 1;
+      setupTransformTarget(part).rest.sy = v || 1;
       poseEdited();
     }, 0.01);
     const restKx = numberField('skew x (deg)', part.rest.kx, (v) => {
       checkpoint();
-      part.rest.kx = Math.min(85, Math.max(-85, v));
+      setupTransformTarget(part).rest.kx = Math.min(85, Math.max(-85, v));
       poseEdited();
     }, 0.5);
     const restKy = numberField('skew y (deg)', part.rest.ky, (v) => {
       checkpoint();
-      part.rest.ky = Math.min(85, Math.max(-85, v));
+      setupTransformTarget(part).rest.ky = Math.min(85, Math.max(-85, v));
       poseEdited();
     }, 0.5);
     if (part.skin) {
-      lockField(restSx, SKIN_SCALE_LOCK_TITLE);
-      lockField(restSy, SKIN_SCALE_LOCK_TITLE);
-      lockField(restKx, SKIN_SCALE_LOCK_TITLE);
-      lockField(restKy, SKIN_SCALE_LOCK_TITLE);
+      lockField(restKx, SKIN_SKEW_LOCK_TITLE);
+      lockField(restKy, SKIN_SKEW_LOCK_TITLE);
     }
     el.appendChild(restSx);
     el.appendChild(restSy);
@@ -78,17 +87,17 @@ export function buildPartTransformFields(el: HTMLElement, part: RigPart, setup: 
     el.appendChild(restKy);
     el.appendChild(numberField('rest opacity', part.rest.opacity, (v) => {
       checkpoint();
-      part.rest.opacity = Math.min(1, Math.max(0, v));
+      setupTransformTarget(part).rest.opacity = Math.min(1, Math.max(0, v));
       poseEdited();
     }, 0.05));
     el.appendChild(numberField('pivot x', part.pivot.x, (v) => {
       checkpoint();
-      part.pivot.x = v;
+      setupTransformTarget(part).pivot.x = v;
       renderPose();
     }));
     el.appendChild(numberField('pivot y', part.pivot.y, (v) => {
       checkpoint();
-      part.pivot.y = v;
+      setupTransformTarget(part).pivot.y = v;
       renderPose();
     }));
 
@@ -118,13 +127,9 @@ export function buildPartTransformFields(el: HTMLElement, part: RigPart, setup: 
         poseEdited();
       },
     ));
-    // Keyable part scale (absolute sx/sy, rest.sx/sy fallback): the innermost slot rest
-    // scale occupies (around the pivot, not propagating to children) — Animate scrub
-    // shows it, and the .riv export replays it as an absolute Node scale. Shown for every
-    // part like the other pose fields; a skinned part deforms by its bones, and scale
-    // still never propagates to its children in the editor (unlike a Rive Node at
-    // runtime), so THIS pair stays locked even though rotate/translate now key live
-    // (user ruling 2026-07-12, "Allow rotate+translate").
+    // Keyable part scale (absolute sx/sy, rest.sx/sy fallback): ordinary artwork scales
+    // in its local transform; skinned artwork scales the final LBS result around its
+    // explicit pivot. Both paths scrub and export through the same native channels.
     const keySx = keyableField(
       'scale x', part.id, 'sx', () => channelValue(part, 'sx', t), (v) => {
         checkpoint();
@@ -139,10 +144,6 @@ export function buildPartTransformFields(el: HTMLElement, part: RigPart, setup: 
         poseEdited();
       }, 0.01,
     );
-    if (part.skin) {
-      lockField(keySx, SKIN_SCALE_LOCK_TITLE);
-      lockField(keySy, SKIN_SCALE_LOCK_TITLE);
-    }
     el.appendChild(keySx);
     el.appendChild(keySy);
     // Keyable draw-order OFFSET (stepped, absolute): higher = toward the viewer, 0 = the

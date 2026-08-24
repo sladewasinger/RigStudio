@@ -8,9 +8,10 @@
 
 import {
   state, RigPart, selectedPart, selectedParts, channelValue, ancestorChain, isGroupLike,
+  setKeyframe, promotePathToPart, selectPart, notify,
 } from '../../../core/model';
 import {
-  DragState, MIN_SCALE, MAX_SCALE, linearOnly, round1, round2, partOwnBBox,
+  ctx, DragState, MIN_SCALE, MAX_SCALE, linearOnly, round1, round2, partOwnBBox,
 } from '../../context';
 import { handleSize, pointerInRoot } from '../../coords';
 import { poseTime, groupTransformOf, chainMatOf, effectivePivot } from '../../pose';
@@ -20,6 +21,7 @@ import { groupScaleMembers, applyGroupScale, GroupScaleMember } from '../../rigO
 import { groupLikeUnionBox } from '../../overlayHandles';
 import { capturePointer, moveRotate } from '../lifecycle';
 import { GesturePipeline } from '../priority';
+import { registerPart, reorderCanvas, syncPartPathDom } from '../../partDom';
 
 /**
  * The members a group-scale drag distributes across: `groupScaleMembers`'s descendant
@@ -71,8 +73,20 @@ export const HANDLES_PIPELINE: GesturePipeline = {
     // draws) and starts a DISTRIBUTED rest edit across every descendant instead of the
     // single-part pipeline below (rigOps.ts's groupScaleMembers/applyGroupScale).
     if (hit.scaleHandle) {
-      const part = selectedPart();
+      let part = selectedPart();
       if (!part) return 'handled';
+      if (state.selectedPathId) {
+        const owner = part;
+        const promoted = promotePathToPart(owner, state.selectedPathId);
+        if (promoted && promoted !== owner) {
+          syncPartPathDom(owner);
+          registerPart(promoted);
+          reorderCanvas();
+          selectPart(promoted.id);
+          part = promoted;
+          notify();
+        }
+      }
       if (isGroupLike(part, hit.doc.parts)) {
         const ub = groupLikeUnionBox(part);
         if (!ub) return 'handled'; // nothing inside yet — nothing to scale
@@ -103,16 +117,22 @@ export const HANDLES_PIPELINE: GesturePipeline = {
       const spot = spots[hit.scaleHandle];
       if (!spot) return 'handled';
       const t = poseTime();
+      const setup = state.editorMode === 'setup';
       // groupTransformOf is the part's full rootGroup-relative transform; frozen at
       // drag start so scale factors are measured in a stable local frame.
-      const mStart = matrixOfTransform(groupTransformOf(part, t));
+      const mStart = part.skin
+        ? matrixOfTransform(ctx.partGroups.get(part.id)?.[0]?.getAttribute('transform') ?? '')
+        : matrixOfTransform(groupTransformOf(part, t));
       const chainM = chainMatOf(part, t);
       const d: DragState = {
         kind: 'scale',
         part,
+        setup,
         handle: hit.scaleHandle,
-        startSx: part.rest.sx, startSy: part.rest.sy,
-        startTx: part.rest.tx, startTy: part.rest.ty,
+        startSx: setup ? part.rest.sx : channelValue(part, 'sx', state.currentTime),
+        startSy: setup ? part.rest.sy : channelValue(part, 'sy', state.currentTime),
+        startTx: setup ? part.rest.tx : channelValue(part, 'tx', state.currentTime),
+        startTy: setup ? part.rest.ty : channelValue(part, 'ty', state.currentTime),
         grabLocal: spot.g,
         anchorLocal: spot.a,
         anchorRoot: applyMat(mStart, spot.a.x, spot.a.y),
@@ -223,19 +243,45 @@ export const HANDLES_PIPELINE: GesturePipeline = {
         const f = Math.abs(fx - 1) > Math.abs(fy - 1) ? fx : fy;
         fx = f; fy = f;
       }
-      d.part.rest.sx = round2(d.startSx * fx);
-      d.part.rest.sy = round2(d.startSy * fy);
+      const sx = round2(d.startSx * fx);
+      const sy = round2(d.startSy * fy);
+      if (d.setup) {
+        d.part.rest.sx = sx;
+        d.part.rest.sy = sy;
+      } else {
+        setKeyframe(d.part.id, 'sx', sx);
+        setKeyframe(d.part.id, 'sy', sy);
+      }
+      // Bone-deformed geometry is already in document space and scales around its own
+      // pivot after LBS. Do not manufacture translation keys to pin an opposite bbox
+      // corner—the pivot is the explicit, stable anchor for rig composition.
+      if (d.part.skin) {
+        renderPose();
+        return;
+      }
       // Keep the anchor (opposite corner/side) pinned: measure where it lands with the
       // new scale and push the difference back into the rest translation.
-      d.part.rest.tx = d.startTx;
-      d.part.rest.ty = d.startTy;
+      if (d.setup) {
+        d.part.rest.tx = d.startTx;
+        d.part.rest.ty = d.startTy;
+      } else {
+        setKeyframe(d.part.id, 'tx', d.startTx);
+        setKeyframe(d.part.id, 'ty', d.startTy);
+      }
       const mNew = matrixOfTransform(groupTransformOf(d.part, poseTime()));
       const after = applyMat(mNew, d.anchorLocal.x, d.anchorLocal.y);
       const deltaLocal = applyMat(
         d.invChainLinear, d.anchorRoot.x - after.x, d.anchorRoot.y - after.y,
       );
-      d.part.rest.tx = round1(d.startTx + deltaLocal.x);
-      d.part.rest.ty = round1(d.startTy + deltaLocal.y);
+      const tx = round1(d.startTx + deltaLocal.x);
+      const ty = round1(d.startTy + deltaLocal.y);
+      if (d.setup) {
+        d.part.rest.tx = tx;
+        d.part.rest.ty = ty;
+      } else {
+        setKeyframe(d.part.id, 'tx', tx);
+        setKeyframe(d.part.id, 'ty', ty);
+      }
       renderPose();
     } else if (d.kind === 'skew') {
       const p = pointerInRoot(ev);

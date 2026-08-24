@@ -17,7 +17,10 @@ import {
 } from '../geometry/warp';
 import { canUndo, canRedo } from '../core/history';
 import { ctx, SVG_NS, syncBonePlacementSurface } from './context';
-import { poseTime, rootPoseTransform, groupTransformOf, effectiveZ, effectiveOpacity } from './pose';
+import {
+  poseTime, rootPoseTransform, groupTransformOf, effectiveZ, effectiveOpacity,
+  effectiveScaleX, effectiveScaleY, effectivePivot,
+} from './pose';
 import { focusContext, nodeEditSkinSuspendId } from './focus';
 import { renderSkinnedPart, SkinPathWarp } from './skinRender';
 import { evaluateRiggedWarpCommands } from '../geometry/skinPose';
@@ -269,7 +272,11 @@ export function renderPose(): void {
       // the try/catch below is the net for a genuinely STRUCTURAL failure (e.g.
       // malformed path `d`). Either way, fall back to this one part's rigid rest render
       // and warn exactly once while it stays broken.
-      transform = '';
+      const pivot = effectivePivot(part, t);
+      const sx = effectiveScaleX(part, t);
+      const sy = effectiveScaleY(part, t);
+      transform = sx === 1 && sy === 1 ? ''
+        : `translate(${pivot.x},${pivot.y}) scale(${sx},${sy}) translate(${-pivot.x},${-pivot.y})`;
       let ok = false;
       let err: unknown;
       try {

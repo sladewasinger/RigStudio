@@ -112,9 +112,9 @@ describe('AI prompt text — bones-first articulation rules', () => {
     expect(lower).toContain('never a redundant duplicate');
   });
 
-  it('forbids sx/sy on skinned parts in BOTH the targeting rules and the channel docs', () => {
-    expect(TARGETING_RULES.toLowerCase()).toContain('never key sx/sy on a skinned part');
-    expect(RIG_SEMANTICS.toLowerCase()).toContain('forbidden on skinned');
+  it('documents that skinned scale composes with deformation but is not articulation', () => {
+    expect(TARGETING_RULES.toLowerCase()).toContain('scales the whole deformed result');
+    expect(RIG_SEMANTICS.toLowerCase()).toContain('scale composes with the bone deformation');
   });
 
   it('carries the compact wrong/right failure example', () => {
@@ -130,7 +130,7 @@ describe('AI prompt text — bones-first articulation rules', () => {
   });
 });
 
-describe('clampRawClip — drops forbidden sx/sy tracks on skinned parts', () => {
+describe('clampRawClip — preserves supported sx/sy tracks on skinned parts', () => {
   const raw = (): RawClip => ({
     name: 'x',
     duration: 1000,
@@ -157,24 +157,25 @@ describe('clampRawClip — drops forbidden sx/sy tracks on skinned parts', () =>
   });
   const skinned = new Set(['front_paddle']);
 
-  it('removes sx/sy on the skinned part, keeps bone rotate + part rotate/tx and unskinned sx', () => {
+  it('keeps skinned scale, bone rotate, part rotate/tx, and unskinned scale', () => {
     const { clip } = clampRawClip(raw(), 1000, skinned);
     const keys = clip.tracks.map((t) => `${t.target}.${t.channel}`);
     expect(keys).toEqual([
-      'front_paddle.rotate', 'front_paddle.tx', 'b1.rotate', 'main_hull.sx',
+      'front_paddle.sx', 'front_paddle.sy', 'front_paddle.rotate',
+      'front_paddle.tx', 'b1.rotate', 'main_hull.sx',
     ]);
   });
 
-  it('counts each dropped keyframe in clampedCount (the panel\'s surfacing channel)', () => {
+  it('does not report supported scale as clamped', () => {
     const { clampedCount } = clampRawClip(raw(), 1000, skinned);
-    expect(clampedCount).toBe(3); // 2 sx keys + 1 sy key dropped, nothing out of range
+    expect(clampedCount).toBe(0);
   });
 
   it('still counts genuine out-of-range clamps on the surviving tracks', () => {
     const r = raw();
     r.tracks[4].keyframes.push({ time: 5000, value: 0, easing: 'linear' }); // b1.rotate
     const { clampedCount } = clampRawClip(r, 1000, skinned);
-    expect(clampedCount).toBe(4); // 3 dropped keys + 1 clamped time
+    expect(clampedCount).toBe(1);
   });
 
   it('without a skinnedLabels set, nothing is dropped (back-compat default)', () => {

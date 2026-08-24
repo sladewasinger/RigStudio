@@ -13,9 +13,12 @@
 
 import {
   state, notify, selectedPart, selectPart, ancestorChain, effectiveChildOrder, RigPart,
-  RigPath,
+  RigPath, promotePathToPart,
 } from '../core/model';
-import { renderPose, enterGroupsFor, selectPartContainer, updatePathAttrs } from '../view';
+import {
+  renderPose, enterGroupsFor, selectPartContainer, updatePathAttrs, registerPart,
+  syncPartPathDom, reorderCanvas,
+} from '../view';
 import { checkpoint } from '../core/history';
 import { showContextMenu } from '../ui/contextMenu';
 import { buildPartContextMenu } from '../ui/actions';
@@ -296,6 +299,18 @@ function pathNode(part: RigPart, path: RigPath): HTMLElement {
   pathRow.onclick = () => {
     // Enter the part and select this object — the inspector shows its style and
     // node editing scopes to it.
+    if (state.editorMode === 'animate' && state.mode === 'rig') {
+      const promoted = promotePathToPart(part, path.id);
+      if (promoted && promoted !== part) {
+        syncPartPathDom(part);
+        registerPart(promoted);
+        reorderCanvas();
+        selectPart(promoted.id);
+        notify();
+        renderPose();
+        return;
+      }
+    }
     selectPart(part.id);
     state.selectedPathId = path.id;
     notify();

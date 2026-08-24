@@ -232,7 +232,7 @@ describe('mcp error paths', () => {
     expect(applied.clampedCount).toBeGreaterThan(0);
   });
 
-  it('apply_clip drops sx/sy tracks on an already-skinned part and reports it via clampedCount', () => {
+  it('apply_clip preserves supported sx/sy tracks on an already-skinned part', () => {
     handleImportSvg({ file_path: PIP_SVG_PATH, session: 'skin-drop' });
     handleAddBones({
       bones: [{ label: 'arm_bone', x1: 66.64, y1: 119.59, x2: 66.64, y2: 160, bindParts: ['right_arm'] }],
@@ -252,7 +252,7 @@ describe('mcp error paths', () => {
       },
       session: 'skin-drop',
     }) as any;
-    expect(applied.clampedCount).toBe(1);
-    expect(applied.trackCount).toBe(0);
+    expect(applied.clampedCount).toBe(0);
+    expect(applied.trackCount).toBe(1);
   });
 });

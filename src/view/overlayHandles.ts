@@ -37,11 +37,9 @@ function appendRotateCorners(
 
 /**
  * Plain dashed-box corner markers (no interactive handle underneath — a body drag still
- * translates/keys via the artwork pipeline, these are decoration only). Shared by
- * Animate's first-click (translate) mode for every part, and a skinned part's Setup
- * scale-mode click: scale/skew stay off the table for skin (never propagate to children
- * in the editor, unlike a Rive Node at runtime — user ruling 2026-07-12), so it never
- * gets the interactive resize squares a plain art part's first click shows.
+ * translates/keys via the artwork pipeline, these are decoration only). Used for the
+ * passive group-scale case in Animate, where the editor has no inherited group-scale
+ * animation channel to write.
  */
 function passiveCornersG(
   boxTransform: string, x0: number, y0: number, x1: number, y1: number, size: number,
@@ -104,12 +102,9 @@ export function groupLikeUnionBox(
  * for every selectable KIND — groups used to draw only the passive dashed box with no
  * way to tell scale mode from rotate mode.
  *
- * A SKINNED part (user ruling 2026-07-12, "Allow rotate+translate") gets the translate
- * set (passive corners — same decoration as Animate's first click) on the first click
- * and the ACTIVE rotate corners on the second, in BOTH Edit and Animate — its rotate
- * and translate genuinely carry the whole bone chain. It never gets scale squares or
- * skew sides (those still don't propagate to children in the editor), so it renders the
- * applicable subset of exactly two handle sets, never nothing, per the GOTCHA above.
+ * A SKINNED part gets the same scale and rotate handles as ordinary artwork. Its scale
+ * composes after LBS around its pivot; only skew stays unavailable because it has no
+ * corresponding skin-composition rule.
  */
 export function renderSelectionHandles(rootTransform: string, size: number, setup: boolean): void {
   if (!ctx.overlay) return;
@@ -121,7 +116,17 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
     const g = ctx.partGroups.get(part.id)?.[0]; // any run's transform — see context.ts
     let box: { x: number; y: number; width: number; height: number };
     let boxTransform: string;
-    if (groupLike) {
+    const scopedPath = part.id === state.selectedPartId && state.selectedPathId
+      ? part.paths.find((path) => path.id === state.selectedPathId) ?? null
+      : null;
+    if (scopedPath) {
+      const element = ctx.rootGroup?.querySelector<SVGPathElement>(`[data-path-id="${scopedPath.id}"]`);
+      if (!element || !g) continue;
+      const own = element.getBBox();
+      box = { x: own.x, y: own.y, width: own.width, height: own.height };
+      boxTransform = [rootTransform, g.getAttribute('transform') ?? '', scopedPath.transform]
+        .filter(Boolean).join(' ');
+    } else if (groupLike) {
       const ub = groupLikeUnionBox(part);
       if (!ub) continue; // nothing inside yet — nothing to box or handle
       box = { x: ub.x0, y: ub.y0, width: ub.x1 - ub.x0, height: ub.y1 - ub.y0 };
@@ -135,7 +140,7 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
       box = ownBox;
     }
     const primary = part.id === state.selectedPartId;
-    const pad = size * (groupLike ? 0.8 : 0.6);
+    const pad = size * (groupLike && !scopedPath ? 0.8 : 0.6);
     const x0 = box.x - pad, y0 = box.y - pad;
     const x1 = box.x + box.width + pad, y1 = box.y + box.height + pad;
 
@@ -155,20 +160,15 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
     if (!primary) continue;
 
     if (part.skin) {
-      // Skinned parts get a box + a label explaining what's still off-limits — scale and
-      // skew (never propagate to children in the editor, unlike a Rive Node at runtime),
-      // NOT rotate/translate: those carry the whole bone chain now (rendered below,
-      // exactly like any other part — user ruling 2026-07-12, "Allow rotate+translate").
-      // A skinned part renders with an empty group transform, so boxTransform is
-      // axis-aligned root space. (Groups are never skinned — bindPartsToBones only ever
-      // targets art parts.)
+      // The geometry inside a skinned part is produced in document space by LBS. Its
+      // group transform then carries the optional post-skin scale around the part pivot.
       const hint = document.createElementNS(SVG_NS, 'text');
       hint.setAttribute('x', String(x0));
       hint.setAttribute('y', String(y0 - size * 0.6));
       hint.setAttribute('class', 'skin-hint');
       hint.setAttribute('font-size', String(size * 1.5));
       hint.textContent =
-        'bone-deformed — rotate/translate move the whole limb; scale/skew and shape come from its bones';
+        'bone-deformed — transforms compose with the rig; shape comes from its bones';
       const wrap = document.createElementNS(SVG_NS, 'g');
       wrap.setAttribute('class', 'overlay-passive');
       wrap.setAttribute('transform', boxTransform);
@@ -176,10 +176,10 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
       ctx.overlay.appendChild(wrap);
     }
 
-    if (setup && ctx.handleMode === 'scale') {
-      if (part.skin) {
-        // Scale is blocked on a skinned part (see the hint above) — same passive
-        // decoration as Animate's non-keyable first click, not the interactive squares.
+    if (ctx.handleMode === 'scale') {
+      if (!setup && groupLike) {
+        // Group scaling is a distributed rest edit, not a single inherited transform;
+        // keep Animate honest until a keyable group-scale model exists.
         ctx.overlay.appendChild(passiveCornersG(boxTransform, x0, y0, x1, y1, size));
       } else {
         // Interactive Inkscape-style scale handles for the primary part.
@@ -204,9 +204,8 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
         ctx.overlay.appendChild(handles);
       }
     } else if (setup) {
-      // Inkscape's second handle set: corners ROTATE (active for a skinned part too —
-      // it genuinely carries the bone chain now), sides SKEW — groups AND skinned parts
-      // skip the skew sides (no shear field / skew still blocked on skin respectively);
+      // Inkscape's second handle set: corners ROTATE, sides SKEW — groups AND skinned
+      // parts skip the skew sides (no shear field / no skin skew composition);
       // still visibly distinct from the 8-square scale set (the GOTCHA's bar).
       const handles = document.createElementNS(SVG_NS, 'g');
       handles.setAttribute('transform', boxTransform);
@@ -242,9 +241,8 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
       appendRotateCorners(handles, x0, y0, x1, y1, size);
       ctx.overlay.appendChild(handles);
     } else {
-      // Animate's first click (translate set) — scale isn't keyable, so this stays the
-      // plain dashed box with passive corner markers (drag the body to translate/key);
-      // every part lands here on its first click, skinned or not.
+      // Animate's passive first-click set applies only to group-like selections, whose
+      // distributed rest scaling has no single animation channel.
       ctx.overlay.appendChild(passiveCornersG(boxTransform, x0, y0, x1, y1, size));
     }
   }

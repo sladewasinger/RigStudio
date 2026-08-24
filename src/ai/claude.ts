@@ -287,28 +287,16 @@ export function buildRequestNotes(
  * `[0, duration]` instead, and the output's duration is forced to the pinned value. Pure
  * and exported so it's unit-testable without a network call.
  *
- * `skinnedLabels` (2026-07-12 skinned-pose ruling) additionally DROPS any sx/sy track
- * targeting a skinned part: part scale renders nothing on skinned geometry in the editor
- * (scale never propagates to children there) while Rive WOULD scale the node — a WYSIWYG
- * violation, so the track is removed outright. rotate/tx/ty on skinned parts are
- * legitimate whole-limb accents (the bones are parented under the part) and pass
- * through untouched, as do sx/sy tracks on unskinned parts and every bone track. Each
- * dropped keyframe counts toward `clampedCount` — the panel's existing clamp note is
- * the one surfacing channel (see `AnimateResult.clampedCount`).
+ * `skinnedLabels` is retained for API compatibility. Scale now composes with live skin
+ * deformation in the editor and native Rive export, so sx/sy tracks are preserved.
  */
 export function clampRawClip(
   raw: RawClip,
   duration: number,
-  skinnedLabels: ReadonlySet<string> = new Set(),
+  _skinnedLabels: ReadonlySet<string> = new Set(),
 ): { clip: RawClip; clampedCount: number } {
   let clampedCount = 0;
-  const tracks = raw.tracks
-    .filter((t) => {
-      const forbidden = (t.channel === 'sx' || t.channel === 'sy') && skinnedLabels.has(t.target);
-      if (forbidden) clampedCount += t.keyframes.length;
-      return !forbidden;
-    })
-    .map((t) => ({
+  const tracks = raw.tracks.map((t) => ({
       ...t,
       keyframes: [...t.keyframes]
         .map((k) => {

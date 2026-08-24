@@ -192,8 +192,8 @@ its own pivot (its joint — e.g. an arm's pivot is the shoulder). Channels per 
   part around its OWN pivot, along its own axes, and does NOT propagate to children — use it
   to squash/stretch or grow/shrink a single part (e.g. blinking eyes flattening sy toward 0,
   a breathing chest, a bouncing ball's contact squash). Volume-preserving squash pairs sx and
-  sy inversely. A part with no sx/sy track stays at its rest scale. FORBIDDEN on skinned
-  parts (see the skinned-parts rules below — the app drops such tracks).
+  sy inversely. A part with no sx/sy track stays at its rest scale. On skinned artwork,
+  scale composes with the bone deformation; use bones—not scale—for articulation.
 - z: draw-order OFFSET (stacking rank), ABSOLUTE and STEPPED — easing is IGNORED, the part
   jumps to the new rank exactly at the keyframe (no blending between ranks). 0 = the
   authored stacking; a POSITIVE z lifts the part toward the viewer (draws in front of parts
@@ -231,9 +231,8 @@ easeOut (decelerate), easeInOut.`;
  * a rigid slab, another double-rotated a whole-part swing on top of its articulated
  * bones): a skinned part's bones are PARENTED under it, so part-level rotate/tx/ty
  * legitimately carries the whole chain (rigid whole-limb motion, matches the .riv
- * export) — but ARTICULATION lives on the bones, and sx/sy on a skinned part renders
- * nothing in the editor while Rive WOULD scale the node (WYSIWYG violation), so scale
- * is forbidden outright and enforced app-side (`ai/claude.ts`'s `clampRawClip`).
+ * export) — but ARTICULATION lives on the bones. Part sx/sy is still a legitimate
+ * whole-limb scale layered around the part pivot after bone deformation.
  */
 export const TARGETING_RULES = `Targeting rule — read carefully: NEVER set a track's "target" to
 "root". Instead:
@@ -262,8 +261,8 @@ lists the controlling chain in "bones", root first):
   parented under it and ride along). Use it as an optional accent LAYERED ON TOP of
   bone articulation — never a substitute for it, and never a redundant duplicate of a
   swing the bones already perform (that double-rotates the limb).
-- NEVER key sx/sy on a skinned part: the editor renders no scale on skinned geometry,
-  so the track is a lie — the app DROPS such tracks from your response.
+- sx/sy on a skinned part scales the whole deformed result around its pivot. Use this
+  only for intentional squash/grow effects; use bone rotation for joint articulation.
 - Example — WRONG: a wave keying rotate on the arm part alone. RIGHT: rotate keys on
   the arm's chain bones (say shoulder_bone -> elbow_bone -> wrist_bone) cascading
   40-80ms per bone, plus at most a small rotate accent on the part itself.`;

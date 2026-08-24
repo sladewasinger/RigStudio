@@ -133,6 +133,13 @@ export function slotRemovePath(part: RigPart, pathId: string): void {
   if (i >= 0) part.childOrder.splice(i, 1);
 }
 
+/** Replace one drawable slot with its newly-promoted leaf-part slot in place. */
+export function slotPromotePathToChild(part: RigPart, pathId: string, childId: string): void {
+  if (!part.childOrder) return;
+  const i = slotIndexOf(part.childOrder, 'path', pathId);
+  if (i >= 0) part.childOrder.splice(i, 1, { kind: 'part', id: childId });
+}
+
 /** Add a child-PART slot to `parent.childOrder`, if present. Default position = end
  *  (topmost), matching `addNullPart`'s/`setParent`'s "new topmost child" placement. A
  *  no-op if the slot already exists (idempotent). */
