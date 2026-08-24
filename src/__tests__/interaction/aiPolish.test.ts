@@ -13,7 +13,7 @@ import { __setAnimateCallForTest } from '../../panels/ai';
 import { getThread } from '../../panels/ai/threads';
 import { activeClip, setKeyframeAt } from '../../core/model';
 import {
-  bootRig, resetRig, setEditorMode, state, waitFor, partByLabel, notify,
+  bootRig, resetRig, openClaudePanel, state, waitFor, partByLabel, notify,
 } from './harness';
 
 interface AiPreviewHook {
@@ -105,7 +105,7 @@ describe('AI Polish button (AI Animate System v2 A6)', () => {
   beforeAll(bootRig);
   beforeEach(() => {
     resetRig();
-    setEditorMode('animate');
+    openClaudePanel();
     typePrompt(''); // clear any promptText a previous test left in the module-scope mirror
     for (const k of allThreadKeys()) localStorage.removeItem(k);
   });

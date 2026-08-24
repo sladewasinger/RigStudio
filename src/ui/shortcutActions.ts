@@ -15,7 +15,6 @@ import { getProjectStorage, addRecent } from '../io/storage';
 /** Tab's action, and the Setup/Animate toolbar buttons'. */
 export function setEditorMode(mode: EditorMode): void {
   if (state.editorMode === mode) {
-    if (mode === 'animate') document.dispatchEvent(new CustomEvent('rig-open-dock-tab', { detail: 'claude' }));
     return;
   }
   cancelInfluenceEditing();
@@ -27,9 +26,6 @@ export function setEditorMode(mode: EditorMode): void {
   if (mode === 'setup') clearKeySelection();
   notify();
   renderPose();
-  // Preserve the long-standing Animate entry point while keeping Claude isolated
-  // in its own dock tab instead of rebuilding it inside the Inspector.
-  if (mode === 'animate') document.dispatchEvent(new CustomEvent('rig-open-dock-tab', { detail: 'claude' }));
 }
 
 /**

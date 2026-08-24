@@ -7,12 +7,11 @@ import { buildWarpWorkspace } from './warpWorkspace';
 export type RightDockTab = 'inspector' | 'warps' | 'claude';
 
 const WIDTH_KEY = 'rig-studio-right-dock-width';
-const TAB_KEY = 'rig-studio-right-dock-tab';
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 620;
 const DEFAULT_WIDTH = 340;
 let inspectorElement: HTMLElement | null = null;
-let activeTab: RightDockTab = (localStorage.getItem(TAB_KEY) as RightDockTab) || 'inspector';
+let activeTab: RightDockTab = 'inspector';
 
 const clamp = (value: number) => Math.min(Math.min(MAX_WIDTH, window.innerWidth * .55), Math.max(MIN_WIDTH, value));
 
@@ -78,7 +77,18 @@ function ensureShell(inspector: HTMLElement): HTMLElement {
 export function openRightDockTab(tab: RightDockTab): void {
   if (state.editorMode === 'setup' && tab !== 'inspector') return;
   activeTab = tab;
-  if (state.editorMode === 'animate') localStorage.setItem(TAB_KEY, tab);
+  if (inspectorElement) buildRightDock(inspectorElement);
+}
+
+/** A document replacement is a fresh authoring context, never a continuation of an
+ *  assistant or Warp workspace. Width remains a user preference; active content does
+ *  not. Direct Warp actions may open Warps again after this reset. */
+export function resetRightDockTab(): void {
+  // Reconcile/discard any Claude preview tied to the outgoing document before the
+  // Claude DOM is removed. Merely mounting Inspector would otherwise strand the old
+  // preview sampler and its listeners behind an invisible tab.
+  buildAiPanel(document.createElement('div'));
+  activeTab = 'inspector';
   if (inspectorElement) buildRightDock(inspectorElement);
 }
 

@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import {
-  bootRig, resetRig, setEditorMode, selectByLabel,
+  bootRig, resetRig, setEditorMode, openClaudePanel, selectByLabel,
 } from './harness';
 
 function aiPanelPresent(): boolean {
@@ -44,24 +44,24 @@ describe('AI panel prompt-text persistence (AI Animate System v2 A1)', () => {
   it('the panel only mounts in Animate mode', () => {
     setEditorMode('setup');
     expect(aiPanelPresent()).toBe(false);
-    setEditorMode('animate');
+    openClaudePanel();
     expect(aiPanelPresent()).toBe(true);
   });
 
   it('starts empty on a fresh boot', () => {
-    setEditorMode('animate');
+    openClaudePanel();
     expect(promptBox().value).toBe('');
   });
 
   it('survives a plain notify()-driven inspector rebuild (e.g. selecting a different part)', () => {
-    setEditorMode('animate');
+    openClaudePanel();
     typePrompt('bend at the knees');
     selectByLabel('left_arm'); // notify() + renderPose(), rebuilds every panel incl. this one
     expect(promptBox().value).toBe('bend at the knees');
   });
 
   it('survives a timeline view switch (logic <-> keys) even though it lives in a separate DOM subtree', () => {
-    setEditorMode('animate');
+    openClaudePanel();
     typePrompt('wave with the right arm');
     timelineModeButton('logic').click();
     timelineModeButton('keys').click();
@@ -69,24 +69,24 @@ describe('AI panel prompt-text persistence (AI Animate System v2 A1)', () => {
   });
 
   it('survives a full Edit -> Animate round trip (the panel is unmounted entirely in Edit mode)', () => {
-    setEditorMode('animate');
+    openClaudePanel();
     typePrompt('jump, then land with a squash');
 
     setEditorMode('setup');
     expect(aiPanelPresent()).toBe(false); // proves the DOM element is really gone, not just hidden
 
-    setEditorMode('animate');
+    openClaudePanel();
     expect(promptBox().value).toBe('jump, then land with a squash'); // a FRESH textarea, same text
   });
 
   it('a second edit after a round trip is captured too (module state stays live, not a one-shot restore)', () => {
-    setEditorMode('animate');
+    openClaudePanel();
     typePrompt('first draft');
     setEditorMode('setup');
-    setEditorMode('animate');
+    openClaudePanel();
     typePrompt('revised direction');
     setEditorMode('setup');
-    setEditorMode('animate');
+    openClaudePanel();
     expect(promptBox().value).toBe('revised direction');
   });
 });

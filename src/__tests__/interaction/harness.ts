@@ -579,6 +579,13 @@ export function setEditorMode(mode: 'setup' | 'animate'): void {
   hook().setEditorMode(mode);
 }
 
+/** Enter Animate and explicitly choose its Claude workspace. AI tests use this instead
+ *  of depending on the old, incorrect implicit-Claude mode default. */
+export function openClaudePanel(): void {
+  setEditorMode('animate');
+  document.getElementById('right-dock-tab-claude')?.click();
+}
+
 /** The active clip's track for a target/channel, or undefined. */
 export function clipTrack(target: string, channel: string) {
   const clip = state.doc?.clips[state.activeClipIndex];

@@ -15,7 +15,7 @@ import { __setAnimateCallForTest } from '../../panels/ai';
 import { getThread, recordTurn } from '../../panels/ai/threads';
 import { activeClip } from '../../core/model';
 import {
-  bootRig, resetRig, setEditorMode, state, waitFor,
+  bootRig, resetRig, openClaudePanel, state, waitFor,
 } from './harness';
 
 interface AiPreviewHook {
@@ -121,7 +121,7 @@ describe('AI refinement threads (AI Animate System v2 A4)', () => {
   beforeAll(bootRig);
   beforeEach(() => {
     resetRig();
-    setEditorMode('animate');
+    openClaudePanel();
     // Threads persist in localStorage across tests within this file (only bootRig
     // clears it, once) — start every test from a clean slate for the active doc.
     for (const k of allThreadKeys()) localStorage.removeItem(k);
@@ -252,7 +252,7 @@ describe('AI refinement threads (AI Animate System v2 A4)', () => {
     expect(state.doc).not.toBe(beforeDocRef); // proves this was a real replace, not a no-op
     expect(state.doc!.name).toBe(docName); // names match -> the store's key still resolves
 
-    setEditorMode('animate');
+    openClaudePanel();
     expect(getThread(docName, clip.name)!.turns[0].instruction).toBe('survives a reload');
     expect(threadStripText()).toContain('survives a reload');
   });

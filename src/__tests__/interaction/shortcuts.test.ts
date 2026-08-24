@@ -36,7 +36,7 @@ import { setLogicVisible } from '../../panels/smPanel';
 import { animateWithClaude, AnimateResult } from '../../ai/claude';
 import { __setAnimateCallForTest } from '../../panels/ai';
 import {
-  bootRig, resetRig, state, partByLabel, selectByLabel, setEditorMode, clipTrack,
+  bootRig, resetRig, state, partByLabel, selectByLabel, setEditorMode, openClaudePanel, clipTrack,
   medialPoints, click, svgEl, viewBox, expectClose, clientCenterOf, enterNodeMode, waitFor,
 } from './harness';
 
@@ -78,7 +78,7 @@ function fabricateResult(): AnimateResult {
 /** Drives the real AI panel to enter a preview (mirrors aiPreview.test.ts's runCreate),
  *  used only to arrange the Escape cascade's aiPreview tier. */
 async function enterAiPreview(): Promise<void> {
-  setEditorMode('animate');
+  openClaudePanel();
   __setAnimateCallForTest(async () => fabricateResult());
   const panel = document.querySelector('.ai-panel')!;
   const apiKeyInput = panel.querySelector('input[type="password"]') as HTMLInputElement;

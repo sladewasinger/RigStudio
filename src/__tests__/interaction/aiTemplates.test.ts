@@ -12,7 +12,7 @@ import { AnimateResult, animateWithClaude } from '../../ai/claude';
 import { __setAnimateCallForTest } from '../../panels/ai';
 import { activeClip } from '../../core/model';
 import {
-  bootRig, loadFixtureSvg, resetRig, setEditorMode, waitFor,
+  bootRig, loadFixtureSvg, resetRig, setEditorMode, openClaudePanel, waitFor,
 } from './harness';
 
 interface AiPreviewHook {
@@ -85,7 +85,7 @@ describe('AI motion templates + rig profile (AI Animate System v2 A5)', () => {
   beforeAll(bootRig);
   beforeEach(() => {
     resetRig();
-    setEditorMode('animate');
+    openClaudePanel();
     typePrompt(''); // clear any promptText a previous test left in the module-scope mirror
   });
   afterEach(() => {
@@ -124,7 +124,7 @@ describe('AI motion templates + rig profile (AI Animate System v2 A5)', () => {
     const filled = promptBox().value;
     expect(filled.length).toBeGreaterThan(0);
     setEditorMode('setup'); // panel unmounts entirely in Edit mode…
-    setEditorMode('animate'); // …and rebuilds from ai.promptText
+    openClaudePanel(); // …and explicitly rebuilds the Claude workspace from ai.promptText
     expect(promptBox().value).toBe(filled);
   });
 
@@ -170,7 +170,7 @@ describe('AI motion templates + rig profile (AI Animate System v2 A5)', () => {
 
   it('RIG-AGNOSTIC PROOF: the same button on the girl fixture names HER structure', async () => {
     await loadFixtureSvg('girl_example.svg');
-    setEditorMode('animate');
+    openClaudePanel();
 
     templateBtn('walk').click();
     const text = promptBox().value;

@@ -17,7 +17,7 @@ import { AnimateResult, animateWithClaude } from '../../ai/claude';
 import { __setAnimateCallForTest } from '../../panels/ai';
 import { canUndo, undo } from '../../core/history';
 import {
-  bootRig, resetRig, setEditorMode, state, partByLabel, partMatrix, waitFor,
+  bootRig, resetRig, setEditorMode, openClaudePanel, state, partByLabel, partMatrix, waitFor,
 } from './harness';
 
 interface RigStudioHook {
@@ -125,7 +125,7 @@ describe('AI preview-before-apply (AI Animate System v2 A2)', () => {
   beforeAll(bootRig);
   beforeEach(() => {
     resetRig();
-    setEditorMode('animate');
+    openClaudePanel();
   });
   afterEach(() => {
     // Never let a failed test's preview bleed into the next one.
@@ -240,7 +240,7 @@ describe('AI preview-before-apply (AI Animate System v2 A2)', () => {
     expect(hook().serializeDoc(state.doc!)).toBe(beforeDoc);
     expect(state.dirty).toBe(false);
 
-    setEditorMode('animate');
+    openClaudePanel();
     expect(previewActionBtn('apply')).toBeNull(); // no stale preview bar reappears
   });
 

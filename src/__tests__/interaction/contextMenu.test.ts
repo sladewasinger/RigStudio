@@ -19,7 +19,7 @@ import { undo, canUndo } from '../../core/history';
 import { closeMenu } from '../../ui/contextMenu';
 import { pathMoveRefusal } from '../../view';
 import {
-  bootRig, resetRig, state, setEditorMode, partByLabel, medialPoints, placeBoneChain,
+  bootRig, resetRig, state, setEditorMode, openClaudePanel, partByLabel, medialPoints, placeBoneChain,
   clientCenterOf, clientPointOnPart, pathElById, rightClick, viewBox, docToClient,
 } from './harness';
 
@@ -91,7 +91,7 @@ describe('scenario — native context menu suppression is app-wide', () => {
   });
 
   it('the AI prompt textarea: native menu is left alone (text-entry exception)', () => {
-    setEditorMode('animate');
+    openClaudePanel();
     const box = document.querySelector<HTMLTextAreaElement>('.ai-panel textarea');
     expect(box, 'AI prompt textarea present in Animate mode').not.toBeNull();
     const c = clientCenterOf(box!);

@@ -8,7 +8,7 @@ import {
   enterGroupsFor, clearGroupEntry, resetInteractionState, resetSkinRenderWarnings,
   artworkUnderPointer,
 } from './view';
-import { buildLayersPanel, buildCanvasTools, buildRightDock } from './panels';
+import { buildLayersPanel, buildCanvasTools, buildRightDock, resetRightDockTab } from './panels';
 import { createWarpTriangleSquareSample } from './samples/warpTriangleSquare';
 import { buildTimeline, render as renderTimeline, clearKeySelection } from './timeline/timeline';
 import { exportLottie } from './io/exportLottie';
@@ -67,6 +67,7 @@ const AUTOSAVE_KEY = 'rig-studio-autosave';
  * an armed bone placement) BEFORE buildCanvas discards the old DOM.
  */
 function afterDocReplaced(): void {
+  resetRightDockTab();
   state.selectedPartId = null;
   state.selectedPartIds = [];
   state.selectedPathId = null;

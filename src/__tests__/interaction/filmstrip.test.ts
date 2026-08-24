@@ -25,7 +25,7 @@ import {
   captureFilmstripFrame, FilmstripFrame, renderClipFilmstrip, selectFilmstripTimes,
 } from '../../ui/snapshot';
 import {
-  bootRig, resetRig, setEditorMode, state, partByLabel, partMatrix, renderPose, waitFor,
+  bootRig, resetRig, openClaudePanel, state, partByLabel, partMatrix, renderPose, waitFor,
 } from './harness';
 
 interface AiPreviewStatus {
@@ -123,7 +123,7 @@ describe('AI Animate System v2 A3 (filmstrip vision) — interaction', () => {
   beforeAll(bootRig);
   beforeEach(() => {
     resetRig();
-    setEditorMode('animate');
+    openClaudePanel();
   });
   afterEach(() => {
     if (aiHook()?.isActive()) aiHook().discard();
