@@ -5,7 +5,7 @@ import { createSMInstance } from '../core/stateMachine';
 import { evaluateRiggedWarpCommands } from '../geometry/skinPose';
 import { PathCmd } from '../geometry/paths';
 import { exportRiv } from '../io/riv';
-import { riveFramePoseSampler, stateMachinePoseCompleteClips } from '../io/riv/animation';
+import { riveFramePoseSampler, stateMachinePoseCompleteClips } from '../io/riv/clipPose';
 import { decodeRiv, PROP } from './rivDecoder';
 
 const projectText = readFileSync(

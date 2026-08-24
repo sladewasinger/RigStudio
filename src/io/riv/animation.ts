@@ -31,7 +31,7 @@
  * see its header for the full mechanism; this file only plans+emits per clip.
  */
 
-import { CHANNEL_DEFAULTS, Channel, Clip, Keyframe, RigDoc, Track, sampleKeyList } from '../../core/model';
+import { Channel, Clip, Keyframe, RigDoc, Track, sampleKeyList } from '../../core/model';
 import { PoseSampler } from '../../geometry/pose';
 import { RivSubpath } from './geometry';
 import { CompiledRivWarpPair } from './warp';
@@ -39,6 +39,7 @@ import { Scene } from './writer';
 import { DrawRulesSetup, emitZKeyedProperty, planZDrawTargets, ZPlan } from './drawRules';
 import { bakeVisibilityOpacity } from './visibilityOpacity';
 import { planWarpPaintVisibility } from './warpPaintVisibility';
+import { frameQuantizedKeys, riveFramePoseSampler, stateMachinePoseCompleteClips } from './clipPose';
 import {
   argb, DEG2RAD, EASING_CUBIC, FPS, INTERP_CUBIC, INTERP_LINEAR, P_ANIM_NAME, P_COLOR,
   P_DURATION, P_FPS, P_FRAME, P_INTERP_TYPE, P_INTERPOLATOR_ID, P_KEYFRAME_COLOR_VALUE,
@@ -71,62 +72,6 @@ export interface WarpPathTarget {
 
 export function warpPathTargetKey(partId: string, pathId: string): string {
   return `${partId}\u0000${pathId}`;
-}
-
-const trackKey = (track: Pick<Track, 'target' | 'channel'>) => `${track.target}\u0000${track.channel}`;
-
-/**
- * Native state machines retain a property when the newly-entered animation does not
- * key it; Rig Studio's evaluator instead supplies that channel's rest/default value.
- * Build export-only pose-complete clip views for every animation referenced by a state
- * machine. The authored document and Timeline stay untouched.
- */
-export function stateMachinePoseCompleteClips(doc: RigDoc): Map<string, Clip> {
-  const closureByClip = new Map<string, Set<string>>();
-  for (const machine of doc.stateMachines ?? []) {
-    const names = [...new Set(machine.states
-      .filter((machineState) => machineState.kind === 'animation' && machineState.clipName)
-      .map((machineState) => machineState.clipName!))];
-    const clips = names.map((name) => doc.clips.find((clip) => clip.name === name)).filter((clip): clip is Clip => !!clip);
-    const closure = new Set(clips.flatMap((clip) => clip.tracks.map(trackKey)));
-    for (const name of names) {
-      const target = closureByClip.get(name) ?? new Set<string>();
-      closure.forEach((key) => target.add(key));
-      closureByClip.set(name, target);
-    }
-  }
-  const partById = new Map(doc.parts.map((part) => [part.id, part]));
-  const defaultValue = (target: string, channel: Channel): number => {
-    if (channel === 'warp' || channel === 'z') return 0;
-    if (target === 'root') return CHANNEL_DEFAULTS[channel];
-    const part = partById.get(target);
-    if (!part) return CHANNEL_DEFAULTS[channel];
-    if (channel === 'visibility') return part.hidden ? 0 : 1;
-    return part.rest[channel as keyof typeof part.rest] as number;
-  };
-  const result = new Map<string, Clip>();
-  for (const clip of doc.clips) {
-    const closure = closureByClip.get(clip.name);
-    if (!closure) { result.set(clip.name, clip); continue; }
-    const existing = new Set(clip.tracks.map(trackKey));
-    const tracks = [...clip.tracks];
-    for (const key of closure) {
-      if (existing.has(key)) continue;
-      const split = key.lastIndexOf('\u0000');
-      const target = key.slice(0, split);
-      const channel = key.slice(split + 1) as Channel;
-      const value = defaultValue(target, channel);
-      tracks.push({
-        target, channel,
-        keyframes: [
-          { time: 0, value, easing: 'linear' },
-          { time: clip.duration, value, easing: 'linear' },
-        ],
-      });
-    }
-    result.set(clip.name, { ...clip, tracks });
-  }
-  return result;
 }
 
 /**
@@ -444,40 +389,6 @@ function keysOf(track: Track | undefined): Keyframe[] {
   return [...(track?.keyframes ?? [])].sort((a, b) => a.time - b.time);
 }
 
-/** Rive's integer-frame clock expressed back in milliseconds for sampleKeyList. */
-export function frameQuantizedKeys(track: Track | undefined, fps: number): Keyframe[] {
-  const byFrame = new Map<number, Keyframe>();
-  for (const key of keysOf(track)) {
-    const frame = toFrame(key.time, fps);
-    // If authoring placed multiple keys inside one export frame, the later key is the
-    // deterministic winner. Emitting duplicate native frame ids is runtime-dependent.
-    byFrame.set(frame, { ...key, time: frame / fps * 1000 });
-  }
-  return [...byFrame.values()].sort((a, b) => a.time - b.time);
-}
-
-/** Canonical pose sampler for geometry compiled into an integer-frame Rive clip. */
-export function riveFramePoseSampler(
-  doc: RigDoc, clip: Clip, time: number, fps = doc.fps && doc.fps > 0 ? doc.fps : FPS,
-): PoseSampler {
-  const byId = new Map(doc.parts.map((part) => [part.id, part]));
-  return (targetId, channel) => {
-    const track = clip.tracks.find((candidate) =>
-      candidate.target === targetId && candidate.channel === channel);
-    const part = byId.get(targetId);
-    let rest = CHANNEL_DEFAULTS[channel];
-    if (part) {
-      if (channel === 'visibility') rest = part.hidden ? 0 : 1;
-      else if (channel !== 'z' && channel !== 'warp') {
-        rest = part.rest[channel as keyof typeof part.rest] as number;
-      }
-    }
-    return sampleKeyList(
-      frameQuantizedKeys(track, fps), time, rest,
-      channel === 'z' || channel === 'visibility',
-    );
-  };
-}
 
 /** ms -> integer frame at `fps` (defaults to the 60fps fallback constant). */
 export function toFrame(ms: number, fps: number = FPS): number {
