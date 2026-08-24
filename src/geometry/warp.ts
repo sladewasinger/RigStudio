@@ -138,7 +138,9 @@ function evaluatedHolderMatrix(doc: RigDoc, part: RigPart, path: RigPath, time: 
   return multiply(matrixOfTransform(`${chain.map(pose).join(' ')} ${pose(part)} ${part.transform} ${inner}`), matrixOfTransform(path.transform));
 }
 
-export function compileWarpPathPair(doc: RigDoc, pair: WarpPathPair, time?: number, sampler?: PoseSampler): { source: PathCmd[]; target: PathCmd[] } {
+function compileWarpPairWithMatrices(
+  doc: RigDoc, pair: WarpPathPair, sourceMatrix: Mat, targetMatrix: Mat,
+): { source: PathCmd[]; target: PathCmd[] } {
   const sourcePart = doc.parts.find((part) => part.id === pair.sourcePartId);
   const targetPart = doc.parts.find((part) => part.id === pair.targetPartId);
   const sourcePath = sourcePart?.paths.find((path) => path.id === pair.sourcePathId);
@@ -147,11 +149,8 @@ export function compileWarpPathPair(doc: RigDoc, pair: WarpPathPair, time?: numb
   if (warpPathFingerprint(sourcePath) !== pair.sourceFingerprint || warpPathFingerprint(targetPath) !== pair.targetFingerprint) {
     throw new Error(`Warp correspondence "${sourcePath.label} ↔ ${targetPath.label}" is stale after a topology edit. Open Warp Setup and rebuild it.`);
   }
-  const sourceHolder = time === undefined ? holderMatrix(doc, sourcePart, sourcePath) : evaluatedHolderMatrix(doc, sourcePart, sourcePath, time, sampler);
-  const targetHolder = time === undefined ? holderMatrix(doc, targetPart, targetPath) : evaluatedHolderMatrix(doc, targetPart, targetPath, time, sampler);
-  const targetToSource = multiply(invertMat(sourceHolder), targetHolder);
-  const source = subpathsOf(sourcePath, matrixOfTransform(''));
-  const target = subpathsOf(targetPath, targetToSource);
+  const source = subpathsOf(sourcePath, sourceMatrix);
+  const target = subpathsOf(targetPath, targetMatrix);
   if (source.length !== target.length) throw new Error(`Warp paths "${sourcePath.label}" and "${targetPath.label}" have different compound-path counts.`);
   for (let i = 0; i < source.length; i++) {
     if (source[i].closed !== target[i].closed) throw new Error(`Warp paths "${sourcePath.label}" and "${targetPath.label}" mix open and closed geometry.`);
@@ -162,6 +161,28 @@ export function compileWarpPathPair(doc: RigDoc, pair: WarpPathPair, time?: numb
     while (target[i].curves.length < count) splitLongest(target[i]);
   }
   return { source: commandsOf(source), target: commandsOf(target) };
+}
+
+/**
+ * Normalize both authored endpoints without changing either endpoint's coordinate
+ * space. This is the input to independent endpoint evaluation (notably when two rigged
+ * variants own different bone chains): normalize first, pose each endpoint through its
+ * own rig, then interpolate the resulting document-space geometry.
+ */
+export function compileWarpEndpointPair(doc: RigDoc, pair: WarpPathPair): { source: PathCmd[]; target: PathCmd[] } {
+  const identity = matrixOfTransform('');
+  return compileWarpPairWithMatrices(doc, pair, identity, identity);
+}
+
+export function compileWarpPathPair(doc: RigDoc, pair: WarpPathPair, time?: number, sampler?: PoseSampler): { source: PathCmd[]; target: PathCmd[] } {
+  const sourcePart = doc.parts.find((part) => part.id === pair.sourcePartId);
+  const targetPart = doc.parts.find((part) => part.id === pair.targetPartId);
+  const sourcePath = sourcePart?.paths.find((path) => path.id === pair.sourcePathId);
+  const targetPath = targetPart?.paths.find((path) => path.id === pair.targetPathId);
+  if (!sourcePart || !targetPart || !sourcePath || !targetPath) throw new Error('Warp correspondence references missing artwork. Open Warp Setup to repair it.');
+  const sourceHolder = time === undefined ? holderMatrix(doc, sourcePart, sourcePath) : evaluatedHolderMatrix(doc, sourcePart, sourcePath, time, sampler);
+  const targetHolder = time === undefined ? holderMatrix(doc, targetPart, targetPath) : evaluatedHolderMatrix(doc, targetPart, targetPath, time, sampler);
+  return compileWarpPairWithMatrices(doc, pair, matrixOfTransform(''), multiply(invertMat(sourceHolder), targetHolder));
 }
 
 export function interpolateWarpCommands(source: PathCmd[], target: PathCmd[], amount: number): PathCmd[] {

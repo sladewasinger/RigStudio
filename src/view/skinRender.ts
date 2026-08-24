@@ -38,7 +38,7 @@ export function invalidateSkinCache(partId: string): void {
   skinCache.delete(partId);
 }
 
-export type SkinPathWarp = { source: PathCmd[]; current: PathCmd[] };
+export type SkinPathWarp = { source: PathCmd[]; current: PathCmd[]; documentSpace?: boolean };
 
 function skinDataFor(part: RigPart, warps?: Map<string, SkinPathWarp>): NonNullable<ReturnType<typeof skinCache.get>> {
   const overrides = part.skin?.overrides ?? {};
@@ -203,8 +203,14 @@ export function renderSkinnedPart(
 
   let allFinite = true;
   for (const pd of data.paths) {
+    const warp = warps?.get(pd.id);
+    if (warp?.documentSpace) {
+      const el = g.querySelector(`[data-path-id="${pd.id}"]`);
+      el?.setAttribute('d', serializePath(warp.current));
+      continue;
+    }
     let k = 0;
-    const currentCommands = warps?.get(pd.id)?.current ?? pd.cmds;
+    const currentCommands = warp?.current ?? pd.cmds;
     const out: PathCmd[] = currentCommands.map((c, i) => {
       const currentPoints = c.cmd === 'C'
         ? [{ x: c.x1, y: c.y1 }, { x: c.x2, y: c.y2 }, { x: c.x, y: c.y }]

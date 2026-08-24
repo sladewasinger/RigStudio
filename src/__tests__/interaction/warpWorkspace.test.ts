@@ -3,6 +3,10 @@ import { notify, selectPart, state, RigDoc, warpPathFingerprint } from '../../co
 import { createWarpTriangleSquareSample } from '../../samples/warpTriangleSquare';
 import { bootRig, waitFor } from './harness';
 import { renderPose } from '../../view';
+import pipFixture from '../fixtures/pip-failing-warp-test.json';
+import { compileWarpEndpointPair } from '../../geometry/warp';
+import { evaluateSkinnedCommands } from '../../geometry/skinPose';
+import { serializePath } from '../../geometry/paths';
 
 beforeAll(bootRig);
 const load = () => {
@@ -30,8 +34,8 @@ const riggedWarpDoc = (): RigDoc => {
       { ...part('arm_target_group', 'open palm group', [], false), kind: 'group' },
       { ...part('arm_source', 'arm silhouette', [source], true), parentId: 'arm_source_group' },
       { ...part('shadow_source', 'arm shadow', [shadow], true), parentId: 'arm_source_group' },
-      { ...part('arm_target', 'open palm', [target], false), parentId: 'arm_target_group' },
-      { ...part('shadow_target', 'open palm shadow', [shadowTarget], false), parentId: 'arm_target_group' },
+      { ...part('arm_target', 'open palm', [target], true), parentId: 'arm_target_group' },
+      { ...part('shadow_target', 'open palm shadow', [shadowTarget], true), parentId: 'arm_target_group' },
     ], clips: [{ name: 'Bend then Warp', duration: 3000, tracks: [
       { target: 'wrist', channel: 'rotate', keyframes: [{ time: 0, value: 65, easing: 'linear' }, { time: 3000, value: 65, easing: 'linear' }] },
       { target: 'arm_warp', channel: 'warp', keyframes: [{ time: 1000, value: 0, easing: 'linear' }, { time: 2000, value: 1, easing: 'linear' }, { time: 3000, value: 0, easing: 'linear' }] },
@@ -132,5 +136,26 @@ describe('Warp dock workflow', () => {
     state.currentTime = 3000; renderPose();
     expect(element.getAttribute('d')).toBe(posedSource);
     expect(shadowElement.getAttribute('d')).toBe(posedShadow);
+  });
+
+  it('renders the supplied Pip project at the independently evaluated horizontal target endpoint', () => {
+    const api = (window as unknown as { __rigStudio: { loadProjectText: (text: string) => boolean } }).__rigStudio;
+    api.loadProjectText(JSON.stringify(pipFixture));
+    state.editorMode = 'animate'; state.activeClipIndex = 0; state.currentTime = 662; renderPose();
+    const warp = state.doc!.warps![0];
+    for (const pair of warp.pairs) {
+      const normalized = compileWarpEndpointPair(state.doc!, pair);
+      const target = state.doc!.parts.find((part) => part.id === pair.targetPartId)!;
+      const expected = serializePath(evaluateSkinnedCommands(state.doc!, target, pair.targetPathId, normalized.target, 662));
+      const actual = document.querySelector<SVGPathElement>(`[data-path-id="${pair.sourcePathId}"]`)!.getAttribute('d');
+      expect(actual).toBe(expected);
+    }
+    const arm = document.querySelector<SVGPathElement>('[data-path-id="path_877"]')!.getBBox();
+    expect(arm.width).toBeGreaterThan(arm.height * 2.5);
+    expect(state.doc!.clips[0].tracks.filter((track) => track.target === 'part_879')).toHaveLength(0);
+
+    state.currentTime = 1155; renderPose();
+    const returned = document.querySelector<SVGPathElement>('[data-path-id="path_877"]')!.getBBox();
+    expect(returned.width).toBeGreaterThan(returned.height * 2);
   });
 });

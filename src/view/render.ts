@@ -13,14 +13,14 @@ import {
   sampleKeyList,
 } from '../core/model';
 import {
-  compileWarpPathPair, interpolateWarpCommands, evaluateWarpPath,
-  isWarpReferencePart, warpForSourcePath,
+  evaluateWarpPath, isWarpReferencePart, warpForSourcePath,
 } from '../geometry/warp';
 import { canUndo, canRedo } from '../core/history';
 import { ctx, SVG_NS } from './context';
 import { poseTime, rootPoseTransform, groupTransformOf, effectiveZ, effectiveOpacity } from './pose';
 import { focusContext, nodeEditSkinSuspendId } from './focus';
 import { renderSkinnedPart, SkinPathWarp } from './skinRender';
+import { evaluateRiggedWarpCommands } from '../geometry/skinPose';
 import { renderOverlay } from './overlay';
 
 /**
@@ -109,13 +109,19 @@ function skinWarpsForPart(doc: RigDoc, part: RigPart, time: number | null): Map<
   for (const path of part.paths) {
     const found = warpForSourcePath(doc, path.id);
     if (!found) continue;
-    // Skinning consumes canonical bind-space geometry and applies the evaluated bone
-    // pose afterward. Feeding evaluated endpoint transforms here would pre-pose the
-    // target and then skin it again (the thin/collapsed near-100% failure).
-    const compiled = compileWarpPathPair(doc, found.pair);
+    // Each endpoint owns its authored rig. Normalize topology in bind coordinates,
+    // evaluate BOTH endpoint chains at this time, then interpolate document-space
+    // geometry. Applying the carrier skin afterward leaked its held pose into the 100%
+    // target and was the real Pip failure (the vertical source chain post-rotated the
+    // independently-authored horizontal target).
+    const t = time ?? 0;
+    const evaluated = evaluateRiggedWarpCommands(
+      doc, found.pair, warpAmount(found.warp.id, time), t, ctx.poseSampler ?? undefined,
+    );
     result.set(path.id, {
-      source: compiled.source,
-      current: interpolateWarpCommands(compiled.source, compiled.target, warpAmount(found.warp.id, time)),
+      source: evaluated.source,
+      current: evaluated.current,
+      documentSpace: true,
     });
   }
   return result;

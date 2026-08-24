@@ -1,7 +1,8 @@
 /** Bridge from Rig Studio warp correspondences to native Rive vertex animation. */
 
 import { RigDoc } from '../../core/model';
-import { compileWarpPathPair, interpolateWarpCommands } from '../../geometry/warp';
+import { compileWarpEndpointPair, compileWarpPathPair, interpolateWarpCommands } from '../../geometry/warp';
+import { compensateForCarrierSkin, evaluateRiggedWarpCommands } from '../../geometry/skinPose';
 import { PathCmd, serializePath } from '../../geometry/paths';
 import { PoseSampler } from '../../geometry/pose';
 
@@ -46,6 +47,8 @@ export function compileRivWarpPairs(doc: RigDoc): CompiledRivWarpPair[] {
     const targetPart = doc.parts.find((part) => part.id === pair.targetPartId)!;
     const sourcePath = sourcePart.paths.find((path) => path.id === pair.sourcePathId)!;
     const targetPath = targetPart.paths.find((path) => path.id === pair.targetPathId)!;
+    const riggedEndpoints = !!sourcePart.skin && !!targetPart.skin;
+    const endpointGeometry = riggedEndpoints ? compileWarpEndpointPair(doc, pair) : null;
     if (!!sourcePath.fill !== !!targetPath.fill || !!sourcePath.stroke !== !!targetPath.stroke) {
       throw new Error(`Warp correspondence "${sourcePath.label} ↔ ${targetPath.label}" changes fill/stroke presence. Pair matching paint structures or crossfade them as unmatched artwork.`);
     }
@@ -56,6 +59,12 @@ export function compileRivWarpPairs(doc: RigDoc): CompiledRivWarpPair[] {
       sourceStyle: sourcePath, targetStyle: targetPath,
       sourcePartOpacity: sourcePart.rest.opacity, targetPartOpacity: targetPart.rest.opacity,
       geometryAt: (amount, time, sampler) => {
+        if (riggedEndpoints && endpointGeometry && time !== undefined) {
+          const desired = evaluateRiggedWarpCommands(doc, pair, amount, time, sampler).current;
+          return compensateForCarrierSkin(
+            doc, sourcePart, pair.sourcePathId, endpointGeometry.source, desired, time, sampler,
+          );
+        }
         const current = compileWarpPathPair(doc, pair, time, sampler);
         return interpolateWarpCommands(current.source, current.target, amount);
       },
