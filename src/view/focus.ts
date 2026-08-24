@@ -10,7 +10,7 @@ import {
   state, RigPart, selectedPart, selectedParts, selectPart, ancestorChain, partById,
   chainBonesOfPart, isGroupLike,
 } from '../core/model';
-import { ctx } from './context';
+import { ctx, syncBonePlacementSurface } from './context';
 
 /** Escape/blank-click hook: close all entered groups. */
 export function clearGroupEntry(): void {
@@ -44,6 +44,7 @@ export function resetInteractionState(): void {
   ctx.selectedNode = null;
   ctx.placingBone = false;
   ctx.boneChain = null; // an in-progress pen-tool chain must not survive a doc swap/reset
+  syncBonePlacementSurface();
   ctx.drag = null;
   ctx.handleMode = 'scale';
   ctx.handlePartId = null;

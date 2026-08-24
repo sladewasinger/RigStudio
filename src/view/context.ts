@@ -288,6 +288,19 @@ export const ctx: ViewContext = {
   drag: null,
 };
 
+/** Keep the canvas' interaction affordance derived from the same placement state the
+ * pointer router reads. The overlay remains rendered while armed, but becomes passive
+ * so its editor handles cannot advertise or capture a different gesture. */
+export function syncBonePlacementSurface(): void {
+  const active = ctx.placingBone || !!ctx.boneChain;
+  const canvas = ctx.svg?.parentElement;
+  canvas?.classList.toggle('bone-placement-active', active);
+  if (ctx.svg) {
+    if (active) ctx.svg.dataset.interactionMode = 'bone-placement';
+    else delete ctx.svg.dataset.interactionMode;
+  }
+}
+
 // Snapping is a SETUP-mode editing aid only (node/pivot/part-body drags line up on
 // nearby geometry). Animate posing stays free — keyed motion should never jump to art.
 export function snappingActive(): boolean {

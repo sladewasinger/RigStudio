@@ -16,7 +16,7 @@ import {
   evaluateWarpPath, isWarpReferencePart, warpForSourcePath,
 } from '../geometry/warp';
 import { canUndo, canRedo } from '../core/history';
-import { ctx, SVG_NS } from './context';
+import { ctx, SVG_NS, syncBonePlacementSurface } from './context';
 import { poseTime, rootPoseTransform, groupTransformOf, effectiveZ, effectiveOpacity } from './pose';
 import { focusContext, nodeEditSkinSuspendId } from './focus';
 import { renderSkinnedPart, SkinPathWarp } from './skinRender';
@@ -236,6 +236,7 @@ export function renderPose(): void {
   // and the pivot/joint-handle cursor affordances (style.css). The #canvas container is
   // the svg's parent (buildCanvas appends it there).
   ctx.svg?.parentElement?.classList.toggle('freeze-mode', state.freezeMode);
+  syncBonePlacementSurface();
   const root = ctx.rootGroup;
   root.setAttribute('transform', rootPoseTransform(t));
   const focus = focusContext();

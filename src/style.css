@@ -675,6 +675,13 @@ input[type='number'] { width: 90px; }
   pointer-events: none;
 }
 
+/* Bone placement owns primary-pointer interaction across the canvas. Keep all editor
+   chrome visible as a guide, but let the press pass through it to the placement router;
+   the selected-bone continuation rule still anchors a new chain at that bone's tip. */
+#canvas.bone-placement-active #overlay { pointer-events: none; }
+#canvas.bone-placement-active #rig-svg,
+#canvas.bone-placement-active #rig-svg * { cursor: crosshair !important; }
+
 .pivot-ghost {
   fill: rgba(255, 111, 97, 0.25);
   stroke: rgba(255, 111, 97, 0.6);

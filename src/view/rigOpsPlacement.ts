@@ -9,7 +9,7 @@ import {
   state, selectPart, selectedParts, boneChain, RigPart, healDegenerateBoneTip,
 } from '../core/model';
 import { expandBindTarget, chainAnchorPart } from '../geometry/skin';
-import { ctx } from './context';
+import { ctx, syncBonePlacementSurface } from './context';
 import { poseTime, effectivePivot, effectiveTip } from './pose';
 import { renderPose } from './render';
 import { bindPartsToBones } from './rigOpsBind';
@@ -158,6 +158,7 @@ export function startBonePlacement(): void {
   ctx.snapMarker = null;
   ctx.placingBone = true;
   ctx.boneChain = null;
+  syncBonePlacementSurface();
   if (ctx.svg) ctx.svg.style.cursor = 'crosshair';
 }
 
@@ -176,6 +177,7 @@ export function cancelBonePlacement(): boolean {
   const was = ctx.placingBone || !!ctx.boneChain;
   ctx.placingBone = false;
   ctx.boneChain = null;
+  syncBonePlacementSurface();
   if (ctx.svg) ctx.svg.style.cursor = '';
   return was;
 }
@@ -195,6 +197,7 @@ export function endBoneChain(): boolean {
   if (!ctx.placingBone && !ch) return false; // nothing armed — let the key fall through
   ctx.placingBone = false;
   ctx.boneChain = null;
+  syncBonePlacementSurface();
   ctx.drag = null;
   ctx.snapMarker = null;
   if (ctx.svg) ctx.svg.style.cursor = '';

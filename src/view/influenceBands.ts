@@ -5,7 +5,7 @@ import {
 import {
   autoInfluenceProfile, expandBindTarget, normalizeInfluenceProfile,
 } from '../geometry/skin';
-import { ctx } from './context';
+import { ctx, syncBonePlacementSurface } from './context';
 import { invalidateSkinCache } from './skinRender';
 import { renderPose } from './render';
 
@@ -54,6 +54,7 @@ export function beginInfluenceEditing(part: RigPart): boolean {
   if (!target || state.editorMode !== 'setup') return false;
   ctx.placingBone = false;
   ctx.boneChain = null;
+  syncBonePlacementSurface();
   ctx.drag = null;
   state.mode = 'rig';
   state.tool = 'select';
