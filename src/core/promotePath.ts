@@ -17,7 +17,7 @@ export function promotePathToPart(owner: RigPart, pathId: string): RigPart | nul
   const doc = state.doc;
   const path = owner.paths.find((candidate) => candidate.id === pathId);
   if (!doc || !path) return null;
-  if (owner.paths.length === 1 && !doc.parts.some((part) => part.parentId === owner.id && part.kind !== 'bone')) {
+  if (!pathNeedsPromotion(owner, doc.parts)) {
     return owner;
   }
   const partMatrix = owner.skin ? IDENTITY : restRenderMatrixOf(doc.parts, owner);
@@ -51,4 +51,11 @@ export function promotePathToPart(owner: RigPart, pathId: string): RigPart | nul
     if (pair.targetPartId === owner.id && pair.targetPathId === path.id) pair.targetPartId = leaf.id;
   }
   return leaf;
+}
+
+/** Whether an entered path still shares its transform owner with sibling artwork or
+ * child art. A one-path art leaf is already independently transformable. */
+export function pathNeedsPromotion(owner: RigPart, parts: RigPart[]): boolean {
+  return owner.paths.length !== 1
+    || parts.some((part) => part.parentId === owner.id && part.kind !== 'bone');
 }

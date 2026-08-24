@@ -13,11 +13,11 @@
 
 import {
   state, notify, selectedPart, selectPart, ancestorChain, effectiveChildOrder, RigPart,
-  RigPath, promotePathToPart, activeClip, channelValue, setKeyframe,
+  RigPath, activeClip, channelValue, setKeyframe,
 } from '../core/model';
 import {
-  renderPose, enterGroupsFor, selectPartContainer, updatePathAttrs, registerPart,
-  syncPartPathDom, reorderCanvas,
+  renderPose, enterGroupsFor, selectPartContainer, updatePathAttrs,
+  materializePathTransformTarget,
 } from '../view';
 import { checkpoint } from '../core/history';
 import { showContextMenu } from '../ui/contextMenu';
@@ -280,14 +280,8 @@ function pathNode(part: RigPart, path: RigPath): HTMLElement {
     event.stopPropagation();
     checkpoint();
     if (state.editorMode === 'animate' && activeClip()) {
-      const promoted = promotePathToPart(part, path.id);
+      const promoted = materializePathTransformTarget(part, path.id);
       if (promoted) {
-        if (promoted !== part) {
-          syncPartPathDom(part);
-          registerPart(promoted);
-          reorderCanvas();
-          selectPart(promoted.id);
-        }
         const visible = channelValue(promoted, 'visibility', state.currentTime) >= 0.5;
         setKeyframe(promoted.id, 'visibility', visible ? 0 : 1);
       }
@@ -302,18 +296,6 @@ function pathNode(part: RigPart, path: RigPath): HTMLElement {
   pathRow.onclick = () => {
     // Enter the part and select this object — the inspector shows its style and
     // node editing scopes to it.
-    if (state.editorMode === 'animate' && state.mode === 'rig') {
-      const promoted = promotePathToPart(part, path.id);
-      if (promoted && promoted !== part) {
-        syncPartPathDom(part);
-        registerPart(promoted);
-        reorderCanvas();
-        selectPart(promoted.id);
-        notify();
-        renderPose();
-        return;
-      }
-    }
     selectPart(part.id);
     state.selectedPathId = path.id;
     notify();

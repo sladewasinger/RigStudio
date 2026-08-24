@@ -8,7 +8,7 @@
 
 import {
   state, RigPart, selectedPart, selectedParts, channelValue, ancestorChain, isGroupLike,
-  setKeyframe, promotePathToPart, selectPart, notify,
+  setKeyframe, notify, pathNeedsPromotion,
 } from '../../../core/model';
 import {
   ctx, DragState, MIN_SCALE, MAX_SCALE, linearOnly, round1, round2, partOwnBBox,
@@ -21,7 +21,8 @@ import { groupScaleMembers, applyGroupScale, GroupScaleMember } from '../../rigO
 import { groupLikeUnionBox } from '../../overlayHandles';
 import { capturePointer, moveRotate } from '../lifecycle';
 import { GesturePipeline } from '../priority';
-import { registerPart, reorderCanvas, syncPartPathDom } from '../../partDom';
+import { materializePathTransformTarget } from '../../partDom';
+import { checkpoint } from '../../../core/history';
 
 /**
  * The members a group-scale drag distributes across: `groupScaleMembers`'s descendant
@@ -68,22 +69,21 @@ function handleSpots(x0: number, y0: number, x1: number, y1: number): Record<str
 export const HANDLES_PIPELINE: GesturePipeline = {
   name: 'handles',
   claim(hit, ev) {
-    // ---- Scale handle (Setup mode). A GROUP has no artwork/local frame of its own — its
+    // ---- Scale handle. A GROUP has no artwork/local frame of its own — in Setup its
     // handle grabs the root-space union bbox (groupUnionBox, same box the dashed outline
     // draws) and starts a DISTRIBUTED rest edit across every descendant instead of the
-    // single-part pipeline below (rigOps.ts's groupScaleMembers/applyGroupScale).
+    // single-part pipeline below (rigOps.ts's groupScaleMembers/applyGroupScale). In
+    // Animate it keys the group's inherited sx/sy node transform.
     if (hit.scaleHandle) {
       let part = selectedPart();
       if (!part) return 'handled';
-      if (state.selectedPathId) {
-        const owner = part;
-        const promoted = promotePathToPart(owner, state.selectedPathId);
-        if (promoted && promoted !== owner) {
-          syncPartPathDom(owner);
-          registerPart(promoted);
-          reorderCanvas();
-          selectPart(promoted.id);
+      let promotionCheckpointed = false;
+      if (state.selectedPathId && pathNeedsPromotion(part, hit.doc.parts)) {
+        checkpoint();
+        const promoted = materializePathTransformTarget(part, state.selectedPathId);
+        if (promoted !== part) {
           part = promoted;
+          promotionCheckpointed = true;
           notify();
         }
       }
@@ -95,17 +95,17 @@ export const HANDLES_PIPELINE: GesturePipeline = {
         const spots = handleSpots(ub.x0 - pad, ub.y0 - pad, ub.x1 + pad, ub.y1 + pad);
         const grab = spots[hit.scaleHandle]?.g;
         if (!grab) return 'handled';
-        const d: DragState = {
-          kind: 'groupScale',
-          group: part,
-          handle: hit.scaleHandle,
-          pivotRoot: effectivePivot(part, t),
-          grabRoot: grab,
-          members: scaleMembersFor(part, t),
-          poseT: t,
-          current: null,
-          startClient: { x: ev.clientX, y: ev.clientY },
-          active: false,
+        const d: DragState = state.editorMode === 'setup' ? {
+          kind: 'groupScale', group: part, handle: hit.scaleHandle,
+          pivotRoot: effectivePivot(part, t), grabRoot: grab,
+          members: scaleMembersFor(part, t), poseT: t, current: null,
+          startClient: { x: ev.clientX, y: ev.clientY }, active: false,
+        } : {
+          kind: 'groupKeyScale', group: part, handle: hit.scaleHandle,
+          pivotRoot: effectivePivot(part, t), grabRoot: grab,
+          startSx: channelValue(part, 'sx', state.currentTime),
+          startSy: channelValue(part, 'sy', state.currentTime), current: null,
+          startClient: { x: ev.clientX, y: ev.clientY }, active: false,
         };
         capturePointer(ev);
         return d;
@@ -141,6 +141,7 @@ export const HANDLES_PIPELINE: GesturePipeline = {
         current: null,
         startClient: { x: ev.clientX, y: ev.clientY },
         active: false,
+        checkpointed: promotionCheckpointed,
       };
       capturePointer(ev);
       return d;
@@ -210,7 +211,7 @@ export const HANDLES_PIPELINE: GesturePipeline = {
     return null;
   },
   move(ev, d) {
-    if (d.kind === 'groupScale') {
+    if (d.kind === 'groupScale' || d.kind === 'groupKeyScale') {
       const p = pointerInRoot(ev);
       d.current = { x: p.x, y: p.y };
       const clampF = (f: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, f));
@@ -225,7 +226,12 @@ export const HANDLES_PIPELINE: GesturePipeline = {
         const f = Math.abs(fx - 1) > Math.abs(fy - 1) ? fx : fy;
         fx = f; fy = f;
       }
-      applyGroupScale(d.members, d.poseT, d.pivotRoot, fx, fy);
+      if (d.kind === 'groupScale') {
+        applyGroupScale(d.members, d.poseT, d.pivotRoot, fx, fy);
+      } else {
+        setKeyframe(d.group.id, 'sx', round2(d.startSx * fx));
+        setKeyframe(d.group.id, 'sy', round2(d.startSy * fy));
+      }
       renderPose();
     } else if (d.kind === 'scale') {
       const p = pointerInRoot(ev);

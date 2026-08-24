@@ -1,8 +1,8 @@
 /**
  * Selection-box + Inkscape-style handle chrome: the dashed transform box drawn under
  * every selected part (art's own rendered bbox, or a group's root-space union AABB),
- * the primary selection's scale/rotate/skew handle sets (or Animate's translate/rotate
- * pair), and the skinned-part "bone-deformed" limits label. Split out of overlay.ts's
+ * the primary selection's scale/rotate/skew handle sets, and the skinned-part
+ * "bone-deformed" limits label. Split out of overlay.ts's
  * render loop (CLAUDE.md "Small, focused files") — pure chrome-building, no top-level
  * orchestration.
  */
@@ -33,31 +33,6 @@ function appendRotateCorners(
     h.dataset.role = 'rotate-handle';
     handles.appendChild(h);
   }
-}
-
-/**
- * Plain dashed-box corner markers (no interactive handle underneath — a body drag still
- * translates/keys via the artwork pipeline, these are decoration only). Used for the
- * passive group-scale case in Animate, where the editor has no inherited group-scale
- * animation channel to write.
- */
-function passiveCornersG(
-  boxTransform: string, x0: number, y0: number, x1: number, y1: number, size: number,
-): SVGGElement {
-  const boxCorners = document.createElementNS(SVG_NS, 'g');
-  boxCorners.setAttribute('class', 'overlay-passive');
-  boxCorners.setAttribute('transform', boxTransform);
-  for (const [hx, hy] of [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]) {
-    const corner = document.createElementNS(SVG_NS, 'rect');
-    const s = size * 0.9;
-    corner.setAttribute('x', String(hx - s / 2));
-    corner.setAttribute('y', String(hy - s / 2));
-    corner.setAttribute('width', String(s));
-    corner.setAttribute('height', String(s));
-    corner.setAttribute('class', 'select-corner');
-    boxCorners.appendChild(corner);
-  }
-  return boxCorners;
 }
 
 /**
@@ -94,8 +69,9 @@ export function groupLikeUnionBox(
  * box the dashed group outline always drew, now correctly including a group-like art
  * part's own geometry too) and, for the PRIMARY selection, the identical scale/rotate
  * handle sets an art part gets (minus skew — no shear field on the distributed edit):
- * first click = 8 scale handles (a DISTRIBUTED rest edit across every descendant PLUS
- * the group-like part's own rest, when it has paths — handles.ts's `scaleMembersFor`),
+ * first click = 8 scale handles (a DISTRIBUTED rest edit in Setup across every
+ * descendant PLUS the group-like part's own rest, or a keyed inherited group transform
+ * in Animate),
  * second click = 4 rotate corners (the part's OWN rest.rotate, which genuinely
  * propagates through the pose chain to every descendant regardless of kind). Per the
  * visible-counterpart GOTCHA, the handle-set toggle must render something different
@@ -177,32 +153,26 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
     }
 
     if (ctx.handleMode === 'scale') {
-      if (!setup && groupLike) {
-        // Group scaling is a distributed rest edit, not a single inherited transform;
-        // keep Animate honest until a keyable group-scale model exists.
-        ctx.overlay.appendChild(passiveCornersG(boxTransform, x0, y0, x1, y1, size));
-      } else {
-        // Interactive Inkscape-style scale handles for the primary part.
-        const handles = document.createElementNS(SVG_NS, 'g');
-        handles.setAttribute('transform', boxTransform);
-        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-        const spots: [string, number, number][] = [
-          ['nw', x0, y0], ['ne', x1, y0], ['se', x1, y1], ['sw', x0, y1],
-          ['n', cx, y0], ['e', x1, cy], ['s', cx, y1], ['w', x0, cy],
-        ];
-        for (const [name, hx, hy] of spots) {
-          const s = size * 1.1;
-          const h = document.createElementNS(SVG_NS, 'rect');
-          h.setAttribute('x', String(hx - s / 2));
-          h.setAttribute('y', String(hy - s / 2));
-          h.setAttribute('width', String(s));
-          h.setAttribute('height', String(s));
-          h.setAttribute('class', `scale-handle handle-${name}`);
-          h.dataset.handle = name;
-          handles.appendChild(h);
-        }
-        ctx.overlay.appendChild(handles);
+      // Interactive Inkscape-style scale handles for the primary part in both modes.
+      const handles = document.createElementNS(SVG_NS, 'g');
+      handles.setAttribute('transform', boxTransform);
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      const spots: [string, number, number][] = [
+        ['nw', x0, y0], ['ne', x1, y0], ['se', x1, y1], ['sw', x0, y1],
+        ['n', cx, y0], ['e', x1, cy], ['s', cx, y1], ['w', x0, cy],
+      ];
+      for (const [name, hx, hy] of spots) {
+        const s = size * 1.1;
+        const h = document.createElementNS(SVG_NS, 'rect');
+        h.setAttribute('x', String(hx - s / 2));
+        h.setAttribute('y', String(hy - s / 2));
+        h.setAttribute('width', String(s));
+        h.setAttribute('height', String(s));
+        h.setAttribute('class', `scale-handle handle-${name}`);
+        h.dataset.handle = name;
+        handles.appendChild(h);
       }
+      ctx.overlay.appendChild(handles);
     } else if (setup) {
       // Inkscape's second handle set: corners ROTATE, sides SKEW — groups AND skinned
       // parts skip the skew sides (no shear field / no skin skew composition);
@@ -240,10 +210,6 @@ export function renderSelectionHandles(rootTransform: string, size: number, setu
       handles.setAttribute('transform', boxTransform);
       appendRotateCorners(handles, x0, y0, x1, y1, size);
       ctx.overlay.appendChild(handles);
-    } else {
-      // Animate's passive first-click set applies only to group-like selections, whose
-      // distributed rest scaling has no single animation channel.
-      ctx.overlay.appendChild(passiveCornersG(boxTransform, x0, y0, x1, y1, size));
     }
   }
 }

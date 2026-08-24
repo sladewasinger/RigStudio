@@ -105,6 +105,8 @@ export type DragState =
       current: { x: number; y: number } | null;
       startClient: { x: number; y: number };
       active: boolean;
+      /** Promotion of an entered path already captured the gesture's history baseline. */
+      checkpointed?: boolean;
     }
   | {
       kind: 'groupScale';
@@ -127,6 +129,17 @@ export type DragState =
       /** poseTime() at drag start — Setup's null, threaded through so applyGroupScale's
        *  live chainMatOf re-reads use the same sampling mode as the seed snapshot. */
       poseT: number | null;
+      current: { x: number; y: number } | null;
+      startClient: { x: number; y: number };
+      active: boolean;
+    }
+  | {
+      kind: 'groupKeyScale';
+      group: RigPart;
+      handle: string;
+      pivotRoot: { x: number; y: number };
+      grabRoot: { x: number; y: number };
+      startSx: number; startSy: number;
       current: { x: number; y: number } | null;
       startClient: { x: number; y: number };
       active: boolean;

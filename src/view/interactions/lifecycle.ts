@@ -35,7 +35,7 @@ export function activateDrag(
   if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return false;
   // Influence-band sessions mutate only an in-memory draft. Apply creates the single
   // document checkpoint for the whole session; Cancel leaves no history behind.
-  if (d.kind !== 'influenceBand') checkpoint();
+  if (d.kind !== 'influenceBand' && !(('checkpointed' in d) && d.checkpointed)) checkpoint();
   d.active = true;
   return true;
 }

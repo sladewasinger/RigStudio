@@ -24,12 +24,27 @@
 
 import {
   RigPart, RigPath, state, partOwnRuns, flattenPaintOrder, partById, selectedPart,
+  promotePathToPart, selectPart,
 } from '../core/model';
 import { ctx, SVG_NS, primaryPartGroup, partOwnBBox, partOwnPathElements } from './context';
 import { renderPose } from './render';
 import { renderOverlay } from './overlay';
 
 export { primaryPartGroup, partOwnBBox, partOwnPathElements };
+
+/** Materialize one entered path as a real leaf transform owner. This is the shared
+ * structural+DOM chokepoint for Layers, Inspector, and canvas gestures. The caller owns
+ * history and notification so promotion can share one undo step with the first edit. */
+export function materializePathTransformTarget(owner: RigPart, pathId: string | null): RigPart {
+  if (!pathId) return owner;
+  const promoted = promotePathToPart(owner, pathId);
+  if (!promoted || promoted === owner) return owner;
+  syncPartPathDom(owner);
+  registerPart(promoted);
+  reorderCanvas();
+  selectPart(promoted.id);
+  return promoted;
+}
 
 export function applyPathAttrs(el: SVGPathElement, p: RigPath): void {
   el.setAttribute('d', p.d);

@@ -357,7 +357,7 @@ function renderDragGizmo(holder: SVGGElement, size: number): void {
       `${Math.round(ctx.drag.part.rest.sx * 100)}% × ${Math.round(ctx.drag.part.rest.sy * 100)}%`,
       size,
     );
-  } else if (ctx.drag.kind === 'groupScale' && ctx.drag.current) {
+  } else if ((ctx.drag.kind === 'groupScale' || ctx.drag.kind === 'groupKeyScale') && ctx.drag.current) {
     // Same readout as a single part's scale drag, recomputed from the live pointer
     // (no single `part.rest.sx` to read back — the factor is distributed).
     const current = ctx.drag.current;

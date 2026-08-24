@@ -223,17 +223,26 @@ describe('scenario G2 — group rotate handles (second click): no skew, group\'s
   });
 });
 
-describe('scenario G3 — Animate mode: group rotate handles key the group\'s rotate', () => {
-  it('first click (handleMode "scale") shows the passive box, no rotate handles; second click shows 4 rotate corners and a drag keys rotate at the playhead', () => {
+describe('scenario G3 — Animate mode: group scale and rotate handles key the group', () => {
+  it('first click scales the group subtree; second click shows 4 rotate corners and keys rotate', () => {
     const { group } = makeGroup(); // Setup, freshly selected, handleMode 'scale'
     setEditorMode('animate');
     state.currentTime = 0;
     repaint();
 
-    // handleMode carries over from Setup — Animate's "first click" state (scale isn't
-    // keyable) stays the plain passive box, same as an art part.
+    // handleMode carries over from Setup. Group scaling is a keyed inherited transform,
+    // matching the parent-node composition used by Rive/Lottie.
     expect(overlayCount('.rotate-handle'), 'no rotate handles on the first (scale) handleMode').toBe(0);
-    expect(overlayCount('.scale-handle'), 'scale handles are Edit-only').toBe(0);
+    expect(overlayCount('.scale-handle'), 'group has the same scale handles as art').toBe(8);
+
+    const scaleStart = clientCenterOf(overlayEl().querySelector('.scale-handle.handle-se')!);
+    const scaleOpposite = clientCenterOf(overlayEl().querySelector('.scale-handle.handle-nw')!);
+    gestureDrag(scaleStart, {
+      x: scaleStart.x + 0.2 * (scaleStart.x - scaleOpposite.x),
+      y: scaleStart.y + 0.2 * (scaleStart.y - scaleOpposite.y),
+    }, { ctrlKey: true });
+    expect(clipTrack(group.id, 'sx')?.keyframes[0].value).toBeGreaterThan(1.1);
+    expect(clipTrack(group.id, 'sy')?.keyframes[0].value).toBeGreaterThan(1.1);
 
     const p = clientPointOnPart('left_arm');
     click(p.x, p.y); // motionless click on the already-primary group toggles the set

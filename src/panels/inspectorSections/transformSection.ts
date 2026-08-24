@@ -5,9 +5,9 @@
  * `buildInspector` orchestration in `panel.ts`.
  */
 import {
-  state, RigDoc, RigPart, channelValue, setKeyframe, promotePathToPart, selectPart, notify,
+  state, RigDoc, RigPart, channelValue, setKeyframe, notify,
 } from '../../core/model';
-import { renderPose, registerPart, reorderCanvas, syncPartPathDom } from '../../view';
+import { renderPose, materializePathTransformTarget } from '../../view';
 import { checkpoint } from '../../core/history';
 import { numberField, keyableField, poseEdited, buildParentSelector } from './shared';
 
@@ -30,14 +30,13 @@ function lockField(field: HTMLElement, title: string): HTMLElement {
 
 function setupTransformTarget(part: RigPart): RigPart {
   if (!state.selectedPathId) return part;
-  const promoted = promotePathToPart(part, state.selectedPathId);
-  if (!promoted || promoted === part) return part;
-  syncPartPathDom(part);
-  registerPart(promoted);
-  reorderCanvas();
-  selectPart(promoted.id);
-  notify();
+  const promoted = materializePathTransformTarget(part, state.selectedPathId);
+  if (promoted !== part) notify();
   return promoted;
+}
+
+function keyTransformTarget(part: RigPart): RigPart {
+  return materializePathTransformTarget(part, state.selectedPathId);
 }
 
 export function buildPartTransformFields(el: HTMLElement, part: RigPart, setup: boolean): void {
@@ -106,26 +105,30 @@ export function buildPartTransformFields(el: HTMLElement, part: RigPart, setup: 
     // Displayed values are absolute (rest fills unkeyed channels); editing keys.
     // Each field gets a keyframe-toggle circle (filled = keyed at the playhead).
     const t = state.currentTime;
+    const resolveId = (): string => keyTransformTarget(part).id;
+    const key = (channel: Parameters<typeof setKeyframe>[1], value: number): void => {
+      const target = keyTransformTarget(part);
+      setKeyframe(target.id, channel, value);
+      poseEdited();
+      if (target !== part) notify();
+    };
     el.appendChild(keyableField(
       'rotate (deg)', part.id, 'rotate', () => channelValue(part, 'rotate', t), (v) => {
         checkpoint();
-        setKeyframe(part.id, 'rotate', v);
-        poseEdited();
-      },
+        key('rotate', v);
+      }, 1, resolveId,
     ));
     el.appendChild(keyableField(
       'translate x', part.id, 'tx', () => channelValue(part, 'tx', t), (v) => {
         checkpoint();
-        setKeyframe(part.id, 'tx', v);
-        poseEdited();
-      },
+        key('tx', v);
+      }, 1, resolveId,
     ));
     el.appendChild(keyableField(
       'translate y', part.id, 'ty', () => channelValue(part, 'ty', t), (v) => {
         checkpoint();
-        setKeyframe(part.id, 'ty', v);
-        poseEdited();
-      },
+        key('ty', v);
+      }, 1, resolveId,
     ));
     // Keyable part scale (absolute sx/sy, rest.sx/sy fallback): ordinary artwork scales
     // in its local transform; skinned artwork scales the final LBS result around its
@@ -133,16 +136,14 @@ export function buildPartTransformFields(el: HTMLElement, part: RigPart, setup: 
     const keySx = keyableField(
       'scale x', part.id, 'sx', () => channelValue(part, 'sx', t), (v) => {
         checkpoint();
-        setKeyframe(part.id, 'sx', v);
-        poseEdited();
-      }, 0.01,
+        key('sx', v);
+      }, 0.01, resolveId,
     );
     const keySy = keyableField(
       'scale y', part.id, 'sy', () => channelValue(part, 'sy', t), (v) => {
         checkpoint();
-        setKeyframe(part.id, 'sy', v);
-        poseEdited();
-      }, 0.01,
+        key('sy', v);
+      }, 0.01, resolveId,
     );
     el.appendChild(keySx);
     el.appendChild(keySy);
@@ -152,9 +153,8 @@ export function buildPartTransformFields(el: HTMLElement, part: RigPart, setup: 
     const zField = keyableField(
       'z offset', part.id, 'z', () => channelValue(part, 'z', t), (v) => {
         checkpoint();
-        setKeyframe(part.id, 'z', v);
-        poseEdited();
-      },
+        key('z', v);
+      }, 1, resolveId,
     );
     zField.title = 'Draw-order offset (stepped, no easing): 0 = authored stacking, ' +
       'higher = toward the viewer. Snaps at each key.';
@@ -163,9 +163,8 @@ export function buildPartTransformFields(el: HTMLElement, part: RigPart, setup: 
     el.appendChild(keyableField(
       'opacity', part.id, 'opacity', () => channelValue(part, 'opacity', t), (v) => {
         checkpoint();
-        setKeyframe(part.id, 'opacity', Math.min(1, Math.max(0, v)));
-        poseEdited();
-      }, 0.05,
+        key('opacity', Math.min(1, Math.max(0, v)));
+      }, 0.05, resolveId,
     ));
   }
 }

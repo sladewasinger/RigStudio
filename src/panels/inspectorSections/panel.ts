@@ -60,7 +60,11 @@ export function buildInspector(el: HTMLElement): void {
   const part = selectedPart();
   if (part) {
     const title = document.createElement('h3');
-    title.textContent = part.label + (setup ? ' — rest pose' : ' — keyed at playhead');
+    const enteredPath = state.selectedPathId
+      ? part.paths.find((path) => path.id === state.selectedPathId) ?? null
+      : null;
+    title.textContent = (enteredPath?.label ?? part.label)
+      + (setup ? ' — rest pose' : ' — keyed at playhead');
     el.appendChild(title);
 
     if (setup && part.kind === 'bone') {

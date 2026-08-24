@@ -33,7 +33,7 @@ export {
 } from './influenceBands';
 export {
   updatePathAttrs, reorderCanvas, refreshSelectedStackingDom, registerPart, unregisterPart,
-  syncPartPathDom,
+  syncPartPathDom, materializePathTransformTarget,
 } from './partDom';
 export {
   hasSelectedNode, selectedNodeCount, selectAllNodes, primaryNodeType, selectedNodesType,

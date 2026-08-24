@@ -47,7 +47,7 @@ export function numberField(
  */
 export function keyableField(
   label: string, target: string, channel: Channel, displayValue: () => number,
-  onChange: (v: number) => void, step = 1,
+  onChange: (v: number) => void, step = 1, resolveTarget?: () => string,
 ): HTMLElement {
   const row = document.createElement('label');
   row.className = 'field';
@@ -81,15 +81,17 @@ export function keyableField(
   toggle.onclick = (ev) => {
     ev.preventDefault();
     checkpoint();
-    if (keyAt(target, channel, t)) {
-      removeKeyAt(target, channel, t);
+    const actualTarget = resolveTarget?.() ?? target;
+    if (keyAt(actualTarget, channel, t)) {
+      removeKeyAt(actualTarget, channel, t);
       input.value = String(Math.round(displayValue() * 100) / 100);
     } else {
       // "current displayed value" — whatever the field shows right now, including an
       // uncommitted edit the user typed but hasn't blurred off yet.
-      setKeyframe(target, channel, Number(input.value));
+      setKeyframe(actualTarget, channel, Number(input.value));
     }
     poseEdited();
+    if (actualTarget !== target) notify();
     syncToggle();
   };
 

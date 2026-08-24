@@ -27,7 +27,7 @@
  */
 
 import {
-  state, RigPart, Channel, sampleChannel, channelValue, ancestorChain,
+  state, RigPart, Channel, sampleChannel, channelValue, ancestorChain, activeClip, isGroupLike,
 } from '../core/model';
 import { Mat, applyMat, invertMat, matrixOfTransform } from './transforms';
 
@@ -124,9 +124,26 @@ export function effectiveVisibility(part: RigPart, t: number | null, sampler?: P
     ? 1 : 0;
 }
 
+/** A group-like part's keyed scale is an inherited node transform (matching Rive).
+ * Rest group scaling remains the editor's existing distributed edit, so this slot is
+ * active only while sampling animation and only when scale is actually animated. */
+function inheritedKeyedGroupScale(part: RigPart, t: number | null, sampler?: PoseSampler): string {
+  if (t === null || !state.doc || !isGroupLike(part, state.doc.parts)) return '';
+  const keyed = sampler || activeClip()?.tracks.some((track) =>
+    track.target === part.id && (track.channel === 'sx' || track.channel === 'sy'));
+  if (!keyed) return '';
+  const sx = effectiveScaleX(part, t, sampler);
+  const sy = effectiveScaleY(part, t, sampler);
+  if (sx === 1 && sy === 1) return '';
+  return `translate(${part.pivot.x},${part.pivot.y}) scale(${sx},${sy}) ` +
+    `translate(${-part.pivot.x},${-part.pivot.y})`;
+}
+
 /** Ancestor poses composed with the part's own pose (bone hierarchy). */
 export function fullPoseTransform(part: RigPart, t: number | null, sampler?: PoseSampler): string {
-  const pieces = ancestorChain(part).map((a) => ownPoseTransform(a, t, sampler));
+  const pieces = ancestorChain(part).flatMap((ancestor) => [
+    ownPoseTransform(ancestor, t, sampler), inheritedKeyedGroupScale(ancestor, t, sampler),
+  ]).filter(Boolean);
   pieces.push(ownPoseTransform(part, t, sampler));
   return pieces.join(' ');
 }
@@ -144,7 +161,9 @@ export function groupTransformOf(part: RigPart, t: number | null, sampler?: Pose
 
 /** Matrix of the ancestors' poses only (maps a part's rest space into root space). */
 export function chainMatOf(part: RigPart, t: number | null, sampler?: PoseSampler): Mat {
-  return matrixOfTransform(ancestorChain(part).map((a) => ownPoseTransform(a, t, sampler)).join(' '));
+  return matrixOfTransform(ancestorChain(part).flatMap((ancestor) => [
+    ownPoseTransform(ancestor, t, sampler), inheritedKeyedGroupScale(ancestor, t, sampler),
+  ]).filter(Boolean).join(' '));
 }
 
 export function ownTranslateOf(part: RigPart, t: number | null): { x: number; y: number } {
